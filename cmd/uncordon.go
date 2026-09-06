@@ -27,7 +27,7 @@ func NewUncordonCmd() *cobra.Command {
 		Short: "Uncordon self-hosted runners so they can receive new jobs again",
 		Long: `Uncordon reverses a previous cordon operation, restoring each runner's
 original runner group and/or custom labels based on the marker labels recorded
-by "runner cordon".
+by the "cordon" command.
 
 Runners are selected with --id, --name, --label or --all. --all uncordons every
 currently cordoned runner. Organization-level runners are targeted by default;

@@ -62,7 +62,7 @@ func Download(ctx context.Context, dir, platform, version string) error {
 	if err != nil {
 		return fmt.Errorf("failed to download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download %s: unexpected status %s", url, resp.Status)
 	}
@@ -74,11 +74,17 @@ func Download(ctx context.Context, dir, platform, version string) error {
 }
 
 func extractTarGz(r io.Reader, dir string) error {
+	root, err := openExtractRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -90,50 +96,74 @@ func extractTarGz(r io.Reader, dir string) error {
 			return err
 		}
 
-		target, err := safeJoin(dir, header.Name)
-		if err != nil {
-			return err
+		name := filepath.Clean(header.Name)
+		if name == "." {
+			continue
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := root.MkdirAll(name, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := extractTarFile(tr, target, header); err != nil {
+			if err := extractTarFile(root, tr, name, header); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
-			_ = os.Remove(target)
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if err := extractSymlink(root, name, header.Linkname); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func extractTarFile(tr *tar.Reader, target string, header *tar.Header) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+func extractTarFile(root *os.Root, tr *tar.Reader, name string, header *tar.Header) error {
+	if err := mkdirParent(root, name); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+	out, err := root.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, tr)
-	return err
+	// Preserve the copy error, but still surface a close error that may signal
+	// an incomplete write.
+	if _, err := io.Copy(out, tr); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// extractSymlink creates a symlink entry, rejecting targets that are absolute or
+// resolve outside the extraction root to prevent symlink-traversal attacks.
+func extractSymlink(root *os.Root, name, linkname string) error {
+	if err := validateSymlinkTarget(name, linkname); err != nil {
+		return err
+	}
+	if err := mkdirParent(root, name); err != nil {
+		return err
+	}
+	_ = root.Remove(name)
+	return root.Symlink(linkname, name)
 }
 
 func extractZip(r io.Reader, dir string) error {
+	root, err := openExtractRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
 	// zip.Reader requires io.ReaderAt, so the download is buffered to a temp file first.
 	tmp, err := os.CreateTemp("", "actions-runner-*.zip")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
 
 	if _, err := io.Copy(tmp, r); err != nil {
 		return err
@@ -149,24 +179,24 @@ func extractZip(r io.Reader, dir string) error {
 	}
 
 	for _, f := range zr.File {
-		if err := extractZipEntry(f, dir); err != nil {
+		if err := extractZipEntry(root, f); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractZipEntry(f *zip.File, dir string) error {
-	target, err := safeJoin(dir, f.Name)
-	if err != nil {
-		return err
+func extractZipEntry(root *os.Root, f *zip.File) error {
+	name := filepath.Clean(f.Name)
+	if name == "." {
+		return nil
 	}
 
 	if f.FileInfo().IsDir() {
-		return os.MkdirAll(target, 0o755)
+		return root.MkdirAll(name, 0o755)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := mkdirParent(root, name); err != nil {
 		return err
 	}
 
@@ -174,24 +204,48 @@ func extractZipEntry(f *zip.File, dir string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
+	out, err := root.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
-	_, err = io.Copy(out, rc)
-	return err
+	// Preserve the copy error, but still surface a close error that may signal
+	// an incomplete write.
+	if _, err := io.Copy(out, rc); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
-// safeJoin joins dir and name, rejecting entries that would escape dir (zip-slip protection).
-func safeJoin(dir, name string) (string, error) {
-	target := filepath.Join(dir, name)
-	cleanDir := filepath.Clean(dir)
-	if target != cleanDir && !strings.HasPrefix(target, cleanDir+string(os.PathSeparator)) {
-		return "", fmt.Errorf("invalid archive entry path %q", name)
+// openExtractRoot creates dir if needed and opens it as an os.Root so that every
+// extraction operation is confined to dir, even across pre-existing or archive
+// symlinks.
+func openExtractRoot(dir string) (*os.Root, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
-	return target, nil
+	return os.OpenRoot(dir)
+}
+
+// mkdirParent creates the parent directory of name within root, if any.
+func mkdirParent(root *os.Root, name string) error {
+	if parent := filepath.Dir(name); parent != "." {
+		return root.MkdirAll(parent, 0o755)
+	}
+	return nil
+}
+
+// validateSymlinkTarget rejects symlink targets that are absolute or resolve
+// outside the extraction root.
+func validateSymlinkTarget(name, linkname string) error {
+	if filepath.IsAbs(linkname) {
+		return fmt.Errorf("refusing to extract symlink %q with absolute target %q", name, linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(name), linkname))
+	if resolved == ".." || strings.HasPrefix(resolved, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("refusing to extract symlink %q with target %q escaping the archive root", name, linkname)
+	}
+	return nil
 }
