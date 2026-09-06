@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 )
 
 // ConfigOptions holds the parameters passed to the runner agent's config script.
@@ -110,7 +111,9 @@ func Unconfigure(dir string, token string) error {
 }
 
 // Run executes the runner agent's run script in the foreground until it exits,
-// forwarding interrupt signals so the agent can perform its own graceful shutdown.
+// forwarding interrupt (SIGINT) and termination (SIGTERM) signals so the agent
+// can perform its own graceful shutdown. SIGTERM matters for container and
+// systemd deployments, where it is the standard stop signal.
 func Run(dir string) error {
 	script, err := runScript(dir)
 	if err != nil {
@@ -128,7 +131,8 @@ func Run(dir string) error {
 	}
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
+	// SIGTERM is a no-op on Windows; forwarding it there simply fails silently.
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
 	done := make(chan error, 1)
@@ -137,7 +141,7 @@ func Run(dir string) error {
 	for {
 		select {
 		case sig := <-sigCh:
-			// Best effort: forward the interrupt so the agent can shut down gracefully.
+			// Best effort: forward the signal so the agent can shut down gracefully.
 			_ = cmd.Process.Signal(sig)
 		case err := <-done:
 			return err
