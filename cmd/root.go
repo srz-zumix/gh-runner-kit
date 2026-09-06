@@ -1,6 +1,3 @@
-/*
-Copyright © 2025 srz_zumix
-*/
 package cmd
 
 import (
@@ -8,13 +5,22 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/version"
+	"github.com/srz-zumix/go-gh-extension/pkg/actions"
+	"github.com/srz-zumix/go-gh-extension/pkg/cmdflags"
 )
 
 var rootCmd = &cobra.Command{
 	Use:     "gh-runner-kit",
-	Short:   "Runner-related operations extension for GitHub CLI",
-	Long:    `Runner-related operations extension for GitHub CLI`,
+	Short:   "Manage GitHub Actions self-hosted runners",
+	Long:    `gh-runner-kit is a GitHub CLI extension for managing self-hosted Actions runners.`,
 	Version: version.Version,
+}
+
+func init() {
+	if actions.IsRunsOn() {
+		rootCmd.SetErrPrefix(actions.GetErrorPrefix())
+	}
+	cmdflags.AddPersistentFlags(rootCmd)
 }
 
 func Execute() {
