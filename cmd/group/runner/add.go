@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/srz-zumix/gh-runner-kit/internal/runnergroup"
+	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 )
@@ -29,17 +29,17 @@ current repository. Managing runner groups requires organization owner permissio
 			ctx := cmd.Context()
 			groupSelector, runnerSelector := args[0], args[1]
 
-			repo, client, err := runnergroup.Organization(ownerFlag, repoFlag)
+			repo, client, err := kitutil.ResolveOrganization(ownerFlag, repoFlag)
 			if err != nil {
 				return err
 			}
 
-			group, err := runnergroup.Find(ctx, client, repo, groupSelector)
+			group, err := kitutil.FindRunnerGroup(ctx, client, repo, groupSelector)
 			if err != nil {
 				return err
 			}
 
-			runner, err := runnergroup.FindRunner(ctx, client, repo, runnerSelector)
+			runner, err := kitutil.FindOrgRunner(ctx, client, repo, runnerSelector)
 			if err != nil {
 				return err
 			}

@@ -134,18 +134,22 @@ func CordonByGroup(ctx context.Context, client *gh.GitHubClient, repo repository
 // CordonByLabel cordons runner by renaming its custom labels with labelPrefix,
 // leaving built-in read-only labels untouched.
 func CordonByLabel(ctx context.Context, client *gh.GitHubClient, repo repository.Repository, runner *github.Runner, labelPrefix string) error {
+	_, err := gh.SetRunnerLabels(ctx, client, repo, runner.GetID(), buildCordonLabels(runner, labelPrefix))
+	return err
+}
+
+// buildCordonLabels returns the labels applied by CordonByLabel: the cordon
+// marker label plus every custom (non read-only) label renamed with labelPrefix.
+func buildCordonLabels(runner *github.Runner, labelPrefix string) []string {
 	newLabels := make([]string, 0, len(runner.Labels)+1)
 	newLabels = append(newLabels, CordonMarkerLabel)
 	for _, l := range runner.Labels {
-		name := l.GetName()
 		if l.GetType() == "read-only" {
 			continue
 		}
-		newLabels = append(newLabels, labelPrefix+name)
+		newLabels = append(newLabels, labelPrefix+l.GetName())
 	}
-
-	_, err := gh.SetRunnerLabels(ctx, client, repo, runner.GetID(), newLabels)
-	return err
+	return newLabels
 }
 
 // Uncordon reverses a cordon operation, restoring the runner group and custom
@@ -153,26 +157,7 @@ func CordonByLabel(ctx context.Context, client *gh.GitHubClient, repo repository
 // A recorded group ID of 0 means the original group could not be determined at
 // cordon time, in which case the runner is returned to the default group.
 func Uncordon(ctx context.Context, client *gh.GitHubClient, repo repository.Repository, runner *github.Runner, labelPrefix string) error {
-	var restoredGroupID int64 = -1
-	restoredLabels := make([]string, 0, len(runner.Labels))
-	for _, l := range runner.Labels {
-		name := l.GetName()
-		switch {
-		case strings.EqualFold(name, CordonMarkerLabel):
-			// marker label; drop it
-		case strings.HasPrefix(name, CordonGroupLabelPrefix):
-			id, err := strconv.ParseInt(strings.TrimPrefix(name, CordonGroupLabelPrefix), 10, 64)
-			if err == nil {
-				restoredGroupID = id
-			}
-		case strings.HasPrefix(name, labelPrefix):
-			restoredLabels = append(restoredLabels, strings.TrimPrefix(name, labelPrefix))
-		case l.GetType() == "read-only":
-			// built-in label, keep untouched (managed automatically by GitHub)
-		default:
-			restoredLabels = append(restoredLabels, name)
-		}
-	}
+	restoredLabels, restoredGroupID := parseCordonedLabels(runner, labelPrefix)
 
 	if restoredGroupID == 0 {
 		defaultGroup, err := gh.FindOrgDefaultRunnerGroup(ctx, client, repo)
@@ -193,4 +178,33 @@ func Uncordon(ctx context.Context, client *gh.GitHubClient, repo repository.Repo
 
 	_, err := gh.SetRunnerLabels(ctx, client, repo, runner.GetID(), restoredLabels)
 	return err
+}
+
+// parseCordonedLabels inspects a cordoned runner's labels and returns the custom
+// labels to restore together with the recorded original runner group ID. The
+// group ID is -1 when no group marker label is present and 0 when the marker
+// recorded the group as unknown. The cordon marker label is dropped and built-in
+// read-only labels are left out (GitHub manages them automatically).
+func parseCordonedLabels(runner *github.Runner, labelPrefix string) (restoredLabels []string, restoredGroupID int64) {
+	restoredGroupID = -1
+	restoredLabels = make([]string, 0, len(runner.Labels))
+	for _, l := range runner.Labels {
+		name := l.GetName()
+		switch {
+		case strings.EqualFold(name, CordonMarkerLabel):
+			// marker label; drop it
+		case strings.HasPrefix(name, CordonGroupLabelPrefix):
+			id, err := strconv.ParseInt(strings.TrimPrefix(name, CordonGroupLabelPrefix), 10, 64)
+			if err == nil {
+				restoredGroupID = id
+			}
+		case strings.HasPrefix(name, labelPrefix):
+			restoredLabels = append(restoredLabels, strings.TrimPrefix(name, labelPrefix))
+		case l.GetType() == "read-only":
+			// built-in label, keep untouched (managed automatically by GitHub)
+		default:
+			restoredLabels = append(restoredLabels, name)
+		}
+	}
+	return restoredLabels, restoredGroupID
 }

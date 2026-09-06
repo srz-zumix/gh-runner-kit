@@ -19,7 +19,8 @@ test: ## run tests
 	go test -v ./...
 
 clean:
-	rm -f go.work
+	rm -f go.work go.work.sum
+	@if [ -L go-gh-extension ]; then rm -f go-gh-extension; fi
 
 go-work:
 	# (cd .. && gh repo clone srz-zumix/go-gh-extension)

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/srz-zumix/gh-runner-kit/internal/runnertype"
+	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	runnerpkg "github.com/srz-zumix/gh-runner-kit/pkg/runner"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
@@ -46,7 +46,7 @@ Two strategies are available:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			if err := validateRunnerSelectorFlags(cmd, runnerID, runnerName, runnerLabel); err != nil {
+			if err := kitutil.ValidateSelector(cmd, runnerID, runnerName, runnerLabel); err != nil {
 				return err
 			}
 
@@ -58,7 +58,7 @@ Two strategies are available:
 				return err
 			}
 
-			repo, err = runnertype.Apply(cmd, repo, runnerType)
+			repo, err = kitutil.ApplyRunnerType(cmd, repo, runnerType)
 			if err != nil {
 				return err
 			}
@@ -119,7 +119,7 @@ Two strategies are available:
 	f := cmd.Flags()
 	f.StringVarP(&repoFlag, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
 	f.StringVar(&ownerFlag, "owner", "", "Select an organization by owner name (for organization-level runners)")
-	runnertype.AddFlag(cmd, &runnerType)
+	kitutil.AddTypeFlag(cmd, &runnerType)
 	f.Int64Var(&runnerID, "id", 0, "Select the runner to cordon by ID")
 	f.StringVar(&runnerName, "name", "", "Select the runner to cordon by name")
 	f.StringVar(&runnerLabel, "label", "", "Select every runner that has this label")

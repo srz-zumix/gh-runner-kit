@@ -5,8 +5,7 @@ import (
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/spf13/cobra"
-	"github.com/srz-zumix/gh-runner-kit/internal/runnerfields"
-	"github.com/srz-zumix/gh-runner-kit/internal/runnerstatus"
+	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 	"github.com/srz-zumix/go-gh-extension/pkg/render"
@@ -56,21 +55,21 @@ are listed for a user-owned repository.`,
 			if err != nil {
 				return fmt.Errorf("failed to list runners available to %s: %w", parser.GetRepositoryFullNameWithHost(repo), err)
 			}
-			runners = runnerstatus.Filter(runners, status)
+			runners = kitutil.FilterByStatus(runners, status)
 
 			r := render.NewRenderer(exporter)
 			if nameOnly {
 				return r.RenderNames(runners)
 			}
-			return r.RenderRunnersWithFieldGetters(runners, runnerfields.Headers(fields), runnerfields.Getters())
+			return r.RenderRunnersWithFieldGetters(runners, kitutil.FieldHeaders(fields), kitutil.RunnerFieldGetters())
 		},
 	}
 
 	f := cmd.Flags()
 	f.StringVarP(&repoFlag, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
-	runnerstatus.AddFlag(cmd, &status)
+	kitutil.AddStatusFlag(cmd, &status)
 	f.BoolVar(&nameOnly, "name-only", false, "Print only the runner names")
-	runnerfields.AddFlag(cmd, &fields)
+	kitutil.AddFieldsFlag(cmd, &fields)
 	cmdutil.AddFormatFlags(cmd, &exporter)
 
 	return cmd

@@ -135,18 +135,19 @@ agent has stopped, leaving the downloaded agent in --dir.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&repoFlag, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
-	cmd.Flags().StringVar(&ownerFlag, "owner", "", "Select an organization by owner name (for organization-level runners)")
-	cmd.Flags().StringVar(&name, "name", "", "Runner name (default: hostname)")
-	cmd.Flags().StringVar(&labels, "labels", "", "Comma-separated list of custom labels to add to the runner (default: runner name with --no-default-labels)")
-	cmd.Flags().BoolVar(&noDefaultLabels, "no-default-labels", false, "Register the runner without the default labels (self-hosted, OS and architecture)")
-	cmd.Flags().StringVar(&runnerGroup, "runner-group", "", "Runner group to register the runner into (organization-level runners only, default: \"Default\")")
-	cmd.Flags().StringVar(&workDir, "work", "", "Working directory used by the runner agent (default: \"_work\")")
-	cmd.Flags().StringVar(&installDir, "dir", ".actions-runner", "Directory to install and run the runner agent in")
-	cmd.Flags().StringVar(&version, "version", "latest", "actions/runner version to download")
-	cmd.Flags().BoolVar(&replace, "replace", false, "Replace any existing runner registration with the same name")
-	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "Register the runner as ephemeral (it deregisters itself after one job)")
-	cmd.Flags().BoolVar(&removeOnExit, "remove-on-exit", false, "Delete the runner registration from GitHub after the agent stops")
+	f := cmd.Flags()
+	f.StringVarP(&repoFlag, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
+	f.StringVar(&ownerFlag, "owner", "", "Select an organization by owner name (for organization-level runners)")
+	f.StringVar(&name, "name", "", "Runner name (defaults to the hostname when omitted)")
+	f.StringVar(&labels, "labels", "", "Comma-separated custom labels; with --no-default-labels, the runner name is used when omitted")
+	f.BoolVar(&noDefaultLabels, "no-default-labels", false, "Register the runner without the default labels (self-hosted, OS and architecture)")
+	f.StringVar(&runnerGroup, "runner-group", "", "Runner group to register the runner into (organization-level runners only; the runner agent uses \"Default\" when omitted)")
+	f.StringVar(&workDir, "work", "", "Working directory used by the runner agent (uses \"_work\" when omitted)")
+	f.StringVar(&installDir, "dir", ".actions-runner", "Directory to install and run the runner agent in")
+	f.StringVar(&version, "version", "latest", "actions/runner version to download")
+	f.BoolVar(&replace, "replace", false, "Replace any existing runner registration with the same name")
+	f.BoolVar(&ephemeral, "ephemeral", false, "Register the runner as ephemeral (it deregisters itself after one job)")
+	f.BoolVar(&removeOnExit, "remove-on-exit", false, "Delete the runner registration from GitHub after the agent stops")
 
 	return cmd
 }
