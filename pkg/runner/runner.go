@@ -33,10 +33,40 @@ type SelectOptions struct {
 	Label string
 }
 
+// validate enforces the "exactly one selector" invariant. It returns a clear
+// error when zero or multiple selector fields are set, or when ID is negative.
+func (o SelectOptions) validate() error {
+	if o.ID < 0 {
+		return fmt.Errorf("runner ID must be positive")
+	}
+	count := 0
+	if o.ID != 0 {
+		count++
+	}
+	if o.Name != "" {
+		count++
+	}
+	if o.Label != "" {
+		count++
+	}
+	switch count {
+	case 0:
+		return fmt.Errorf("no runner selected: set exactly one of id, name, or label")
+	case 1:
+		return nil
+	default:
+		return fmt.Errorf("exactly one of id, name, or label must be set")
+	}
+}
+
 // Select returns the runners matching opts. Selecting by ID or name returns the
 // single matching runner and fails when it does not exist, while selecting by
 // label returns every runner carrying that label and may return an empty slice.
+// Exactly one selector field must be set; otherwise an error is returned.
 func Select(ctx context.Context, client *gh.GitHubClient, repo repository.Repository, opts SelectOptions) ([]*github.Runner, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
 	switch {
 	case opts.ID != 0:
 		runner, err := gh.GetRunner(ctx, client, repo, opts.ID)
@@ -56,6 +86,7 @@ func Select(ctx context.Context, client *gh.GitHubClient, repo repository.Reposi
 	case opts.Label != "":
 		return gh.FindRunnersByLabel(ctx, client, repo, opts.Label)
 	}
+	// Unreachable: validate guarantees exactly one selector is set.
 	return nil, fmt.Errorf("no runner selected")
 }
 
