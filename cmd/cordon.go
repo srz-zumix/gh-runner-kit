@@ -46,6 +46,10 @@ Two strategies are available:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
+			if err := validateRunnerSelectorFlags(cmd, runnerID, runnerName, runnerLabel); err != nil {
+				return err
+			}
+
 			repo, err := parser.Repository(
 				parser.RepositoryOwnerWithHost(ownerFlag),
 				parser.RepositoryInput(repoFlag),
