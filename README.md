@@ -1,27 +1,373 @@
 # gh-runner-kit
 
-`gh-runner-kit` は `gh-team-kit` をベースにした GitHub CLI 拡張の雛形です。
+`gh-runner-kit` is a GitHub CLI extension for managing GitHub Actions self-hosted runners.
 
-コマンドの詳細実装はまだ含めず、`gh` 拡張として必要な Go/Cobra ベースの最小構成と、開発用のワークフロー・設定ファイルを取り込んでいます。
+It provides commands to list runners, cordon/uncordon them to control job scheduling without deleting the registration, and to download, register, and run the runner agent itself.
 
-## 開発
+## Installation
+
+```sh
+gh extension install srz-zumix/gh-runner-kit
+```
+
+## Shell Completion
+
+Shell completion scripts for bash, zsh, fish, and PowerShell can be generated with the `completion` command.
+
+```sh
+gh runner-kit completion <shell>
+```
+
+Run `gh runner-kit completion --help` for details on how to load the script for your shell.
+
+## Usage
+
+### List self-hosted runners available to a repository
+
+```sh
+gh runner-kit available [--repo [HOST/]OWNER/REPO] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List every self-hosted runner a repository can schedule jobs on: the runners registered to the repository itself plus the organization runners belonging to each runner group that is visible to the repository.
+
+Use `--status` to keep only the runners in one status, and `--fields` to choose the table columns. The runner APIs only report `online` and `offline`, so `--status active` and `--status idle` match the online runners that are respectively running a job and waiting for one.
+
+Listing the organization runner groups requires organization owner permission. Runner groups are an organization feature, so only the repository-level runners are listed for a user-owned repository.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display: `{BUSY\|CORDONED\|ID\|LABELS\|NAME\|OS\|STATUS}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--status` | all statuses | Keep only the runners in this status: `{online\|offline\|active\|idle}` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
+### Add a self-hosted runner to an organization runner group
+
+```sh
+gh runner-kit group runner add <group> <runner> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--dryrun]
+```
+
+Move an organization self-hosted runner into a runner group. The `<group>` and `<runner>` arguments are required and select the runner group and the runner by name or by ID. A runner belongs to exactly one group, so it is removed from its current group.
+
+Managing runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+
+### Cordon self-hosted runners so they stop receiving new jobs
+
+```sh
+gh runner-kit cordon [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] (--id ID | --name NAME | --label LABEL) [--strategy group|label] [--group NAME] [--group-visibility selected|all|private] [--label-prefix PREFIX] [--dryrun]
+```
+
+Cordon marks self-hosted runners so that no new jobs will be scheduled on them, without deleting the runner registration.
+
+Runners are selected with `--id`, `--name` or `--label`. Exactly one of them is required, and `--label` cordons every runner that carries the given label.
+
+Organization-level runners are targeted by default. Use `--type repo` to target the runners registered to a repository instead; passing `--repo` explicitly implies `--type repo`.
+
+Two strategies are available:
+
+- `group` (default, organization-level only): moves the runner into an isolated runner group with restricted visibility so no `runs-on:` in any repository can match it.
+- `label`: renames the runner's custom labels with a `cordoned-` prefix so `runs-on:` references using those custom labels no longer match. This does not remove the built-in `self-hosted`/OS/architecture labels, so a workflow using only `runs-on: self-hosted` can still match the runner.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--group` | `gh-runner-kit-cordoned` | Name of the isolated runner group used by the `group` strategy |
+| `--group-visibility` | `selected` | Visibility of the isolated runner group when it is created: `{selected\|all\|private}` |
+| `--id` | - | Select the runner to cordon by ID |
+| `--label` | - | Select every runner that has this label |
+| `--label-prefix` | `cordoned-` | Prefix applied to custom labels by the `label` strategy |
+| `--name` | - | Select the runner to cordon by name |
+| `--owner` | current repository owner | Select an organization by owner name (for organization-level runners) |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--strategy` | `group` | Cordon strategy: `{group\|label}` |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+
+### Create an organization runner group
+
+```sh
+gh runner-kit group create <name> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--visibility selected|all|private] [--allows-public-repositories] [--dryrun] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Create a runner group in an organization. The `<name>` argument is required.
+
+The group is created without any repository access, so grant it afterwards from the organization settings unless `--visibility all` is used.
+
+Managing runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--allows-public-repositories` | `false` | Let public repositories use the runner group |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--visibility` | `selected` | Which repositories can use the runner group: `{selected\|all\|private}` |
+
+### Delete an organization runner group
+
+```sh
+gh runner-kit group delete <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--dryrun]
+```
+
+Delete an organization runner group. The `<group>` argument is required and selects the runner group by name or by ID.
+
+The runners of the group are not deleted; they are returned to the default runner group.
+
+Managing runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+
+### Download, register and run a self-hosted runner agent
+
+```sh
+gh runner-kit run [--repo [HOST/]OWNER/REPO | --owner OWNER] [--name NAME] [--labels LABELS] [--no-default-labels] [--runner-group GROUP] [--dir DIR] [--work DIR] [--version VERSION] [--replace] [--ephemeral] [--remove-on-exit]
+```
+
+Run downloads the `actions/runner` agent (if not already present in `--dir`), registers it with the target repository or organization, and runs it in the foreground. Press `Ctrl+C` to stop the runner.
+
+Use `--no-default-labels` to register the runner with only the labels given by `--labels`. The runner name is used as the label when `--labels` is omitted.
+
+Use `--runner-group` to register an organization runner into an existing runner group instead of the default one.
+
+Use `--remove-on-exit` to delete the runner registration from GitHub once the agent has stopped, leaving the downloaded agent in `--dir`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--dir` | `.actions-runner` | Directory to install and run the runner agent in |
+| `--ephemeral` | `false` | Register the runner as ephemeral (it deregisters itself after one job) |
+| `--labels` | runner name with `--no-default-labels` | Comma-separated list of custom labels to add to the runner |
+| `--name` | hostname | Runner name |
+| `--no-default-labels` | `false` | Register the runner without the default labels (`self-hosted`, OS and architecture) |
+| `--owner` | current repository owner | Select an organization by owner name (for organization-level runners) |
+| `--remove-on-exit` | `false` | Delete the runner registration from GitHub after the agent stops |
+| `--replace` | `false` | Replace any existing runner registration with the same name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--runner-group` | `Default` | Runner group to register the runner into (organization-level runners only) |
+| `--version` | `latest` | `actions/runner` version to download |
+| `--work` | `_work` | Working directory used by the runner agent |
+
+### List organization runner groups
+
+```sh
+gh runner-kit group list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List the runner groups configured in an organization.
+
+The organization is taken from `--owner`, or from the owner of `--repo` or of the current repository. Reading runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fields` | `ID,NAME,VISIBILITY,DEFAULT,INHERITED` | Table columns to display: `{DEFAULT\|ID\|INHERITED\|NAME\|PUBLIC_REPOSITORIES\|RESTRICTED_TO_WORKFLOWS\|VISIBILITY}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner group names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
+### List self-hosted runners
+
+```sh
+gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List self-hosted runners, including their cordon status.
+
+Organization-level runners are listed by default. Use `--type repo` to list the runners registered to a repository instead; passing `--repo` explicitly implies `--type repo`. Use `--status` to keep only the runners in one status, and `--fields` to choose the table columns. The runner APIs only report `online` and `offline`, so `--status active` and `--status idle` match the online runners that are respectively running a job and waiting for one.
+
+The runner list APIs do not report the runner group of each runner, so use `gh runner-kit group runner list` to list the runners of a runner group.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display: `{BUSY\|CORDONED\|ID\|LABELS\|NAME\|OS\|STATUS}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `--owner` | current repository owner | Select an organization by owner name (for organization-level runners) |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--status` | all statuses | Keep only the runners in this status: `{online\|offline\|active\|idle}` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+
+### List the repositories that can use an organization runner group
+
+```sh
+gh runner-kit group repos <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--name-only] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List the repositories that have access to an organization runner group. The `<group>` argument is required and selects the runner group by name or by ID.
+
+Only runner groups whose visibility is `selected` have a repository access list.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the repository names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
+### List the self-hosted runners of an organization runner group
+
+```sh
+gh runner-kit group runner list <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List the self-hosted runners belonging to an organization runner group. The `<group>` argument is required and selects the runner group by name or by ID.
+
+The organization is taken from `--owner`, or from the owner of `--repo` or of the current repository. Reading runner groups requires organization owner permission.
+
+Use `--status` to keep only the runners in one status, and `--fields` to choose the table columns. The runner APIs only report `online` and `offline`, so `--status active` and `--status idle` match the online runners that are respectively running a job and waiting for one.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display: `{BUSY\|CORDONED\|ID\|LABELS\|NAME\|OS\|STATUS}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--status` | all statuses | Keep only the runners in this status: `{online\|offline\|active\|idle}` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
+### Remove a self-hosted runner from an organization runner group
+
+```sh
+gh runner-kit group runner remove <group> <runner> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--dryrun]
+```
+
+Remove an organization self-hosted runner from a runner group. The `<group>` and `<runner>` arguments are required and select the runner group and the runner by name or by ID. The runner is returned to the default runner group.
+
+Managing runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+
+### Show the settings of an organization runner group
+
+```sh
+gh runner-kit group view <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Show the settings of an organization runner group. The `<group>` argument is required and selects the runner group by name or by ID.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--fields` | all fields | Fields to display: `{DEFAULT\|ID\|INHERITED\|NAME\|PUBLIC_REPOSITORIES\|RESTRICTED_TO_WORKFLOWS\|VISIBILITY}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
+### Uncordon self-hosted runners so they can receive new jobs again
+
+```sh
+gh runner-kit uncordon [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] (--id ID | --name NAME | --label LABEL | --all) [--label-prefix PREFIX] [--dryrun]
+```
+
+Uncordon reverses a previous cordon operation, restoring each runner's original runner group and/or custom labels based on the marker labels recorded by `cordon`. Runners whose original runner group could not be recorded are returned to the default runner group.
+
+Runners are selected with `--id`, `--name`, `--label` or `--all`. Exactly one of them is required, and `--all` uncordons every currently cordoned runner.
+
+Organization-level runners are targeted by default. Use `--type repo` to target the runners registered to a repository instead; passing `--repo` explicitly implies `--type repo`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all` | `false` | Select every currently cordoned runner |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--id` | - | Select the runner to uncordon by ID |
+| `--label` | - | Select every runner that has this label |
+| `--label-prefix` | `cordoned-` | Prefix that was applied to custom labels by the `label` strategy |
+| `--name` | - | Select the runner to uncordon by name |
+| `--owner` | current repository owner | Select an organization by owner name (for organization-level runners) |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+
+### Update the settings of an organization runner group
+
+```sh
+gh runner-kit group update <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] (--name NAME | --visibility selected|all|private | --allows-public-repositories) [--dryrun] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Update the settings of an organization runner group. The `<group>` argument is required and selects the runner group by name or by ID.
+
+Only the settings given on the command line are changed, and at least one of `--name`, `--visibility` and `--allows-public-repositories` is required.
+
+Managing runner groups requires organization owner permission.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--allows-public-repositories` | unchanged | Let public repositories use the runner group |
+| `-n`, `--dryrun` | `false` | Show what would be done without making any changes |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name` | unchanged | Rename the runner group |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--visibility` | unchanged | Which repositories can use the runner group: `{selected\|all\|private}` |
+
+## Global Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--http-timeout` | `30s` | Timeout for each GitHub API request |
+| `-L`, `--log-level` | `info` | Set log level: `{debug\|info\|warn\|error}` |
+| `--read-only` | `false` | Run in read-only mode (prevent write operations) |
+
+## Development
 
 ```sh
 go mod tidy
 go build ./...
 go test ./...
 ```
-
-## インストール
-
-```sh
-gh extension install .
-```
-
-## 現在の構成
-
-- `main.go`: エントリーポイント
-- `cmd/root.go`: ルートコマンド
-- `cmd/runner.go`: 将来の runner 系コマンドを追加するためのプレースホルダー
-- `version/version.go`: リリース用バージョン定義
-- `.github/workflows/*`: ビルド・リリース・Lint 用ワークフロー

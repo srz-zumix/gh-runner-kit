@@ -13,7 +13,18 @@ install-released:
 	gh extension install "srz-zumix/gh-${EXTENSION_NAME}"
 
 build:
-	go build -o gh-runner-kit
+	go build -o gh-${EXTENSION_NAME}
 
 test: ## run tests
 	go test -v ./...
+
+clean:
+	rm -f go.work go.work.sum
+	@if [ -L go-gh-extension ]; then rm -f go-gh-extension; fi
+
+go-work:
+	# (cd .. && gh repo clone srz-zumix/go-gh-extension)
+	ln -snf ../go-gh-extension go-gh-extension
+	go work use .
+	go work use ./go-gh-extension
+	go work sync
