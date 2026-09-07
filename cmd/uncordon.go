@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	runnerpkg "github.com/srz-zumix/gh-runner-kit/pkg/runner"
+	"github.com/srz-zumix/go-gh-extension/pkg/cmdflags"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
@@ -35,10 +36,6 @@ use --type repo (or --repo) to target the runners of a repository.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-
-			if err := kitutil.ValidateSelector(cmd, runnerID, runnerName, runnerLabel); err != nil {
-				return err
-			}
 
 			repo, err := parser.Repository(
 				parser.RepositoryOwnerWithHost(ownerFlag),
@@ -105,7 +102,7 @@ use --type repo (or --repo) to target the runners of a repository.`,
 	f.StringVar(&runnerName, "name", "", "Select the runner to uncordon by name")
 	f.StringVar(&runnerLabel, "label", "", "Select every runner that has this label")
 	f.BoolVar(&all, "all", false, "Select every currently cordoned runner")
-	f.StringVar(&labelPrefix, "label-prefix", "cordoned-", "Prefix that was applied to custom labels by the \"label\" strategy")
+	cmdflags.NonEmptyStringVar(cmd, &labelPrefix, "label-prefix", "cordoned-", "Prefix that was applied to custom labels by the \"label\" strategy")
 	f.BoolVarP(&dryRun, "dryrun", "n", false, "Show what would be done without making any changes")
 	cmd.MarkFlagsOneRequired("id", "name", "label", "all")
 	cmd.MarkFlagsMutuallyExclusive("id", "name", "label", "all")

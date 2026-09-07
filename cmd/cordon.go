@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	runnerpkg "github.com/srz-zumix/gh-runner-kit/pkg/runner"
+	"github.com/srz-zumix/go-gh-extension/pkg/cmdflags"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
@@ -45,10 +46,6 @@ Two strategies are available:
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-
-			if err := kitutil.ValidateSelector(cmd, runnerID, runnerName, runnerLabel); err != nil {
-				return err
-			}
 
 			repo, err := parser.Repository(
 				parser.RepositoryOwnerWithHost(ownerFlag),
@@ -126,7 +123,7 @@ Two strategies are available:
 	f.StringVar(&strategy, "strategy", "group", "Cordon strategy: {group|label}")
 	f.StringVar(&groupName, "group", runnerpkg.DefaultCordonGroupName, "Name of the isolated runner group used by the \"group\" strategy")
 	f.StringVar(&groupVisibility, "group-visibility", "selected", "Visibility of the isolated runner group when it is created: {selected|all|private}")
-	f.StringVar(&labelPrefix, "label-prefix", "cordoned-", "Prefix applied to custom labels by the \"label\" strategy")
+	cmdflags.NonEmptyStringVar(cmd, &labelPrefix, "label-prefix", "cordoned-", "Prefix applied to custom labels by the \"label\" strategy")
 	f.BoolVarP(&dryRun, "dryrun", "n", false, "Show what would be done without making any changes")
 	cmd.MarkFlagsOneRequired("id", "name", "label")
 	cmd.MarkFlagsMutuallyExclusive("id", "name", "label")
