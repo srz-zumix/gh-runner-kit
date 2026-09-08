@@ -10,14 +10,7 @@ import (
 // TestCacheIsolatesRepositories makes sure entries sharing a run ID but belonging to
 // different repositories never collide, even when the same Cache serves every repo.
 func TestCacheIsolatesRepositories(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CACHE_HOME", dir)
-
-	cache, err := NewCache()
-	if err != nil {
-		t.Fatalf("NewCache: %v", err)
-	}
+	cache := &Cache{base: t.TempDir()}
 
 	repoA := repository.Repository{Host: "github.com", Owner: "octo", Name: "alpha"}
 	repoB := repository.Repository{Host: "github.com", Owner: "octo", Name: "beta"}
@@ -45,14 +38,7 @@ func TestCacheIsolatesRepositories(t *testing.T) {
 
 // TestCacheMissForUnknownRepo confirms a lookup returns absent when nothing was stored.
 func TestCacheMissForUnknownRepo(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CACHE_HOME", dir)
-
-	cache, err := NewCache()
-	if err != nil {
-		t.Fatalf("NewCache: %v", err)
-	}
+	cache := &Cache{base: t.TempDir()}
 
 	repo := repository.Repository{Host: "github.com", Owner: "octo", Name: "alpha"}
 	if _, ok := cache.LoadJobs(repo, 7); ok {

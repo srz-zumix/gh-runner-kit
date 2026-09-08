@@ -19,7 +19,7 @@ const (
 
 // Cache stores the job list of completed workflow runs on local disk.
 // Entries are scoped per host/owner/repository so that runs from different hosts,
-// accounts or repositories can never be served to each other.
+// accounts or repositories are kept apart for normal GitHub identifiers.
 type Cache struct {
 	base string
 }
@@ -27,12 +27,17 @@ type Cache struct {
 // NewCache prepares the on-disk cache root. Individual entries are placed under a
 // per-repository subdirectory derived from the repository passed to LoadJobs and
 // SaveJobs, so a single cache can serve a collection that spans repositories.
+// Creating the root here lets callers detect an unusable cache location up front.
 func NewCache() (*Cache, error) {
-	base, err := os.UserCacheDir()
+	dir, err := os.UserCacheDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate the user cache directory: %w", err)
 	}
-	return &Cache{base: filepath.Join(base, "gh-runner-kit", "metrics")}, nil
+	base := filepath.Join(dir, "gh-runner-kit", "metrics")
+	if err := os.MkdirAll(base, cacheDirPerm); err != nil {
+		return nil, fmt.Errorf("failed to create the cache directory %s: %w", base, err)
+	}
+	return &Cache{base: base}, nil
 }
 
 // jobsDir returns the per-repository directory that holds cached job lists.
@@ -60,8 +65,9 @@ func (c *Cache) LoadJobs(repo repository.Repository, runID int64) ([]*github.Wor
 	return jobs, true
 }
 
-// SaveJobs writes the job list of repo's runID. The write is atomic so that a cancelled
-// run never leaves a truncated entry behind.
+// SaveJobs writes the job list of repo's runID. It writes to a temporary file and renames
+// it into place, which is atomic on Unix, so an interrupted write never leaves a truncated
+// entry behind. A partial entry would in any case be treated as a cache miss on load.
 func (c *Cache) SaveJobs(repo repository.Repository, runID int64, jobs []*github.WorkflowJob) error {
 	data, err := json.Marshal(jobs)
 	if err != nil {
