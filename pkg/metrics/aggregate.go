@@ -1,0 +1,175 @@
+package metrics
+
+import (
+	"cmp"
+	"math"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/go-github/v90/github"
+)
+
+// JobKind classifies the runner that executed a workflow job.
+type JobKind string
+
+const (
+	JobKindSelfHosted JobKind = "self-hosted"
+	JobKindHosted     JobKind = "hosted"
+	JobKindUnknown    JobKind = "unknown"
+)
+
+// selfHostedLabel is implicitly assigned to every self-hosted runner.
+const selfHostedLabel = "self-hosted"
+
+// hostedRunnerGroup is the runner group GitHub reports for its own hosted runners.
+const hostedRunnerGroup = "GitHub Actions"
+
+// hostedLabelPrefixes are the label prefixes of GitHub-hosted runner images.
+var hostedLabelPrefixes = []string{"ubuntu-", "windows-", "macos-"}
+
+// Interval is a half-open time range [Start, End) during which a runner was busy.
+type Interval struct {
+	Start time.Time
+	End   time.Time
+}
+
+// Duration returns the length of the interval, or 0 when it is not well formed.
+func (i Interval) Duration() time.Duration {
+	if !i.End.After(i.Start) {
+		return 0
+	}
+	return i.End.Sub(i.Start)
+}
+
+// Percentile returns the nearest-rank percentile of values, where p is in [0, 100].
+// values is left unmodified. The zero value is returned for an empty slice.
+func Percentile[T cmp.Ordered](values []T, p float64) T {
+	var zero T
+	if len(values) == 0 {
+		return zero
+	}
+
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+
+	rank := int(math.Ceil(p / 100 * float64(len(sorted))))
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > len(sorted) {
+		rank = len(sorted)
+	}
+	return sorted[rank-1]
+}
+
+// PeakConcurrency returns the highest number of intervals that overlap at any instant.
+// An interval ending exactly when another starts does not count as an overlap.
+func PeakConcurrency(intervals []Interval) int {
+	type event struct {
+		at    time.Time
+		delta int
+	}
+
+	events := make([]event, 0, len(intervals)*2)
+	for _, iv := range intervals {
+		if iv.Duration() == 0 {
+			continue
+		}
+		events = append(events, event{at: iv.Start, delta: 1}, event{at: iv.End, delta: -1})
+	}
+
+	// Releases are applied before acquisitions at the same instant.
+	slices.SortFunc(events, func(a, b event) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return a.delta - b.delta
+	})
+
+	peak, current := 0, 0
+	for _, e := range events {
+		current += e.delta
+		if current > peak {
+			peak = current
+		}
+	}
+	return peak
+}
+
+// Utilization returns busy divided by window, clamped to [0, 1].
+// The denominator is the wall-clock length of the aggregation window, not the time
+// the runner was online, because the API does not expose historical online state.
+func Utilization(busy, window time.Duration) float64 {
+	if window <= 0 || busy <= 0 {
+		return 0
+	}
+	return min(float64(busy)/float64(window), 1)
+}
+
+// ClassifyJob determines whether a job ran on a self-hosted or a GitHub-hosted runner.
+// selfHostedRunnerIDs holds the IDs of the self-hosted runners registered in the same
+// scope as the job, which is the only fully reliable signal.
+func ClassifyJob(job *github.WorkflowJob, selfHostedRunnerIDs map[int64]bool) JobKind {
+	if job == nil {
+		return JobKindUnknown
+	}
+
+	if id := job.GetRunnerID(); id != 0 && selfHostedRunnerIDs[id] {
+		return JobKindSelfHosted
+	}
+	if strings.EqualFold(job.GetRunnerGroupName(), hostedRunnerGroup) {
+		return JobKindHosted
+	}
+	if hasLabel(job.Labels, selfHostedLabel) {
+		return JobKindSelfHosted
+	}
+	if hasHostedLabel(job.Labels) {
+		return JobKindHosted
+	}
+	return JobKindUnknown
+}
+
+// MatchesRunner reports whether a runner carrying runnerLabels can pick up a job
+// requesting jobLabels. GitHub requires the runner to carry every requested label
+// and compares them case-insensitively.
+func MatchesRunner(jobLabels, runnerLabels []string) bool {
+	if len(jobLabels) == 0 {
+		return false
+	}
+	for _, want := range jobLabels {
+		if !hasLabel(runnerLabels, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeLabelSet lowercases and sorts labels so that a runs-on set can be used
+// as a grouping key regardless of the order it was written in.
+func NormalizeLabelSet(labels []string) []string {
+	normalized := make([]string, 0, len(labels))
+	for _, label := range labels {
+		normalized = append(normalized, strings.ToLower(label))
+	}
+	slices.Sort(normalized)
+	return slices.Compact(normalized)
+}
+
+func hasLabel(labels []string, want string) bool {
+	return slices.ContainsFunc(labels, func(label string) bool {
+		return strings.EqualFold(label, want)
+	})
+}
+
+func hasHostedLabel(labels []string) bool {
+	for _, label := range labels {
+		lower := strings.ToLower(label)
+		for _, prefix := range hostedLabelPrefixes {
+			if strings.HasPrefix(lower, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
