@@ -37,7 +37,7 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 	f.StringVar(&m.Owner, "owner", "", "Select an organization by owner name")
 	AddTypeFlag(cmd, &m.Type)
 	f.IntVar(&m.Days, "days", metrics.DefaultDays, "Aggregate over the last N days")
-	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (overrides --days)")
+	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (cannot be used with --days)")
 	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per scope (0 for no limit)")
 	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of job requests to issue in parallel")
 	f.StringVar(&m.Branch, "branch", "", "Keep only the workflow runs of this branch")
@@ -94,20 +94,21 @@ func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 		Event:       m.Event,
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
-	}, m.jobFetcher(client, scope))
+	}, m.jobFetcher(client))
 
 	return collector.Collect(ctx)
 }
 
 // jobFetcher wraps the API fetcher with the on-disk cache unless it is disabled or
-// unavailable.
-func (m *MetricsFlags) jobFetcher(client *gh.GitHubClient, repo repository.Repository) metrics.JobFetcher {
+// unavailable. The cache scopes each entry per repository, so a single instance is
+// safe to share across a repository collection.
+func (m *MetricsFlags) jobFetcher(client *gh.GitHubClient) metrics.JobFetcher {
 	fetcher := metrics.JobFetcher(metrics.NewAPIJobFetcher(client))
 	if m.NoCache {
 		return fetcher
 	}
 
-	cache, err := metrics.NewCache(repo)
+	cache, err := metrics.NewCache()
 	if err != nil {
 		logger.Warn("metrics: continuing without the job cache", "error", err)
 		return fetcher

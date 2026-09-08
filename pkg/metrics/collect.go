@@ -116,7 +116,7 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	runID := run.GetID()
 
 	if cacheable && !f.refresh {
-		if jobs, ok := f.cache.LoadJobs(runID); ok {
+		if jobs, ok := f.cache.LoadJobs(repo, runID); ok {
 			logger.Debug("metrics: job cache hit", "run_id", runID)
 			return jobs, nil
 		}
@@ -128,7 +128,7 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	}
 
 	if cacheable {
-		if err := f.cache.SaveJobs(runID, jobs); err != nil {
+		if err := f.cache.SaveJobs(repo, runID, jobs); err != nil {
 			logger.Debug("metrics: failed to cache jobs", "run_id", runID, "error", err)
 		}
 	}
