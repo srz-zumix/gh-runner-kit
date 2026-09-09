@@ -1,6 +1,6 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization and queue time.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency and per-workflow cost.
 ---
 
 # gh-runner-kit
@@ -49,9 +49,12 @@ gh runner-kit                # Root command
 │   └── view                  # Show the settings of a runner group
 ├── list                     # List self-hosted runners (organization by default)
 ├── metrics                  # Runner utilization and queue time reports
+│   ├── concurrency           # Jobs running at the same time, per time bucket
+│   ├── label                 # Demand and supply per single label
 │   ├── queue                 # Wait time per runs-on label set
 │   ├── runner                # Activity per runner, label set or group
-│   └── summary               # Fleet overview
+│   ├── summary               # Fleet overview
+│   └── workflow              # Failure rate, duration and retry rate per workflow
 ├── run                      # Download, register and run a runner agent
 └── uncordon                 # Let cordoned runners receive jobs again
 ```
@@ -390,7 +393,7 @@ The runner list APIs do not report the runner group of each runner, so use
 
 ### metrics
 
-Reports how the self-hosted runner fleet was used over a time window. All three
+Reports how the self-hosted runner fleet was used over a time window. All
 subcommands share the same collection options and the same definitions.
 
 Shared options:
@@ -454,6 +457,51 @@ runs, and warns when `--max-runs` truncated the data. Repositories the token
 cannot read are reported as warnings on stderr and skipped instead of failing the
 command.
 
+### metrics concurrency
+
+Reconstructs how many jobs occupied a runner at the same time, one fixed-width
+time bucket at a time.
+
+```bash
+gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
+| `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
+
+Table columns: `START`, `END`, `JOBS`, `PEAK`, `RUNNERS`, `BUSY`, `UTIL`.
+
+Rows are in chronological order. `PEAK` is the highest number of jobs running at
+the same instant inside the bucket, so comparing it against `RUNNERS` shows when
+the fleet ran out of capacity. The last bucket is cut off at the end of the
+window, and `UTIL` divides by the actual bucket length so that it stays
+comparable.
+
+`--label` narrows both sides: only the jobs whose `runs-on` set carries every
+given label are counted, and only the runners that can serve that set.
+
+### metrics label
+
+Matches the labels the jobs requested against the labels the registered runners
+carry, one single label at a time. Use `metrics queue` instead when the whole
+`runs-on` set matters.
+
+```bash
+gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+```
+
+Table columns: `LABEL`, `STATUS`, `JOBS`, `RUNNERS`, `WAIT P50`, `WAIT P95`,
+`LAST JOB`.
+
+`STATUS` is `orphan` when jobs asked for the label but no registered runner
+carries it, `unused` when a runner carries the label but nothing requested it,
+and `ok` otherwise. Orphan and unused rows are listed first. `RUNNERS` reflects
+the current inventory, because the API keeps no history of runner labels.
+
 ### metrics queue
 
 Groups the jobs by the `runs-on` label set they requested and reports how long
@@ -506,6 +554,29 @@ gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type
 Reported metrics: `RUNNERS`, `ONLINE`, `BUSY`, `CORDONED`, `RUNS`, `JOBS`,
 `HOSTED JOBS`, `WAIT P50`, `WAIT P95`, `DURATION P50`, `DURATION P95`,
 `BUSY TIME`, `UTILIZATION`, `FAILURE RATE`, `PEAK CONCURRENCY`.
+
+### metrics workflow
+
+Breaks the collected jobs down per workflow.
+
+```bash
+gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--self-hosted-only] [--days N | --since TIME] [--all-repos] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
+
+Table columns: `WORKFLOW`, `RUNS`, `JOBS`, `FAIL`, `RETRY`, `WAIT P50`,
+`DUR P50`, `DUR P95`, `BUSY`, `LAST JOB`.
+
+This is the only metrics report that includes GitHub-hosted jobs by default, so
+that a workflow can be judged as a whole; pass `--self-hosted-only` to narrow it
+down to the fleet. `RETRY` is the share of runs restarted at least once, which is
+the only retry signal available: the job list of a run covers its last attempt
+only, so a job retried inside one attempt is indistinguishable from a job that
+ran once.
 
 ### run
 
@@ -705,6 +776,36 @@ gh runner-kit metrics runner --owner my-org --days 30 --format json \
   -q '.[] | select(.Jobs == 0) | .Key'
 ```
 
+### Find labels that no runner can serve
+
+```bash
+# Jobs asking for a label nothing carries can never start
+gh runner-kit metrics label --owner my-org --days 30 --format json \
+  -q '.[] | select(.Status == "orphan") | .Label'
+```
+
+### Find out when the fleet runs out of capacity
+
+```bash
+# Hour by hour peak against the fleet size
+gh runner-kit metrics concurrency --owner my-org --days 7 --bucket 1h
+
+# Only the buckets where every runner of the pool was taken
+gh runner-kit metrics concurrency --owner my-org --days 7 --label linux --format json \
+  -q '.[] | select(.Peak >= .Runners and .Runners > 0) | .Start'
+```
+
+### Find the workflows that cost the fleet the most
+
+```bash
+# Busiest workflows on self-hosted runners
+gh runner-kit metrics workflow --owner my-org --days 7 --self-hosted-only
+
+# Workflows that are restarted often
+gh runner-kit metrics workflow --owner my-org --days 30 --format json \
+  -q '.[] | select(.RetryRate > 0.2) | {Workflow, RetryRate}'
+```
+
 ## Troubleshooting
 
 | Symptom | Cause / Resolution |
@@ -727,4 +828,9 @@ gh runner-kit metrics runner --owner my-org --days 30 --format json \
 | `metrics` warns that `--max-runs` was reached | The window holds more runs than the limit. Raise `--max-runs`, or narrow the scope with `--branch`, `--event` or `--workflow`. |
 | `metrics` is slow the first time | Each run costs one job request. Results are cached per run, so subsequent invocations over the same window are much faster. |
 | `metrics` percentiles look implausibly low | Older caches may still hold the check runs that are now excluded. Re-run with `--refresh`. |
+| `metrics concurrency` shows `RUNNERS 0` | `--label` matched no registered runner, or the runner inventory could not be read. Check `metrics label` for orphan labels and the warnings on stderr. |
+| `metrics concurrency` returns one row per minute | `--bucket` was set too small for the window. Widen it, for example `--bucket 1h`. |
+| `metrics label` lists a label as `unused` that is clearly in use | The jobs requesting it fall outside the window or were dropped by `--max-runs`. Widen `--days` or raise `--max-runs`. |
+| `metrics workflow` shows `RETRY 0.0%` although jobs were re-run | Only whole-run restarts are visible. Re-running a single job stays inside the same attempt and cannot be detected. |
+| `metrics workflow` counts more jobs than the other reports | It includes GitHub-hosted jobs by default. Pass `--self-hosted-only`. |
 | Labels are not restored by `uncordon` | `--label-prefix` differs from the value used for `cordon`. |

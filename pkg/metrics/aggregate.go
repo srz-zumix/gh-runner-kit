@@ -97,6 +97,55 @@ func PeakConcurrency(intervals []Interval) int {
 	return peak
 }
 
+// Bucket is one fixed-width slice of a concurrency timeline.
+type Bucket struct {
+	Start time.Time
+	End   time.Time
+	Jobs  int
+	Peak  int
+	Busy  time.Duration
+}
+
+// Duration returns the length of the bucket.
+func (b Bucket) Duration() time.Duration {
+	return b.End.Sub(b.Start)
+}
+
+// ConcurrencyTimeline splits w into buckets of the given width and reports, for each
+// of them, how many intervals touched it, how many overlapped at its busiest instant
+// and how much busy time they added up to. The last bucket is cut off at the end of
+// the window so that its utilization is not diluted by time outside the window.
+func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) []Bucket {
+	if size <= 0 || w.Duration() <= 0 {
+		return nil
+	}
+
+	buckets := make([]Bucket, 0, int(w.Duration()/size)+1)
+	for start := w.Start; start.Before(w.End); start = start.Add(size) {
+		end := start.Add(size)
+		if end.After(w.End) {
+			end = w.End
+		}
+		slice := Window{Start: start, End: end}
+
+		bucket := Bucket{Start: slice.Start, End: slice.End}
+		clamped := make([]Interval, 0, len(intervals))
+		for _, iv := range intervals {
+			trimmed, ok := slice.Clamp(iv)
+			if !ok {
+				continue
+			}
+			clamped = append(clamped, trimmed)
+			bucket.Jobs++
+			bucket.Busy += trimmed.Duration()
+		}
+
+		bucket.Peak = PeakConcurrency(clamped)
+		buckets = append(buckets, bucket)
+	}
+	return buckets
+}
+
 // Utilization returns busy divided by window, clamped to [0, 1].
 // The denominator is the wall-clock length of the aggregation window, not the time
 // the runner was online, because the API does not expose historical online state.

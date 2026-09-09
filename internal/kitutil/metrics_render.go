@@ -93,9 +93,76 @@ func RenderMetricsQueue(r *render.Renderer, rows []metrics.QueueRow) error {
 	return t.Render()
 }
 
+// RenderMetricsLabels prints one line per single label with its demand and supply.
+func RenderMetricsLabels(r *render.Renderer, rows []metrics.LabelRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"LABEL", "STATUS", "JOBS", "RUNNERS", "WAIT P50", "WAIT P95", "LAST JOB"})
+	for _, row := range rows {
+		t.Append([]string{
+			row.Label,
+			string(row.Status),
+			strconv.Itoa(row.Jobs),
+			strconv.Itoa(row.Runners),
+			FormatDurationStat(row.WaitP50, row.Jobs),
+			FormatDurationStat(row.WaitP95, row.Jobs),
+			FormatTime(row.LastJobAt),
+		})
+	}
+	return t.Render()
+}
+
+// RenderMetricsConcurrency prints the concurrency timeline, one line per bucket.
+func RenderMetricsConcurrency(r *render.Renderer, rows []metrics.ConcurrencyRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"START", "END", "JOBS", "PEAK", "RUNNERS", "BUSY", "UTIL"})
+	for _, row := range rows {
+		t.Append([]string{
+			FormatTime(row.Start),
+			FormatTime(row.End),
+			strconv.Itoa(row.Jobs),
+			strconv.Itoa(row.Peak),
+			strconv.Itoa(row.Runners),
+			FormatDurationStat(row.BusyTime, row.Jobs),
+			FormatPercent(row.Utilization),
+		})
+	}
+	return t.Render()
+}
+
+// RenderMetricsWorkflows prints one line per workflow.
+func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"WORKFLOW", "RUNS", "JOBS", "FAIL", "RETRY", "WAIT P50", "DUR P50", "DUR P95", "BUSY", "LAST JOB"})
+	for _, row := range rows {
+		t.Append([]string{
+			row.Workflow,
+			strconv.Itoa(row.Runs),
+			strconv.Itoa(row.Jobs),
+			FormatPercent(row.FailureRate),
+			FormatPercent(row.RetryRate),
+			FormatDurationStat(row.WaitP50, row.Jobs),
+			FormatDurationStat(row.DurationP50, row.Jobs),
+			FormatDurationStat(row.DurationP95, row.Jobs),
+			FormatDurationStat(row.BusyTime, row.Jobs),
+			FormatTime(row.LastJobAt),
+		})
+	}
+	return t.Render()
+}
+
 // WriteMetricsFooter states which window the numbers cover and whether they are based
 // on incomplete data, so that a truncated report is never mistaken for a full one.
 func WriteMetricsFooter(r *render.Renderer, w metrics.Window, runs int, truncated bool, warnings []string) {
+
 	r.WriteLine("")
 	r.WriteLine(fmt.Sprintf("Window: %s - %s (%s), runs: %d",
 		w.Start.Format(time.RFC3339), w.End.Format(time.RFC3339), FormatDuration(w.Duration()), runs))
