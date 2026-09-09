@@ -1,13 +1,14 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, and downloading/registering/running the actions/runner agent.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization and queue time.
 ---
 
 # gh-runner-kit
 
 Reference for gh-runner-kit — a GitHub CLI extension for GitHub Actions
 self-hosted runner operations: listing runners, controlling whether they receive
-new jobs (cordon / uncordon), and running the runner agent itself.
+new jobs (cordon / uncordon), running the runner agent itself, and reporting how
+the fleet is used.
 
 Version: 0.1.0
 
@@ -47,6 +48,10 @@ gh runner-kit                # Root command
 │   ├── update                # Update the settings of a runner group
 │   └── view                  # Show the settings of a runner group
 ├── list                     # List self-hosted runners (organization by default)
+├── metrics                  # Runner utilization and queue time reports
+│   ├── queue                 # Wait time per runs-on label set
+│   ├── runner                # Activity per runner, label set or group
+│   └── summary               # Fleet overview
 ├── run                      # Download, register and run a runner agent
 └── uncordon                 # Let cordoned runners receive jobs again
 ```
@@ -383,6 +388,125 @@ and `STATUS`; the given order is the column order.
 The runner list APIs do not report the runner group of each runner, so use
 `group runner list` to list the runners of a runner group.
 
+### metrics
+
+Reports how the self-hosted runner fleet was used over a time window. All three
+subcommands share the same collection options and the same definitions.
+
+Shared options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of job requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--format` | - | Output format: `json`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write the local job cache |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
+| `-R`, `--repo` | current repository | Select a repository |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `org` or `repo` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+Definitions to be aware of when reading the numbers:
+
+- **Scope.** `--type` selects where the runner inventory is read from, but the
+  workflow runs always come from a repository because the API has no
+  organization-wide run listing. Use `--all-repos` to walk every repository of
+  the organization, which issues many API requests.
+- **Wait time.** Measured from job creation to job start, so it also covers the
+  time spent waiting on `needs` dependencies and concurrency groups. It is an
+  upper bound on the pure runner queue time.
+- **Busy time.** The job's start-to-completion span, clipped to the aggregation
+  window.
+- **Utilization.** Busy time divided by the window length; `metrics summary`
+  additionally multiplies the window by the number of registered runners. The
+  API keeps no history of when a runner was online, so the denominator is
+  wall-clock time and not runner uptime.
+- **Failure rate.** Failed and timed out jobs divided by the jobs that produced
+  a pass or fail outcome. Cancelled jobs are excluded from both sides; skipped
+  jobs are excluded entirely.
+- **Check runs.** Check runs published by apps share the check suite of a
+  workflow run, so the jobs API returns them alongside the real jobs. They carry
+  no `runs-on` labels and never occupied a runner, so they are excluded.
+- **Hosted jobs.** Jobs identified as running on GitHub-hosted runners are
+  excluded from every metric and only counted in `HOSTED JOBS`. A job is treated
+  as hosted when its runner group is `GitHub Actions` or its labels are a
+  standard `ubuntu-*` / `windows-*` / `macos-*` image and it did not run on a
+  registered self-hosted runner.
+- **Runner status.** `STATUS`, `CORDONED`, `ONLINE` and `BUSY` describe the
+  fleet right now, not during the window.
+
+Job lists of completed runs are cached under the user cache directory
+(`~/Library/Caches/gh-runner-kit/metrics/` on macOS,
+`~/.cache/gh-runner-kit/metrics/` on Linux) with `0700`/`0600` permissions, keyed
+by host, owner, repository and run ID. Use `--refresh` to rewrite the entries and
+`--no-cache` to bypass the cache entirely.
+
+The table output always ends with a footer stating the window and the number of
+runs, and warns when `--max-runs` truncated the data. Repositories the token
+cannot read are reported as warnings on stderr and skipped instead of failing the
+command.
+
+### metrics queue
+
+Groups the jobs by the `runs-on` label set they requested and reports how long
+each set waited for a runner.
+
+```bash
+gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+```
+
+Table columns: `LABELS`, `KIND`, `JOBS`, `WAIT P50`, `WAIT P95`, `WAIT MAX`,
+`RUNNERS`, `PEAK`, `SATURATION`.
+
+`RUNNERS` counts the registered runners carrying every label of the set, `PEAK`
+is the highest number of jobs of that set running at the same time, and
+`SATURATION` is `PEAK / RUNNERS`. Saturation above `1.00` with a high `WAIT P95`
+means the label set needs more runners; a low saturation with a high wait points
+at the workflow definitions instead.
+
+### metrics runner
+
+Breaks the fleet activity down per runner, per label set or per runner group.
+
+```bash
+gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--group-by name|label|group] [--days N | --since TIME] [--all-repos] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--group-by` | `name` | Aggregate the jobs by this key: `name`, `label` or `group` |
+
+Table columns: `KEY`, `STATUS`, `CORDONED`, `JOBS`, `BUSY`, `UTIL`, `FAIL`,
+`WAIT P50`, `DUR P50`, `DUR P95`, `LAST JOB`.
+
+Grouping by name gives every registered runner a row, including the ones that
+picked up no work, which is how idle and cordoned capacity becomes visible.
+Ephemeral runners get a fresh name on every job, so group them by `label` or
+`group` instead.
+
+### metrics summary
+
+Summarizes how the fleet behaved over the window.
+
+```bash
+gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+```
+
+Reported metrics: `RUNNERS`, `ONLINE`, `BUSY`, `CORDONED`, `RUNS`, `JOBS`,
+`HOSTED JOBS`, `WAIT P50`, `WAIT P95`, `DURATION P50`, `DURATION P95`,
+`BUSY TIME`, `UTILIZATION`, `FAILURE RATE`, `PEAK CONCURRENCY`.
+
 ### run
 
 Downloads the `actions/runner` agent (if not already present in `--dir`),
@@ -561,6 +685,26 @@ gh runner-kit run -R owner/repo --labels self-test --ephemeral
 gh runner-kit run -R owner/repo --labels self-test --remove-on-exit
 ```
 
+### Decide whether the fleet needs more runners
+
+```bash
+# Overall picture for the last week
+gh runner-kit metrics summary --owner my-org --days 7
+
+# Which runs-on label sets are waiting, and are they short of runners?
+gh runner-kit metrics queue --owner my-org --days 7
+
+# Which runners are actually doing the work, and which are idle?
+gh runner-kit metrics runner --owner my-org --days 7
+```
+
+### Find runners that are registered but never used
+
+```bash
+gh runner-kit metrics runner --owner my-org --days 30 --format json \
+  -q '.[] | select(.Jobs == 0) | .Key'
+```
+
 ## Troubleshooting
 
 | Symptom | Cause / Resolution |
@@ -577,4 +721,10 @@ gh runner-kit run -R owner/repo --labels self-test --remove-on-exit
 | The runner group of a runner is not listed by `list` | The runner list APIs do not return `runner_group_id`. Use `group runner list` to list the runners of a group. |
 | Jobs still run after `--strategy label` | Workflows using only `runs-on: self-hosted` still match, because built-in labels are not renamed. Use `--strategy group` for full isolation. |
 | `PUT .../runner-groups/0/runners/...: 404 Not Found` | The runner was cordoned by an older version that recorded `cordoned-group-0`. Current versions return such runners to the default group; re-run `uncordon`. |
+| `collecting workflow runs requires a repository` | A `metrics` command was run outside a repository without `--repo`. Pass `--repo owner/name`, or `--all-repos` to walk the whole organization. |
+| `metrics` reports `JOBS 0` but `HOSTED JOBS` is high | Every job ran on GitHub-hosted runners. The metrics only cover self-hosted activity. |
+| `metrics` utilization looks far too low | The denominator is the whole window multiplied by the registered runners, including offline ones. Use `metrics runner` to see the per-runner breakdown. |
+| `metrics` warns that `--max-runs` was reached | The window holds more runs than the limit. Raise `--max-runs`, or narrow the scope with `--branch`, `--event` or `--workflow`. |
+| `metrics` is slow the first time | Each run costs one job request. Results are cached per run, so subsequent invocations over the same window are much faster. |
+| `metrics` percentiles look implausibly low | Older caches may still hold the check runs that are now excluded. Re-run with `--refresh`. |
 | Labels are not restored by `uncordon` | `--label-prefix` differs from the value used for `cordon`. |
