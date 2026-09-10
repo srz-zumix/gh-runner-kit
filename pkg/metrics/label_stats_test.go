@@ -10,7 +10,7 @@ func TestBuildLabelStats(t *testing.T) {
 	// the current inventory.
 	data.Jobs = append(data.Jobs, testJob("train", 0, "", []string{"self-hosted", "gpu"}, "success", 0, 5, 25))
 
-	rows := BuildLabelStats(data)
+	rows := BuildLabelStats(data, true)
 
 	want := []struct {
 		label   string
@@ -36,8 +36,24 @@ func TestBuildLabelStats(t *testing.T) {
 	}
 }
 
+func TestBuildLabelStatsExcludesUnusedByDefault(t *testing.T) {
+	rows := BuildLabelStats(testData(), false)
+
+	for _, row := range rows {
+		if row.Status == LabelStatusUnused {
+			t.Fatalf("BuildLabelStats() reported an unused label: %+v", row)
+		}
+		if row.Jobs == 0 {
+			t.Fatalf("BuildLabelStats() reported a label without jobs: %+v", row)
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("BuildLabelStats() = no rows, want the labels that jobs requested")
+	}
+}
+
 func TestBuildLabelStatsExcludesHostedJobs(t *testing.T) {
-	for _, row := range BuildLabelStats(testData()) {
+	for _, row := range BuildLabelStats(testData(), true) {
 		if row.Label == "ubuntu-latest" {
 			t.Fatalf("BuildLabelStats() reported a hosted label: %+v", row)
 		}

@@ -9,6 +9,7 @@ import (
 
 func NewLabelCmd() *cobra.Command {
 	var flags kitutil.MetricsFlags
+	var includeUnused bool
 
 	cmd := &cobra.Command{
 		Use:   "label",
@@ -17,9 +18,11 @@ func NewLabelCmd() *cobra.Command {
 one label at a time.
 
 STATUS is orphan when jobs asked for the label but no runner carries it, so those jobs
-cannot start until a runner picks the label up. It is unused when a runner carries the
-label but nothing requested it in the window, which usually means a typo or a label
-that outlived its workflow. Orphan and unused rows are listed first.
+cannot start until a runner picks the label up. Orphan rows are listed first.
+
+Labels no job requested in the window are left out, because a large fleet carries many
+of them. Pass --include-unused to list them as unused, which usually points at a typo
+or at a label that outlived its workflow.
 
 RUNNERS is the current inventory, because the API keeps no history of the labels a
 runner used to carry. Jobs that ran on GitHub-hosted runners are excluded.`,
@@ -31,7 +34,7 @@ runner used to carry. Jobs that ran on GitHub-hosted runners are excluded.`,
 			}
 
 			r := render.NewRenderer(flags.Exporter)
-			if err := kitutil.RenderMetricsLabels(r, metricspkg.BuildLabelStats(data)); err != nil {
+			if err := kitutil.RenderMetricsLabels(r, metricspkg.BuildLabelStats(data, includeUnused)); err != nil {
 				return err
 			}
 			kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.Truncated, data.Warnings)
@@ -40,6 +43,7 @@ runner used to carry. Jobs that ran on GitHub-hosted runners are excluded.`,
 	}
 
 	flags.Add(cmd)
+	cmd.Flags().BoolVar(&includeUnused, "include-unused", false, "List the labels no job requested in the window")
 
 	return cmd
 }

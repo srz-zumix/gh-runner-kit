@@ -35,7 +35,9 @@ type LabelRow struct {
 // registered runners carry, so that a label which is requested but never served, or
 // served but never requested, becomes visible. Runners reflects the inventory as it is
 // now, because the API keeps no history of the labels a runner used to carry.
-func BuildLabelStats(data *Data) []LabelRow {
+// includeUnused keeps the labels no job requested in the window, which are otherwise
+// dropped because a large fleet carries many of them.
+func BuildLabelStats(data *Data, includeUnused bool) []LabelRow {
 	demand := map[string]*jobStats{}
 	for _, job := range FleetJobs(NewJobs(data)) {
 		for _, label := range NormalizeLabelSet(job.Labels) {
@@ -71,15 +73,17 @@ func BuildLabelStats(data *Data) []LabelRow {
 			LastJobAt: s.lastJobAt,
 		})
 	}
-	for label, runners := range supply {
-		if _, ok := demand[label]; ok {
-			continue
+	if includeUnused {
+		for label, runners := range supply {
+			if _, ok := demand[label]; ok {
+				continue
+			}
+			rows = append(rows, LabelRow{
+				Label:   label,
+				Status:  labelStatus(0, runners),
+				Runners: runners,
+			})
 		}
-		rows = append(rows, LabelRow{
-			Label:   label,
-			Status:  labelStatus(0, runners),
-			Runners: runners,
-		})
 	}
 
 	// Mismatches first, because surfacing them is what this report exists for.

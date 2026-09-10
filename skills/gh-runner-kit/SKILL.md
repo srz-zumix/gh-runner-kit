@@ -491,16 +491,22 @@ carry, one single label at a time. Use `metrics queue` instead when the whole
 
 ```bash
 gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+  [--include-unused] [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
 ```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--include-unused` | `false` | List the labels no job requested in the window |
 
 Table columns: `LABEL`, `STATUS`, `JOBS`, `RUNNERS`, `WAIT P50`, `WAIT P95`,
 `LAST JOB`.
 
 `STATUS` is `orphan` when jobs asked for the label but no registered runner
 carries it, `unused` when a runner carries the label but nothing requested it,
-and `ok` otherwise. Orphan and unused rows are listed first. `RUNNERS` reflects
-the current inventory, because the API keeps no history of runner labels.
+and `ok` otherwise. Orphan rows are listed first. Unused rows are hidden unless
+`--include-unused` is given, because a large fleet carries many labels that see
+no traffic in a short window. `RUNNERS` reflects the current inventory, because
+the API keeps no history of runner labels.
 
 ### metrics queue
 
@@ -831,6 +837,7 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics` percentiles look implausibly low | Older caches may still hold the check runs that are now excluded. Re-run with `--refresh`. |
 | `metrics concurrency` shows `RUNNERS 0` | `--label` matched no registered runner, or the runner inventory could not be read. Check `metrics label` for orphan labels and the warnings on stderr. |
 | `metrics concurrency` returns one row per minute | `--bucket` was set too small for the window. Widen it, for example `--bucket 1h`. |
+| `metrics label` does not list a label a runner carries | No job requested it in the window, so it is hidden by default. Pass `--include-unused`. |
 | `metrics label` lists a label as `unused` that is clearly in use | The jobs requesting it fall outside the window or were dropped by `--max-runs`. Widen `--days` or raise `--max-runs`. |
 | `metrics workflow` shows `RETRY 0.0%` although jobs were re-run | Only whole-run restarts are visible. Re-running a single job stays inside the same attempt and cannot be detected. |
 | `metrics workflow` counts more jobs than the other reports | It includes GitHub-hosted jobs by default. Pass `--self-hosted-only`. |
