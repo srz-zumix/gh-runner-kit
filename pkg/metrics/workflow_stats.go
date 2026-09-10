@@ -14,6 +14,7 @@ type WorkflowRow struct {
 	FailureRate float64
 	RetryRate   float64
 	WaitP50     time.Duration
+	WaitP95     time.Duration
 	DurationP50 time.Duration
 	DurationP95 time.Duration
 	BusyTime    time.Duration
@@ -60,6 +61,7 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 			Jobs:        s.count,
 			FailureRate: s.failureRate(),
 			WaitP50:     Percentile(s.waits, 50),
+			WaitP95:     Percentile(s.waits, 95),
 			DurationP50: Percentile(s.durations, 50),
 			DurationP95: Percentile(s.durations, 95),
 			BusyTime:    s.busy,

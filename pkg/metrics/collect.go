@@ -281,7 +281,7 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 		g.Go(func() error {
 			runJobs, err := c.jobs.Jobs(ctx, repo, run)
 			if err != nil {
-				if !gh.IsHTTPForbidden(err) && !gh.IsHTTPNotFound(err) {
+				if !isSkippableJobError(err) {
 					return err
 				}
 				mu.Lock()
@@ -301,6 +301,18 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 		return nil, nil, err
 	}
 	return jobs, warnings, nil
+}
+
+// isSkippableJobError reports whether a failed job request may be downgraded to a
+// warning. Besides the repositories the token cannot read, GitHub answers with 5xx for
+// individual runs of large repositories, and one such run must not lose the whole report.
+func isSkippableJobError(err error) bool {
+	if gh.IsHTTPForbidden(err) || gh.IsHTTPNotFound(err) {
+		return true
+	}
+
+	var errResp *github.ErrorResponse
+	return errors.As(err, &errResp) && errResp.Response != nil && errResp.Response.StatusCode >= 500
 }
 
 // warnf records a non fatal problem so that commands can tell the user their numbers

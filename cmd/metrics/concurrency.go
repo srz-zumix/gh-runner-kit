@@ -15,6 +15,11 @@ func NewConcurrencyCmd() *cobra.Command {
 	var bucket string
 	var labels []string
 
+	// defaultBucket is the textual --bucket default. It lives here, at the flag boundary,
+	// so the help output matches the documented value instead of time.Duration's verbose
+	// "1h0m0s" rendering.
+	const defaultBucket = "1h"
+
 	cmd := &cobra.Command{
 		Use:   "concurrency",
 		Short: "Show how many jobs ran at the same time over the window",
@@ -56,7 +61,7 @@ excluded.`,
 	}
 
 	flags.Add(cmd)
-	cmd.Flags().StringVar(&bucket, "bucket", metricspkg.DefaultBucket.String(), "Width of one time bucket, such as 15m or 1h")
+	cmd.Flags().StringVar(&bucket, "bucket", defaultBucket, "Width of one time bucket, such as 15m or 1h")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "Keep only the jobs requesting this label (repeatable)")
 
 	return cmd

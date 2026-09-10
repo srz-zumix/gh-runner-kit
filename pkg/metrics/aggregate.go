@@ -121,6 +121,10 @@ func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) []B
 	}
 
 	buckets := make([]Bucket, 0, int(w.Duration()/size)+1)
+	// clamped is reused across buckets: PeakConcurrency only reads it and never retains
+	// the slice, so a single backing array (grown to the busiest bucket) avoids allocating
+	// one full-length slice per bucket.
+	var clamped []Interval
 	for start := w.Start; start.Before(w.End); start = start.Add(size) {
 		end := start.Add(size)
 		if end.After(w.End) {
@@ -129,7 +133,7 @@ func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) []B
 		slice := Window{Start: start, End: end}
 
 		bucket := Bucket{Start: slice.Start, End: slice.End}
-		clamped := make([]Interval, 0, len(intervals))
+		clamped = clamped[:0]
 		for _, iv := range intervals {
 			trimmed, ok := slice.Clamp(iv)
 			if !ok {

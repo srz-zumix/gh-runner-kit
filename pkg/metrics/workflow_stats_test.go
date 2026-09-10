@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
@@ -55,6 +56,12 @@ func TestBuildWorkflowStats(t *testing.T) {
 	}
 	if got, want := ci.FailureRate, 1.0/3.0; got != want {
 		t.Fatalf("FailureRate = %v, want %v", got, want)
+	}
+	if got, want := ci.WaitP50, 5*time.Minute; got != want {
+		t.Fatalf("WaitP50 = %v, want %v", got, want)
+	}
+	if got, want := ci.WaitP95, 5*time.Minute; got != want {
+		t.Fatalf("WaitP95 = %v, want %v", got, want)
 	}
 
 	release := rows[1]

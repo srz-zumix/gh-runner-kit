@@ -2,9 +2,6 @@ package metrics
 
 import "time"
 
-// DefaultBucket is the width of a concurrency bucket when --bucket is not given.
-const DefaultBucket = time.Hour
-
 // ConcurrencyRow is one line of the metrics concurrency report: a single time bucket.
 type ConcurrencyRow struct {
 	Start       time.Time

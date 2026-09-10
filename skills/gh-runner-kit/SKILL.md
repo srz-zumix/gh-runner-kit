@@ -569,7 +569,7 @@ gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--typ
 | `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
 
 Table columns: `WORKFLOW`, `RUNS`, `JOBS`, `FAIL`, `RETRY`, `WAIT P50`,
-`DUR P50`, `DUR P95`, `BUSY`, `LAST JOB`.
+`WAIT P95`, `DUR P50`, `DUR P95`, `BUSY`, `LAST JOB`.
 
 This is the only metrics report that includes GitHub-hosted jobs by default, so
 that a workflow can be judged as a whole; pass `--self-hosted-only` to narrow it
@@ -826,6 +826,7 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics` reports `JOBS 0` but `HOSTED JOBS` is high | Every job ran on GitHub-hosted runners. The metrics only cover self-hosted activity. |
 | `metrics` utilization looks far too low | The denominator is the whole window multiplied by the registered runners, including offline ones. Use `metrics runner` to see the per-runner breakdown. |
 | `metrics` warns that `--max-runs` was reached | The window holds more runs than the limit. Raise `--max-runs`, or narrow the scope with `--branch`, `--event` or `--workflow`. |
+| `metrics` warns `skipped the jobs of workflow run N` | GitHub answered 403, 404 or 5xx for that run. The report is built without it, so the totals are slightly low. Large repositories hit 5xx occasionally; re-run to pick the run up again. |
 | `metrics` is slow the first time | Each run costs one job request. Results are cached per run, so subsequent invocations over the same window are much faster. |
 | `metrics` percentiles look implausibly low | Older caches may still hold the check runs that are now excluded. Re-run with `--refresh`. |
 | `metrics concurrency` shows `RUNNERS 0` | `--label` matched no registered runner, or the runner inventory could not be read. Check `metrics label` for orphan labels and the warnings on stderr. |
