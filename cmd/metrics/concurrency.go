@@ -44,12 +44,25 @@ excluded.`,
 				return fmt.Errorf("--bucket must be greater than 0, got %s", bucket)
 			}
 
-			data, err := flags.Collect(cmd)
+			// Resolve the window from the flags first so an impossibly small bucket is
+			// rejected before any API request is made.
+			window, err := flags.Window()
+			if err != nil {
+				return err
+			}
+			if count := metricspkg.BucketCount(window, width); count > metricspkg.MaxBuckets {
+				return fmt.Errorf("--bucket %s is too small for the selected window; it would produce %d buckets, more than the limit of %d, use a larger value", bucket, count, metricspkg.MaxBuckets)
+			}
+
+			data, err := flags.CollectWithWindow(cmd, window)
 			if err != nil {
 				return err
 			}
 
-			rows := metricspkg.BuildConcurrencyStats(data, width, labels)
+			rows, err := metricspkg.BuildConcurrencyStats(data, width, labels)
+			if err != nil {
+				return err
+			}
 
 			r := render.NewRenderer(flags.Exporter)
 			if err := kitutil.RenderMetricsConcurrency(r, rows); err != nil {

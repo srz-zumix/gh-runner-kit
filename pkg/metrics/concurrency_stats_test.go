@@ -12,7 +12,10 @@ func TestConcurrencyTimeline(t *testing.T) {
 		{at(45), at(50)},
 	}
 
-	got := ConcurrencyTimeline(intervals, Window{Start: at(0), End: at(60)}, 15*time.Minute)
+	got, err := ConcurrencyTimeline(intervals, Window{Start: at(0), End: at(60)}, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("ConcurrencyTimeline() error = %v", err)
+	}
 
 	want := []Bucket{
 		{Start: at(0), End: at(15), Jobs: 2, Peak: 2, Busy: 20 * time.Minute},
@@ -32,7 +35,10 @@ func TestConcurrencyTimeline(t *testing.T) {
 }
 
 func TestConcurrencyTimelineTruncatesLastBucket(t *testing.T) {
-	got := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(50)}, 20*time.Minute)
+	got, err := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(50)}, 20*time.Minute)
+	if err != nil {
+		t.Fatalf("ConcurrencyTimeline() error = %v", err)
+	}
 
 	if len(got) != 3 {
 		t.Fatalf("len(ConcurrencyTimeline()) = %d, want 3", len(got))
@@ -43,13 +49,50 @@ func TestConcurrencyTimelineTruncatesLastBucket(t *testing.T) {
 }
 
 func TestConcurrencyTimelineRejectsNonPositiveSize(t *testing.T) {
-	if got := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(60)}, 0); got != nil {
+	got, err := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(60)}, 0)
+	if err != nil {
+		t.Fatalf("ConcurrencyTimeline(size=0) error = %v, want nil", err)
+	}
+	if got != nil {
 		t.Fatalf("ConcurrencyTimeline(size=0) = %v, want nil", got)
 	}
 }
 
+func TestConcurrencyTimelineRejectsTooManyBuckets(t *testing.T) {
+	// A 1ns bucket over an hour would need 3.6e12 buckets, well past MaxBuckets.
+	_, err := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(60)}, time.Nanosecond)
+	if err == nil {
+		t.Fatal("ConcurrencyTimeline() with a tiny bucket did not return an error")
+	}
+}
+
+func TestBucketCount(t *testing.T) {
+	hour := Window{Start: at(0), End: at(60)}
+	tests := []struct {
+		name string
+		w    Window
+		size time.Duration
+		want int64
+	}{
+		{"exact division", hour, 15 * time.Minute, 4},
+		{"partial final bucket", Window{Start: at(0), End: at(50)}, 20 * time.Minute, 3},
+		{"size equal to window", hour, time.Hour, 1},
+		{"size larger than window", hour, 2 * time.Hour, 1},
+		{"non-positive size", hour, 0, 0},
+		{"empty window", Window{Start: at(0), End: at(0)}, time.Minute, 0},
+	}
+	for _, tt := range tests {
+		if got := BucketCount(tt.w, tt.size); got != tt.want {
+			t.Errorf("%s: BucketCount() = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestBuildConcurrencyStats(t *testing.T) {
-	rows := BuildConcurrencyStats(testData(), 30*time.Minute, nil)
+	rows, err := BuildConcurrencyStats(testData(), 30*time.Minute, nil)
+	if err != nil {
+		t.Fatalf("BuildConcurrencyStats() error = %v", err)
+	}
 
 	if len(rows) != 2 {
 		t.Fatalf("len(BuildConcurrencyStats()) = %d, want 2", len(rows))
@@ -79,7 +122,10 @@ func TestBuildConcurrencyStats(t *testing.T) {
 }
 
 func TestBuildConcurrencyStatsFiltersByLabel(t *testing.T) {
-	rows := BuildConcurrencyStats(testData(), time.Hour, []string{"cordoned"})
+	rows, err := BuildConcurrencyStats(testData(), time.Hour, []string{"cordoned"})
+	if err != nil {
+		t.Fatalf("BuildConcurrencyStats() error = %v", err)
+	}
 
 	if len(rows) != 1 {
 		t.Fatalf("len(BuildConcurrencyStats()) = %d, want 1", len(rows))

@@ -17,7 +17,7 @@ type ConcurrencyRow struct {
 // window, one fixed-width bucket at a time, and compares that against the number of
 // runners able to serve them. labels keeps only the jobs that requested every one of
 // them, and narrows the runner count the same way.
-func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) []ConcurrencyRow {
+func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) ([]ConcurrencyRow, error) {
 	filter := NormalizeLabelSet(labels)
 
 	intervals := make([]Interval, 0, len(data.Jobs))
@@ -35,7 +35,10 @@ func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) []
 		runners = countMatchingRunners(data, filter)
 	}
 
-	timeline := ConcurrencyTimeline(intervals, data.Window, bucket)
+	timeline, err := ConcurrencyTimeline(intervals, data.Window, bucket)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]ConcurrencyRow, 0, len(timeline))
 	for _, b := range timeline {
 		rows = append(rows, ConcurrencyRow{
@@ -48,5 +51,5 @@ func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) []
 			Utilization: Utilization(b.Busy, b.Duration()*time.Duration(runners)),
 		})
 	}
-	return rows
+	return rows, nil
 }

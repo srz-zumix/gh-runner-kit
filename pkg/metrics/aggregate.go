@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"cmp"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -111,16 +112,46 @@ func (b Bucket) Duration() time.Duration {
 	return b.End.Sub(b.Start)
 }
 
+// MaxBuckets caps how many buckets a single concurrency timeline may contain. It guards
+// against pathological --bucket/window combinations, such as a 1ns bucket over a multi-day
+// window, that would otherwise allocate and iterate an unbounded number of buckets and
+// exhaust memory. The limit is generous enough for realistic reports, for example
+// one-minute buckets over a month (43200 buckets).
+const MaxBuckets = 100_000
+
+// BucketCount reports how many buckets ConcurrencyTimeline emits for w at the given size,
+// which is ceil(w.Duration()/size). It returns 0 when either input is non-positive. The
+// result is kept as int64 so callers can compare it against MaxBuckets before any narrowing
+// conversion, avoiding overflow on extreme inputs.
+func BucketCount(w Window, size time.Duration) int64 {
+	duration := w.Duration()
+	if size <= 0 || duration <= 0 {
+		return 0
+	}
+	count := int64(duration / size)
+	if duration%size != 0 {
+		count++
+	}
+	return count
+}
+
 // ConcurrencyTimeline splits w into buckets of the given width and reports, for each
 // of them, how many intervals touched it, how many overlapped at its busiest instant
 // and how much busy time they added up to. The last bucket is cut off at the end of
 // the window so that its utilization is not diluted by time outside the window.
-func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) []Bucket {
+// It returns an error when the window would need more than MaxBuckets buckets, so a
+// direct caller can never trigger an unbounded allocation.
+func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) ([]Bucket, error) {
 	if size <= 0 || w.Duration() <= 0 {
-		return nil
+		return nil, nil
 	}
 
-	buckets := make([]Bucket, 0, int(w.Duration()/size)+1)
+	count := BucketCount(w, size)
+	if count > MaxBuckets {
+		return nil, fmt.Errorf("the selected window needs %d buckets of %s, more than the limit of %d; use a larger bucket width", count, size, MaxBuckets)
+	}
+
+	buckets := make([]Bucket, 0, int(count))
 	// clamped is reused across buckets: PeakConcurrency only reads it and never retains
 	// the slice, so a single backing array (grown to the busiest bucket) avoids allocating
 	// one full-length slice per bucket.
@@ -147,7 +178,7 @@ func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) []B
 		bucket.Peak = PeakConcurrency(clamped)
 		buckets = append(buckets, bucket)
 	}
-	return buckets
+	return buckets, nil
 }
 
 // Utilization returns busy divided by window, clamped to [0, 1].
