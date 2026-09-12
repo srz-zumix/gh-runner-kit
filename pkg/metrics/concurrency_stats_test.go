@@ -48,7 +48,7 @@ func TestConcurrencyTimelineTruncatesLastBucket(t *testing.T) {
 	}
 }
 
-func TestConcurrencyTimelineRejectsNonPositiveSize(t *testing.T) {
+func TestConcurrencyTimelineReturnsNilForNonPositiveSize(t *testing.T) {
 	got, err := ConcurrencyTimeline(nil, Window{Start: at(0), End: at(60)}, 0)
 	if err != nil {
 		t.Fatalf("ConcurrencyTimeline(size=0) error = %v, want nil", err)

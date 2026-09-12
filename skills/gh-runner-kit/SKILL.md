@@ -1,6 +1,6 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency and per-workflow cost.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency and per-workflow activity.
 ---
 
 # gh-runner-kit
@@ -439,7 +439,9 @@ Definitions to be aware of when reading the numbers:
   workflow run, so the jobs API returns them alongside the real jobs. They carry
   no `runs-on` labels and never occupied a runner, so they are excluded.
 - **Hosted jobs.** Jobs identified as running on GitHub-hosted runners are
-  excluded from every metric and only counted in `HOSTED JOBS`. A job is treated
+  excluded from every fleet metric and only counted in `HOSTED JOBS`; the
+  `metrics workflow` report is the exception and includes them by default so a
+  workflow can be judged as a whole. A job is treated
   as hosted when its runner group is `GitHub Actions` or its labels are a
   standard `ubuntu-*` / `windows-*` / `macos-*` image and it did not run on a
   registered self-hosted runner.
@@ -477,8 +479,8 @@ Table columns: `START`, `END`, `JOBS`, `PEAK`, `RUNNERS`, `BUSY`, `UTIL`.
 Rows are in chronological order. `PEAK` is the highest number of jobs running at
 the same instant inside the bucket, so comparing it against `RUNNERS` shows when
 the fleet ran out of capacity. The last bucket is cut off at the end of the
-window, and `UTIL` divides by the actual bucket length so that it stays
-comparable.
+window, and `UTIL` is the busy time divided by the bucket length times
+`RUNNERS`, so it stays comparable.
 
 `--label` narrows both sides: only the jobs whose `runs-on` set carries every
 given label are counted, and only the runners that can serve that set.

@@ -8,7 +8,7 @@ import (
 func NewMetricsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "metrics",
-		Short: "Report self-hosted runner utilization and queue time",
+		Short: "Report runner utilization, queue time, concurrency, label demand and per-workflow activity",
 	}
 
 	cmd.AddCommand(metrics.NewConcurrencyCmd())
