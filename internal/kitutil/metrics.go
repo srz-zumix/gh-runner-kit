@@ -1,6 +1,7 @@
 package kitutil
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -56,6 +57,30 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 // CollectWithWindow, so validation and collection agree on a single window.
 func (m *MetricsFlags) Window() (metrics.Window, error) {
 	return metrics.ParseWindow(m.Days, m.Since, time.Now())
+}
+
+// ResolveConcurrency parses the textual --bucket width, resolves the aggregation window and
+// validates that their combination stays within the bucket-count limit, all without issuing
+// any API request. Keeping this validation out of the command RunE and in a testable helper
+// follows the repository convention that cobra commands only wire flags. It returns the
+// resolved window and bucket width so the caller can collect data and build the timeline.
+func (m *MetricsFlags) ResolveConcurrency(bucket string) (metrics.Window, time.Duration, error) {
+	width, err := time.ParseDuration(bucket)
+	if err != nil {
+		return metrics.Window{}, 0, fmt.Errorf("failed to parse --bucket %q: %w", bucket, err)
+	}
+	if width <= 0 {
+		return metrics.Window{}, 0, fmt.Errorf("--bucket must be greater than 0, got %s", bucket)
+	}
+
+	window, err := m.Window()
+	if err != nil {
+		return metrics.Window{}, 0, err
+	}
+	if err := metrics.ValidateBucketWindow(window, width); err != nil {
+		return metrics.Window{}, 0, fmt.Errorf("invalid --bucket %s: %w", bucket, err)
+	}
+	return window, width, nil
 }
 
 // Collect resolves the target scope and gathers the workflow activity the reports need.

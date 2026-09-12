@@ -574,15 +574,18 @@ gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--typ
 | --- | --- | --- |
 | `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
 
-Table columns: `WORKFLOW`, `RUNS`, `JOBS`, `FAIL`, `RETRY`, `WAIT P50`,
-`WAIT P95`, `DUR P50`, `DUR P95`, `BUSY`, `LAST JOB`.
+Table columns: `REPOSITORY`, `WORKFLOW`, `PATH`, `RUNS`, `JOBS`, `FAIL`, `RETRY`,
+`WAIT P50`, `WAIT P95`, `DUR P50`, `DUR P95`, `BUSY`, `LAST JOB`.
 
-This is the only metrics report that includes GitHub-hosted jobs by default, so
-that a workflow can be judged as a whole; pass `--self-hosted-only` to narrow it
-down to the fleet. `RETRY` is the share of runs restarted at least once, which is
-the only retry signal available: the job list of a run covers its last attempt
-only, so a job retried inside one attempt is indistinguishable from a job that
-ran once.
+Workflows are grouped by their repository and workflow file, so equally named
+workflows in different repositories (common under `--all-repos`) or different
+files in the same repository land on separate rows; `REPOSITORY` and `PATH`
+identify each row (a dash marks unavailable metadata). This is the only metrics
+report that includes GitHub-hosted jobs by default, so that a workflow can be
+judged as a whole; pass `--self-hosted-only` to narrow it down to the fleet.
+`RETRY` is the share of runs restarted at least once, which is the only retry
+signal available: the job list of a run covers its last attempt only, so a job
+retried inside one attempt is indistinguishable from a job that ran once.
 
 ### run
 

@@ -468,6 +468,8 @@ gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--typ
 
 Break the collected jobs down per workflow.
 
+Workflows are grouped by their repository and workflow file, so two workflows that share a display name, whether they live in different repositories (common under `--all-repos`) or are different files in the same repository, are reported on separate rows. The `REPOSITORY` and `PATH` columns identify each row (a dash is shown when that metadata is unavailable).
+
 `RETRY` is the share of runs that were restarted at least once, which is the only retry signal the API exposes: the job list of a run only ever covers its last attempt, so a job that was retried inside a single attempt cannot be told apart from a job that ran once. `FAIL` counts the jobs that failed or timed out against the jobs that reached a verdict, so cancelled jobs do not make a workflow look broken.
 
 Unlike the other metrics reports this one includes the jobs that ran on GitHub-hosted runners, so that a workflow can be judged as a whole. Pass `--self-hosted-only` to narrow it down to the fleet, and `--workflow` to collect a single workflow file to begin with.

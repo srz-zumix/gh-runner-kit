@@ -51,12 +51,17 @@ type Data struct {
 	Window Window
 	// Runners is the runner inventory of the scope the command targets. It reflects the
 	// present, not the aggregation window, because the API keeps no runner history.
-	Runners   []*github.Runner
-	Runs      []*github.WorkflowRun
-	Jobs      []*github.WorkflowJob
-	Repos     []repository.Repository
-	Warnings  []string
-	Truncated bool
+	Runners []*github.Runner
+	Runs    []*github.WorkflowRun
+	Jobs    []*github.WorkflowJob
+	Repos   []repository.Repository
+	// RunRepositories maps a workflow run ID to the full name (owner/repo) of the
+	// repository it belongs to. The raw jobs do not carry their repository, so this is
+	// how per-workflow aggregation keeps runs of equally named workflows in distinct
+	// repositories apart, which matters most under --all-repos.
+	RunRepositories map[int64]string
+	Warnings        []string
+	Truncated       bool
 }
 
 // SelfHostedRunnerIDs indexes the currently registered runners by ID, which is the
@@ -156,7 +161,7 @@ func NewCollector(client *gh.GitHubClient, repo repository.Repository, opts Opti
 // Repositories the token cannot read are recorded in Data.Warnings and skipped rather
 // than aborting the whole command.
 func (c *Collector) Collect(ctx context.Context) (*Data, error) {
-	data := &Data{Window: c.opts.Window}
+	data := &Data{Window: c.opts.Window, RunRepositories: map[int64]string{}}
 
 	runners, err := gh.ListRunners(ctx, c.client, c.repo)
 	switch {
@@ -194,6 +199,13 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		}
 		remaining -= len(runs)
 		data.Runs = append(data.Runs, runs...)
+
+		// Record which repository every run came from so per-workflow aggregation can
+		// tell equally named workflows of different repositories apart.
+		repoName := parser.GetRepositoryFullName(repo)
+		for _, run := range runs {
+			data.RunRepositories[run.GetID()] = repoName
+		}
 
 		jobs, warnings, err := c.collectJobs(ctx, repo, runs)
 		if err != nil {

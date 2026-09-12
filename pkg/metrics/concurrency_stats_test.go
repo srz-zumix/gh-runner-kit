@@ -88,6 +88,29 @@ func TestBucketCount(t *testing.T) {
 	}
 }
 
+func TestValidateBucketWindow(t *testing.T) {
+	hour := Window{Start: at(0), End: at(60)}
+
+	// A width that yields exactly MaxBuckets is accepted; one bucket more is rejected.
+	exact := hour.Duration() / time.Duration(MaxBuckets)
+	if err := ValidateBucketWindow(hour, exact); err != nil {
+		t.Fatalf("ValidateBucketWindow(exactly MaxBuckets) error = %v, want nil", err)
+	}
+	if got := BucketCount(hour, exact); got != MaxBuckets {
+		t.Fatalf("BucketCount(exact) = %d, want %d", got, MaxBuckets)
+	}
+
+	tooSmall := exact - 1
+	if err := ValidateBucketWindow(hour, tooSmall); err == nil {
+		t.Fatalf("ValidateBucketWindow(MaxBuckets+ buckets) error = nil, want an error (count=%d)", BucketCount(hour, tooSmall))
+	}
+
+	// A non-positive width produces a zero count, which the count guard accepts.
+	if err := ValidateBucketWindow(hour, 0); err != nil {
+		t.Fatalf("ValidateBucketWindow(size=0) error = %v, want nil", err)
+	}
+}
+
 func TestBuildConcurrencyStats(t *testing.T) {
 	rows, err := BuildConcurrencyStats(testData(), 30*time.Minute, nil)
 	if err != nil {

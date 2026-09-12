@@ -83,3 +83,62 @@ func TestBuildWorkflowStatsSelfHostedOnly(t *testing.T) {
 		t.Fatalf("Workflow = %q, want %q", got, want)
 	}
 }
+
+// TestBuildWorkflowStatsSeparatesSameNameDifferentFile ensures two distinct workflow
+// files that happen to share a display name are not merged into a single row.
+func TestBuildWorkflowStatsSeparatesSameNameDifferentFile(t *testing.T) {
+	selfHosted := []string{"self-hosted", "linux"}
+	data := &Data{
+		Window:  Window{Start: at(0), End: at(60)},
+		Runners: []*github.Runner{testRunner(1, "runner-a", "online", false, selfHosted...)},
+		Runs: []*github.WorkflowRun{
+			{ID: github.Ptr(int64(1)), RunAttempt: github.Ptr(1), WorkflowID: github.Ptr(int64(100)), Path: github.Ptr(".github/workflows/a.yml")},
+			{ID: github.Ptr(int64(2)), RunAttempt: github.Ptr(1), WorkflowID: github.Ptr(int64(200)), Path: github.Ptr(".github/workflows/b.yml")},
+		},
+		Jobs: []*github.WorkflowJob{
+			workflowJob(testJob("build", 1, "runner-a", selfHosted, "success", 0, 5, 15), "CI", 1),
+			workflowJob(testJob("build", 1, "runner-a", selfHosted, "success", 0, 5, 15), "CI", 2),
+		},
+		RunRepositories: map[int64]string{1: "octo/demo", 2: "octo/demo"},
+	}
+
+	rows := BuildWorkflowStats(data, false)
+	if len(rows) != 2 {
+		t.Fatalf("len(BuildWorkflowStats()) = %d, want 2 (same name but different workflow files must not merge)", len(rows))
+	}
+	for _, row := range rows {
+		if row.Workflow != "CI" {
+			t.Fatalf("Workflow = %q, want %q", row.Workflow, "CI")
+		}
+	}
+	if rows[0].WorkflowPath == rows[1].WorkflowPath {
+		t.Fatalf("WorkflowPath = %q for both rows, want distinct paths", rows[0].WorkflowPath)
+	}
+}
+
+// TestBuildWorkflowStatsSeparatesSameNameDifferentRepo ensures equally named workflows of
+// different repositories stay in distinct rows, which matters under --all-repos.
+func TestBuildWorkflowStatsSeparatesSameNameDifferentRepo(t *testing.T) {
+	selfHosted := []string{"self-hosted", "linux"}
+	data := &Data{
+		Window:  Window{Start: at(0), End: at(60)},
+		Runners: []*github.Runner{testRunner(1, "runner-a", "online", false, selfHosted...)},
+		Runs: []*github.WorkflowRun{
+			{ID: github.Ptr(int64(1)), RunAttempt: github.Ptr(1)},
+			{ID: github.Ptr(int64(2)), RunAttempt: github.Ptr(1)},
+		},
+		Jobs: []*github.WorkflowJob{
+			workflowJob(testJob("build", 1, "runner-a", selfHosted, "success", 0, 5, 15), "CI", 1),
+			workflowJob(testJob("build", 1, "runner-a", selfHosted, "success", 0, 5, 15), "CI", 2),
+		},
+		RunRepositories: map[int64]string{1: "octo/a", 2: "octo/b"},
+	}
+
+	rows := BuildWorkflowStats(data, false)
+	if len(rows) != 2 {
+		t.Fatalf("len(BuildWorkflowStats()) = %d, want 2 (same name in different repositories must not merge)", len(rows))
+	}
+	if rows[0].Repository == rows[1].Repository {
+		t.Fatalf("Repository = %q for both rows, want distinct repositories", rows[0].Repository)
+	}
+}

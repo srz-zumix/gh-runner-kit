@@ -1,9 +1,6 @@
 package metrics
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	metricspkg "github.com/srz-zumix/gh-runner-kit/pkg/metrics"
@@ -36,22 +33,9 @@ only the runners that can serve that set. Jobs that ran on GitHub-hosted runners
 excluded.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			width, err := time.ParseDuration(bucket)
-			if err != nil {
-				return fmt.Errorf("failed to parse --bucket %q: %w", bucket, err)
-			}
-			if width <= 0 {
-				return fmt.Errorf("--bucket must be greater than 0, got %s", bucket)
-			}
-
-			// Resolve the window from the flags first so an impossibly small bucket is
-			// rejected before any API request is made.
-			window, err := flags.Window()
+			window, width, err := flags.ResolveConcurrency(bucket)
 			if err != nil {
 				return err
-			}
-			if count := metricspkg.BucketCount(window, width); count > metricspkg.MaxBuckets {
-				return fmt.Errorf("--bucket %s is too small for the selected window; it would produce %d buckets, more than the limit of %d, use a larger value", bucket, count, metricspkg.MaxBuckets)
 			}
 
 			data, err := flags.CollectWithWindow(cmd, window)

@@ -135,6 +135,19 @@ func BucketCount(w Window, size time.Duration) int64 {
 	return count
 }
 
+// ValidateBucketWindow reports whether splitting w into buckets of the given width would
+// exceed MaxBuckets. It only enforces the bucket-count limit; a non-positive width or
+// window yields a zero count (see BucketCount) and is therefore accepted here, leaving
+// that decision to the caller. It is the single source of the bucket-count guard shared
+// by the concurrency timeline and the command layer.
+func ValidateBucketWindow(w Window, width time.Duration) error {
+	count := BucketCount(w, width)
+	if count > MaxBuckets {
+		return fmt.Errorf("the selected window needs %d buckets of %s, more than the limit of %d; use a larger bucket width", count, width, MaxBuckets)
+	}
+	return nil
+}
+
 // ConcurrencyTimeline splits w into buckets of the given width and reports, for each
 // of them, how many intervals touched it, how many overlapped at its busiest instant
 // and how much busy time they added up to. The last bucket is cut off at the end of
@@ -146,10 +159,10 @@ func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) ([]
 		return nil, nil
 	}
 
-	count := BucketCount(w, size)
-	if count > MaxBuckets {
-		return nil, fmt.Errorf("the selected window needs %d buckets of %s, more than the limit of %d; use a larger bucket width", count, size, MaxBuckets)
+	if err := ValidateBucketWindow(w, size); err != nil {
+		return nil, err
 	}
+	count := BucketCount(w, size)
 
 	buckets := make([]Bucket, 0, int(count))
 	// clamped is reused across buckets: PeakConcurrency only reads it and never retains

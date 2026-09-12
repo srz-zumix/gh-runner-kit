@@ -8,17 +8,57 @@ import (
 
 // WorkflowRow is one line of the metrics workflow report.
 type WorkflowRow struct {
-	Workflow    string
-	Runs        int
-	Jobs        int
-	FailureRate float64
-	RetryRate   float64
-	WaitP50     time.Duration
-	WaitP95     time.Duration
-	DurationP50 time.Duration
-	DurationP95 time.Duration
-	BusyTime    time.Duration
-	LastJobAt   time.Time
+	Repository   string
+	Workflow     string
+	WorkflowPath string
+	Runs         int
+	Jobs         int
+	FailureRate  float64
+	RetryRate    float64
+	WaitP50      time.Duration
+	WaitP95      time.Duration
+	DurationP50  time.Duration
+	DurationP95  time.Duration
+	BusyTime     time.Duration
+	LastJobAt    time.Time
+}
+
+// workflowKey identifies a workflow across repositories. The repository is always part of
+// the key so equally named workflows of different repositories never merge, which matters
+// under --all-repos. The remaining fields fall back through the identity signals a job
+// exposes: the stable workflow file ID first, then the workflow file path, then the display
+// name. tier records which signal was used so two keys only collide when they identify the
+// workflow the same way.
+type workflowKey struct {
+	repository string
+	tier       int
+	id         int64
+	path       string
+	name       string
+}
+
+const (
+	workflowTierID   = 0
+	workflowTierPath = 1
+	workflowTierName = 2
+)
+
+// keyOf derives the grouping key of a job, preferring the most reliable identity signal it
+// carries. It never collapses distinct workflows that merely lack richer metadata.
+func keyOf(job Job) workflowKey {
+	key := workflowKey{repository: job.Repository}
+	switch {
+	case job.WorkflowID != 0:
+		key.tier = workflowTierID
+		key.id = job.WorkflowID
+	case job.WorkflowPath != "":
+		key.tier = workflowTierPath
+		key.path = job.WorkflowPath
+	default:
+		key.tier = workflowTierName
+		key.name = job.Workflow
+	}
+	return key
 }
 
 // BuildWorkflowStats aggregates the jobs per workflow. selfHostedOnly drops the jobs
@@ -35,19 +75,20 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 		attempts[run.GetID()] = run.GetRunAttempt()
 	}
 
-	stats := map[string]*jobStats{}
-	runIDs := map[string]map[int64]bool{}
+	stats := map[workflowKey]*jobStats{}
+	runIDs := map[workflowKey]map[int64]bool{}
+	// display keeps the human-facing fields of the first job seen for each key, so the
+	// report shows the workflow name and path even when the key is built from the ID.
+	display := map[workflowKey]Job{}
 	for _, job := range jobs {
-		key := job.Workflow
-		if key == "" {
-			key = unknownKey
-		}
+		key := keyOf(job)
 
 		s, ok := stats[key]
 		if !ok {
 			s = &jobStats{}
 			stats[key] = s
 			runIDs[key] = map[int64]bool{}
+			display[key] = job
 		}
 		s.add(job, data.Window)
 		runIDs[key][job.RunID] = true
@@ -55,17 +96,24 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 
 	rows := make([]WorkflowRow, 0, len(stats))
 	for key, s := range stats {
+		sample := display[key]
+		name := sample.Workflow
+		if name == "" {
+			name = unknownKey
+		}
 		row := WorkflowRow{
-			Workflow:    key,
-			Runs:        len(runIDs[key]),
-			Jobs:        s.count,
-			FailureRate: s.failureRate(),
-			WaitP50:     Percentile(s.waits, 50),
-			WaitP95:     Percentile(s.waits, 95),
-			DurationP50: Percentile(s.durations, 50),
-			DurationP95: Percentile(s.durations, 95),
-			BusyTime:    s.busy,
-			LastJobAt:   s.lastJobAt,
+			Repository:   sample.Repository,
+			Workflow:     name,
+			WorkflowPath: sample.WorkflowPath,
+			Runs:         len(runIDs[key]),
+			Jobs:         s.count,
+			FailureRate:  s.failureRate(),
+			WaitP50:      Percentile(s.waits, 50),
+			WaitP95:      Percentile(s.waits, 95),
+			DurationP50:  Percentile(s.durations, 50),
+			DurationP95:  Percentile(s.durations, 95),
+			BusyTime:     s.busy,
+			LastJobAt:    s.lastJobAt,
 		}
 
 		// An attempt above 1 means the run was restarted. It is the only retry signal
@@ -86,7 +134,13 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 		if c := cmp.Compare(b.Jobs, a.Jobs); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.Workflow, b.Workflow)
+		if c := cmp.Compare(a.Repository, b.Repository); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.Workflow, b.Workflow); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.WorkflowPath, b.WorkflowPath)
 	})
 	return rows
 }

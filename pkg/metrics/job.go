@@ -2,22 +2,27 @@ package metrics
 
 import (
 	"time"
+
+	"github.com/google/go-github/v90/github"
 )
 
 // Job is the normalized view of a workflow job that the reports aggregate over.
 type Job struct {
-	RunID       int64
-	Kind        JobKind
-	RunnerID    int64
-	RunnerName  string
-	RunnerGroup string
-	Labels      []string
-	Workflow    string
-	Name        string
-	Conclusion  string
-	QueuedAt    time.Time
-	StartedAt   time.Time
-	CompletedAt time.Time
+	RunID        int64
+	Repository   string
+	Kind         JobKind
+	RunnerID     int64
+	RunnerName   string
+	RunnerGroup  string
+	Labels       []string
+	Workflow     string
+	WorkflowID   int64
+	WorkflowPath string
+	Name         string
+	Conclusion   string
+	QueuedAt     time.Time
+	StartedAt    time.Time
+	CompletedAt  time.Time
 }
 
 // Job conclusions the reports treat specially.
@@ -32,6 +37,13 @@ const (
 // runner: jobs that were skipped and jobs that have not finished yet.
 func NewJobs(data *Data) []Job {
 	runnerIDs := data.SelfHostedRunnerIDs()
+
+	// Index the runs by ID so each job can borrow the workflow identity (stable workflow
+	// file ID and path) and repository that its raw job record does not carry.
+	runByID := make(map[int64]*github.WorkflowRun, len(data.Runs))
+	for _, run := range data.Runs {
+		runByID[run.GetID()] = run
+	}
 
 	jobs := make([]Job, 0, len(data.Jobs))
 	for _, raw := range data.Jobs {
@@ -52,19 +64,30 @@ func NewJobs(data *Data) []Job {
 			continue
 		}
 
+		runID := raw.GetRunID()
+		var workflowID int64
+		var workflowPath string
+		if run := runByID[runID]; run != nil {
+			workflowID = run.GetWorkflowID()
+			workflowPath = run.GetPath()
+		}
+
 		jobs = append(jobs, Job{
-			RunID:       raw.GetRunID(),
-			Kind:        ClassifyJob(raw, runnerIDs),
-			RunnerID:    raw.GetRunnerID(),
-			RunnerName:  raw.GetRunnerName(),
-			RunnerGroup: raw.GetRunnerGroupName(),
-			Labels:      raw.Labels,
-			Workflow:    raw.GetWorkflowName(),
-			Name:        raw.GetName(),
-			Conclusion:  raw.GetConclusion(),
-			QueuedAt:    raw.GetCreatedAt().Time,
-			StartedAt:   started,
-			CompletedAt: completed,
+			RunID:        runID,
+			Repository:   data.RunRepositories[runID],
+			Kind:         ClassifyJob(raw, runnerIDs),
+			RunnerID:     raw.GetRunnerID(),
+			RunnerName:   raw.GetRunnerName(),
+			RunnerGroup:  raw.GetRunnerGroupName(),
+			Labels:       raw.Labels,
+			Workflow:     raw.GetWorkflowName(),
+			WorkflowID:   workflowID,
+			WorkflowPath: workflowPath,
+			Name:         raw.GetName(),
+			Conclusion:   raw.GetConclusion(),
+			QueuedAt:     raw.GetCreatedAt().Time,
+			StartedAt:    started,
+			CompletedAt:  completed,
 		})
 	}
 	return jobs

@@ -141,10 +141,12 @@ func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) erro
 		return r.RenderExportedData(rows)
 	}
 
-	t := r.NewTableWriter([]string{"WORKFLOW", "RUNS", "JOBS", "FAIL", "RETRY", "WAIT P50", "WAIT P95", "DUR P50", "DUR P95", "BUSY", "LAST JOB"})
+	t := r.NewTableWriter([]string{"REPOSITORY", "WORKFLOW", "PATH", "RUNS", "JOBS", "FAIL", "RETRY", "WAIT P50", "WAIT P95", "DUR P50", "DUR P95", "BUSY", "LAST JOB"})
 	for _, row := range rows {
 		t.Append([]string{
+			FormatOptional(row.Repository),
 			row.Workflow,
+			FormatOptional(row.WorkflowPath),
 			strconv.Itoa(row.Runs),
 			strconv.Itoa(row.Jobs),
 			FormatPercent(row.FailureRate),
@@ -203,4 +205,13 @@ func FormatTime(t time.Time) string {
 		return "-"
 	}
 	return t.Format(time.RFC3339)
+}
+
+// FormatOptional renders a string, or a dash when it is empty, so a missing value is not
+// shown as a blank cell.
+func FormatOptional(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
