@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"cmp"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -95,6 +96,102 @@ func PeakConcurrency(intervals []Interval) int {
 		}
 	}
 	return peak
+}
+
+// Bucket is one fixed-width slice of a concurrency timeline.
+type Bucket struct {
+	Start time.Time
+	End   time.Time
+	Jobs  int
+	Peak  int
+	Busy  time.Duration
+}
+
+// Duration returns the length of the bucket.
+func (b Bucket) Duration() time.Duration {
+	return b.End.Sub(b.Start)
+}
+
+// MaxBuckets caps how many buckets a single concurrency timeline may contain. It guards
+// against pathological --bucket/window combinations, such as a 1ns bucket over a multi-day
+// window, that would otherwise allocate and iterate an unbounded number of buckets and
+// exhaust memory. The limit is generous enough for realistic reports, for example
+// one-minute buckets over a month (43200 buckets).
+const MaxBuckets = 100_000
+
+// BucketCount reports how many buckets ConcurrencyTimeline emits for w at the given size,
+// which is ceil(w.Duration()/size). It returns 0 when either input is non-positive. The
+// result is kept as int64 so callers can compare it against MaxBuckets before any narrowing
+// conversion, avoiding overflow on extreme inputs.
+func BucketCount(w Window, size time.Duration) int64 {
+	duration := w.Duration()
+	if size <= 0 || duration <= 0 {
+		return 0
+	}
+	count := int64(duration / size)
+	if duration%size != 0 {
+		count++
+	}
+	return count
+}
+
+// ValidateBucketWindow reports whether splitting w into buckets of the given width would
+// exceed MaxBuckets. It only enforces the bucket-count limit; a non-positive width or
+// window yields a zero count (see BucketCount) and is therefore accepted here, leaving
+// that decision to the caller. It is the single source of the bucket-count guard shared
+// by the concurrency timeline and the command layer.
+func ValidateBucketWindow(w Window, width time.Duration) error {
+	count := BucketCount(w, width)
+	if count > MaxBuckets {
+		return fmt.Errorf("the selected window needs %d buckets of %s, more than the limit of %d; use a larger bucket width", count, width, MaxBuckets)
+	}
+	return nil
+}
+
+// ConcurrencyTimeline splits w into buckets of the given width and reports, for each
+// of them, how many intervals touched it, how many overlapped at its busiest instant
+// and how much busy time they added up to. The last bucket is cut off at the end of
+// the window so that its utilization is not diluted by time outside the window.
+// It returns an error when the window would need more than MaxBuckets buckets, so a
+// direct caller can never trigger an unbounded allocation.
+func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) ([]Bucket, error) {
+	if size <= 0 || w.Duration() <= 0 {
+		return nil, nil
+	}
+
+	if err := ValidateBucketWindow(w, size); err != nil {
+		return nil, err
+	}
+	count := BucketCount(w, size)
+
+	buckets := make([]Bucket, 0, int(count))
+	// clamped is reused across buckets: PeakConcurrency only reads it and never retains
+	// the slice, so a single backing array (grown to the busiest bucket) avoids allocating
+	// one full-length slice per bucket.
+	var clamped []Interval
+	for start := w.Start; start.Before(w.End); start = start.Add(size) {
+		end := start.Add(size)
+		if end.After(w.End) {
+			end = w.End
+		}
+		slice := Window{Start: start, End: end}
+
+		bucket := Bucket{Start: slice.Start, End: slice.End}
+		clamped = clamped[:0]
+		for _, iv := range intervals {
+			trimmed, ok := slice.Clamp(iv)
+			if !ok {
+				continue
+			}
+			clamped = append(clamped, trimmed)
+			bucket.Jobs++
+			bucket.Busy += trimmed.Duration()
+		}
+
+		bucket.Peak = PeakConcurrency(clamped)
+		buckets = append(buckets, bucket)
+	}
+	return buckets, nil
 }
 
 // Utilization returns busy divided by window, clamped to [0, 1].
