@@ -285,6 +285,41 @@ Options:
 | `--owner` | current repository owner | Select an organization by owner name |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 
+### Show how many jobs ran at the same time over the window
+
+```sh
+gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Reconstruct the number of jobs that occupied a runner at the same time from their start and completion timestamps, one time bucket at a time.
+
+`PEAK` is the highest number of jobs running at the same instant inside the bucket, and comparing it against `RUNNERS` shows whether the fleet ran out of capacity and when. `UTIL` is the busy time of the bucket divided by the bucket length multiplied by `RUNNERS`, so it stays comparable across buckets even though the last one is cut off at the end of the window.
+
+`--label` keeps only the jobs whose `runs-on` set carries every given label, and counts only the runners that can serve that set. Jobs that ran on GitHub-hosted runners are excluded.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
+| `--concurrency` | `6` | Number of job requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write the local job cache |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
 ### Compare the demand for each label against the runners that carry it
 
 ```sh
@@ -310,43 +345,6 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `--include-unused` | `false` | List the labels no job requested in the window |
-| `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write the local job cache |
-| `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
-| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
-| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
-| `-t`, `--template` | - | Format JSON output using a Go template |
-| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
-| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
-
-### Show a self-hosted runner fleet overview
-
-```sh
-gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
-```
-
-Summarize how the self-hosted runner fleet behaved over a time window.
-
-The runner counts describe the fleet right now, because the API keeps no history of when each runner was online. Every job metric covers the window selected by `--days` or `--since` and excludes the jobs that ran on GitHub-hosted runners.
-
-Wait time is measured from the moment a job was created until it started, so it also includes the time the job spent waiting on `needs` dependencies and concurrency groups. Utilization divides the total busy time by the window length multiplied by the number of registered runners, and the failure rate counts failed and timed out jobs against the jobs that produced a pass or fail outcome.
-
-Check runs published by apps share the check suite of a workflow run, so the jobs API returns them alongside the real jobs. They carry no `runs-on` labels and never occupied a runner, so they are excluded.
-
-The footer always states the window and the number of runs the report is based on.
-
-Options:
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
-| `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of job requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
-| `--event` | all events | Keep only the workflow runs triggered by this event |
-| `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write the local job cache |
@@ -391,41 +389,6 @@ Options:
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
-### Show how many jobs ran at the same time over the window
-
-```sh
-gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
-```
-
-Reconstruct the number of jobs that occupied a runner at the same time from their start and completion timestamps, one time bucket at a time.
-
-`PEAK` is the highest number of jobs running at the same instant inside the bucket, and comparing it against `RUNNERS` shows whether the fleet ran out of capacity and when. `UTIL` is the busy time of the bucket divided by the bucket length multiplied by `RUNNERS`, so it stays comparable across buckets even though the last one is cut off at the end of the window.
-
-`--label` keeps only the jobs whose `runs-on` set carries every given label, and counts only the runners that can serve that set. Jobs that ran on GitHub-hosted runners are excluded.
-
-Options:
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
-| `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
-| `--concurrency` | `6` | Number of job requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
-| `--event` | all events | Keep only the workflow runs triggered by this event |
-| `--format` | - | Output format: `{json}`. Table output is used when not specified |
-| `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write the local job cache |
-| `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
-| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
-| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
-| `-t`, `--template` | - | Format JSON output using a Go template |
-| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
-| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
-
 ### Show per runner activity
 
 ```sh
@@ -449,6 +412,43 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `--group-by` | `name` | Aggregate the jobs by this key: `{name\|label\|group}` |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write the local job cache |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+### Show a self-hosted runner fleet overview
+
+```sh
+gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Summarize how the self-hosted runner fleet behaved over a time window.
+
+The runner counts describe the fleet right now, because the API keeps no history of when each runner was online. Every job metric covers the window selected by `--days` or `--since` and excludes the jobs that ran on GitHub-hosted runners.
+
+Wait time is measured from the moment a job was created until it started, so it also includes the time the job spent waiting on `needs` dependencies and concurrency groups. Utilization divides the total busy time by the window length multiplied by the number of registered runners, and the failure rate counts failed and timed out jobs against the jobs that produced a pass or fail outcome.
+
+Check runs published by apps share the check suite of a workflow run, so the jobs API returns them alongside the real jobs. They carry no `runs-on` labels and never occupied a runner, so they are excluded.
+
+The footer always states the window and the number of runs the report is based on.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of job requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write the local job cache |
