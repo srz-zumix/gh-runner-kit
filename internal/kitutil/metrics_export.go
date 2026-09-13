@@ -167,6 +167,19 @@ func WriteMetricsMarkdown(w io.Writer, report metrics.ExportReport) error {
 		}
 	}
 
+	if len(report.Labels) > 0 {
+		b.WriteString("\n### Demand per label\n\n")
+		b.WriteString("| Label | Status | Jobs | Runners |\n| --- | --- | --- | --- |\n")
+		for _, label := range report.Labels {
+			fmt.Fprintf(b, "| %s | %s | %d | %d |\n",
+				escapeMarkdownCell(label.Label),
+				escapeMarkdownCell(string(label.Status)),
+				label.Jobs,
+				label.Runners,
+			)
+		}
+	}
+
 	if s.Truncated {
 		b.WriteString("\nThe collection stopped at the run limit, so the numbers cover only part of the window.\n")
 	}

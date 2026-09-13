@@ -1,9 +1,6 @@
 package metrics
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
 	metricspkg "github.com/srz-zumix/gh-runner-kit/pkg/metrics"
@@ -33,11 +30,8 @@ EST WAIT against the measured WAIT P95 before acting on DELTA.
 Jobs that ran on GitHub-hosted runners are excluded.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			wait, err := time.ParseDuration(targetWait)
+			wait, err := flags.ResolveCapacity(targetWait, targetUtilization)
 			if err != nil {
-				return fmt.Errorf("failed to parse --target-wait %q: %w", targetWait, err)
-			}
-			if err := metricspkg.ValidateCapacityTargets(wait, targetUtilization); err != nil {
 				return err
 			}
 

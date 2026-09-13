@@ -137,8 +137,10 @@ func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
 
 	billable, cost := metrics.CostTotal(rows)
 	if !r.HasExporter() {
+		// The total is a completed aggregate, so an all-self-hosted window reports a
+		// measured zero rather than the dash used for unmeasured per-row values.
 		r.WriteLine(fmt.Sprintf("Total %s billable, about %s. Self-hosted runners and public repositories are not billed.",
-			FormatDurationStat(billable, len(rows)), FormatCost(cost)))
+			FormatMeasuredDuration(billable), FormatCost(cost)))
 	}
 	return nil
 }
@@ -151,6 +153,20 @@ func RenderMetricsCapacity(r *render.Renderer, rows []metrics.CapacityRow) error
 
 	t := r.NewTableWriter([]string{"LABELS", "JOBS", "JOBS/H", "AVG DUR", "LOAD", "RUNNERS", "RECOMMENDED", "DELTA", "EST WAIT", "WAIT P95"})
 	for _, row := range rows {
+		// A recommendation that never met the target is a lower bound, so it is marked and
+		// its delta hidden to keep it from reading as an ordinary actionable number.
+		recommended := strconv.Itoa(row.Recommended)
+		delta := FormatDelta(row.Delta)
+		if !row.TargetMet {
+			recommended = ">=" + recommended
+			delta = "-"
+		}
+		// The mean queue time only exists while the pool keeps up, so an unstable
+		// recommendation shows a dash instead of a misleading 0s.
+		estWait := "-"
+		if row.EstimatedWaitKnown {
+			estWait = FormatDurationStat(row.EstimatedWait, row.Jobs)
+		}
 		t.Append([]string{
 			row.LabelSet(),
 			strconv.Itoa(row.Jobs),
@@ -158,9 +174,9 @@ func RenderMetricsCapacity(r *render.Renderer, rows []metrics.CapacityRow) error
 			FormatDurationStat(row.AvgDuration, row.Jobs),
 			fmt.Sprintf("%.2f", row.Load),
 			strconv.Itoa(row.Runners),
-			strconv.Itoa(row.Recommended),
-			FormatDelta(row.Delta),
-			FormatDurationStat(row.EstimatedWait, row.Jobs),
+			recommended,
+			delta,
+			estWait,
 			FormatDurationStat(row.ObservedWaitP95, row.Jobs),
 		})
 	}
@@ -244,6 +260,12 @@ func FormatDurationStat(d time.Duration, samples int) string {
 	if samples == 0 {
 		return "-"
 	}
+	return max(d, 0).Round(time.Second).String()
+}
+
+// FormatMeasuredDuration renders a duration that is always the result of a completed
+// measurement, so a zero is shown as 0s rather than the dash used for unmeasured values.
+func FormatMeasuredDuration(d time.Duration) string {
 	return max(d, 0).Round(time.Second).String()
 }
 

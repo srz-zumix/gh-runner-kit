@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,6 +65,11 @@ func ParseRates(overrides []string) (map[string]float64, error) {
 		price, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid rate %q: %w", override, err)
+		}
+		// ParseFloat accepts NaN and infinities, which would poison Cost, so only a
+		// finite, non-negative price is stored.
+		if math.IsNaN(price) || math.IsInf(price, 0) {
+			return nil, fmt.Errorf("invalid rate %q, the price must be a finite number", override)
 		}
 		if price < 0 {
 			return nil, fmt.Errorf("invalid rate %q, the price cannot be negative", override)

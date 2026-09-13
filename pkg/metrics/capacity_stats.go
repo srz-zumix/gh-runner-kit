@@ -3,6 +3,7 @@ package metrics
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -28,6 +29,12 @@ type CapacityRow struct {
 	ObservedWaitP95 time.Duration
 	// EstimatedWait is the mean queue time the model predicts for Recommended runners.
 	EstimatedWait time.Duration
+	// EstimatedWaitKnown is false when the recommended pool cannot keep up with the load,
+	// so no finite mean queue time exists and EstimatedWait must not be read as zero.
+	EstimatedWaitKnown bool
+	// TargetMet is false when even the capped recommendation cannot satisfy the target
+	// wait and utilization, so Recommended is a lower bound rather than a verified size.
+	TargetMet bool
 }
 
 // LabelSet renders the label set as it would be written in runs-on.
@@ -39,6 +46,11 @@ func (r CapacityRow) LabelSet() string {
 func ValidateCapacityTargets(targetWait time.Duration, targetUtilization float64) error {
 	if targetWait <= 0 {
 		return fmt.Errorf("the target wait must be greater than 0, got %s", targetWait)
+	}
+	// NaN slips through the range comparisons below because every ordered comparison with
+	// NaN is false, and an infinite ratio is equally unusable, so both are rejected first.
+	if math.IsNaN(targetUtilization) || math.IsInf(targetUtilization, 0) {
+		return fmt.Errorf("the target utilization must be a finite number, got %g", targetUtilization)
 	}
 	if targetUtilization <= 0 || targetUtilization > 1 {
 		return fmt.Errorf("the target utilization must be greater than 0 and at most 1, got %g", targetUtilization)
@@ -91,9 +103,9 @@ func BuildCapacityStats(data *Data, targetWait time.Duration, targetUtilization 
 			Runners:         countMatchingRunners(data, b.labels),
 			ObservedWaitP95: Percentile(b.stats.waits, 95),
 		}
-		row.Recommended = RequiredRunners(load, row.AvgDuration, targetWait, targetUtilization)
+		row.Recommended, row.TargetMet = RequiredRunners(load, row.AvgDuration, targetWait, targetUtilization)
 		row.Delta = row.Recommended - row.Runners
-		row.EstimatedWait, _ = ErlangWait(row.Recommended, load, row.AvgDuration)
+		row.EstimatedWait, row.EstimatedWaitKnown = ErlangWait(row.Recommended, load, row.AvgDuration)
 
 		rows = append(rows, row)
 	}

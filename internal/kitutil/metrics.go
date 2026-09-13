@@ -83,6 +83,30 @@ func (m *MetricsFlags) ResolveConcurrency(bucket string) (metrics.Window, time.D
 	return window, width, nil
 }
 
+// ResolveCapacity parses the textual --target-wait duration and validates it together with
+// --target-utilization, without issuing any API request. It keeps the flag parsing and the
+// non-library validation out of the command RunE, following the repository convention that
+// cobra commands only wire flags, and returns the resolved target wait for the caller.
+func (m *MetricsFlags) ResolveCapacity(targetWait string, targetUtilization float64) (time.Duration, error) {
+	wait, err := time.ParseDuration(targetWait)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse --target-wait %q: %w", targetWait, err)
+	}
+	if err := metrics.ValidateCapacityTargets(wait, targetUtilization); err != nil {
+		return 0, err
+	}
+	return wait, nil
+}
+
+// WarnMetricsWarnings emits the collection warnings to stderr without writing anything to
+// stdout, so a machine-readable export stays clean while skipped repositories or runs are
+// still surfaced the same way the other reports surface them.
+func WarnMetricsWarnings(warnings []string) {
+	for _, warning := range warnings {
+		logger.Warn("metrics: " + warning)
+	}
+}
+
 // Collect resolves the target scope and gathers the workflow activity the reports need.
 func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 	window, err := m.Window()

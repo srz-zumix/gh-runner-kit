@@ -89,6 +89,8 @@ func TestWriteMetricsMarkdown(t *testing.T) {
 		"| Metric | Value |",
 		"| Runners | 2 |",
 		"### Queue time per runs-on label set",
+		"### Demand per label",
+		"| self-hosted | ok | 4 | 2 |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("WriteMetricsMarkdown() output does not contain %q:\n%s", want, got)

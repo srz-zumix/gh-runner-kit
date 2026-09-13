@@ -44,6 +44,9 @@ Actions, where that variable is not set.`,
 			if err != nil {
 				return err
 			}
+			// The machine-readable output stays on stdout, so collection warnings go to
+			// stderr instead of being silently dropped like the other reports avoid.
+			kitutil.WarnMetricsWarnings(data.Warnings)
 			report := metricspkg.BuildExportReport(data)
 
 			r := render.NewRenderer(flags.Exporter)

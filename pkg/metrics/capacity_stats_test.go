@@ -79,7 +79,7 @@ func TestRequiredRunners(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := RequiredRunners(tt.load, tt.service, tt.targetWait, tt.targetUtilization); got != tt.want {
+			if got, _ := RequiredRunners(tt.load, tt.service, tt.targetWait, tt.targetUtilization); got != tt.want {
 				t.Errorf("RequiredRunners() = %d, want %d", got, tt.want)
 			}
 		})
@@ -89,7 +89,10 @@ func TestRequiredRunners(t *testing.T) {
 func TestRequiredRunnersMeetsTheTarget(t *testing.T) {
 	load, service, target := 3.0, 5*time.Minute, 30*time.Second
 
-	servers := RequiredRunners(load, service, target, DefaultTargetUtilization)
+	servers, met := RequiredRunners(load, service, target, DefaultTargetUtilization)
+	if !met {
+		t.Fatalf("RequiredRunners() reported the target unmet for a satisfiable load")
+	}
 	wait, ok := ErlangWait(servers, load, service)
 	if !ok || wait > target {
 		t.Fatalf("RequiredRunners() = %d, whose wait is %v (ok=%v), want at most %v", servers, wait, ok, target)
@@ -102,10 +105,22 @@ func TestRequiredRunnersMeetsTheTarget(t *testing.T) {
 func TestRequiredRunnersStricterTargetNeedsMore(t *testing.T) {
 	load, service := 3.0, 5*time.Minute
 
-	lenient := RequiredRunners(load, service, time.Minute, DefaultTargetUtilization)
-	strict := RequiredRunners(load, service, time.Second, DefaultTargetUtilization)
+	lenient, _ := RequiredRunners(load, service, time.Minute, DefaultTargetUtilization)
+	strict, _ := RequiredRunners(load, service, time.Second, DefaultTargetUtilization)
 	if strict < lenient {
 		t.Fatalf("RequiredRunners(1s) = %d, want at least RequiredRunners(1m) = %d", strict, lenient)
+	}
+}
+
+// TestRequiredRunnersCapsUnsatisfiableLoad checks that a load past MaxRecommendedRunners
+// returns the cap flagged as unmet, so a capped recommendation is never read as verified.
+func TestRequiredRunnersCapsUnsatisfiableLoad(t *testing.T) {
+	servers, met := RequiredRunners(MaxRecommendedRunners+5, time.Minute, time.Minute, DefaultTargetUtilization)
+	if servers != MaxRecommendedRunners {
+		t.Fatalf("RequiredRunners() = %d, want the cap %d", servers, MaxRecommendedRunners)
+	}
+	if met {
+		t.Fatal("RequiredRunners() reported the target met for a load beyond the cap")
 	}
 }
 
@@ -122,6 +137,9 @@ func TestValidateCapacityTargets(t *testing.T) {
 		{name: "negative wait", wait: -time.Second, utilization: 0.7, wantErr: true},
 		{name: "zero utilization", wait: time.Minute, utilization: 0, wantErr: true},
 		{name: "utilization above one", wait: time.Minute, utilization: 1.5, wantErr: true},
+		{name: "NaN utilization", wait: time.Minute, utilization: math.NaN(), wantErr: true},
+		{name: "positive infinity utilization", wait: time.Minute, utilization: math.Inf(1), wantErr: true},
+		{name: "negative infinity utilization", wait: time.Minute, utilization: math.Inf(-1), wantErr: true},
 	}
 
 	for _, tt := range tests {

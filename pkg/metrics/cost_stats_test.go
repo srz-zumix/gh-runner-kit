@@ -38,6 +38,8 @@ func TestParseRates(t *testing.T) {
 		{name: "empty OS", overrides: []string{"=0.01"}, wantErr: true},
 		{name: "non numeric price", overrides: []string{"ubuntu=free"}, wantErr: true},
 		{name: "negative price", overrides: []string{"ubuntu=-1"}, wantErr: true},
+		{name: "NaN price", overrides: []string{"ubuntu=NaN"}, wantErr: true},
+		{name: "infinite price", overrides: []string{"ubuntu=+Inf"}, wantErr: true},
 	}
 
 	for _, tt := range tests {
