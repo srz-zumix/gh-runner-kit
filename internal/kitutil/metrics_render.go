@@ -114,6 +114,59 @@ func RenderMetricsLabels(r *render.Renderer, rows []metrics.LabelRow) error {
 	return t.Render()
 }
 
+// RenderMetricsCost prints one line per operating system with its billable time.
+func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"OS", "RUNS", "JOBS", "BILLABLE", "RATE/MIN", "EST COST"})
+	for _, row := range rows {
+		t.Append([]string{
+			row.OS,
+			strconv.Itoa(row.Runs),
+			strconv.Itoa(row.Jobs),
+			FormatDurationStat(row.Billable, row.Jobs),
+			fmt.Sprintf("%.4f", row.Rate),
+			FormatCost(row.Cost),
+		})
+	}
+	if err := t.Render(); err != nil {
+		return err
+	}
+
+	billable, cost := metrics.CostTotal(rows)
+	if !r.HasExporter() {
+		r.WriteLine(fmt.Sprintf("Total %s billable, about %s. Self-hosted runners and public repositories are not billed.",
+			FormatDurationStat(billable, len(rows)), FormatCost(cost)))
+	}
+	return nil
+}
+
+// RenderMetricsCapacity prints one line per runs-on label set with its recommended size.
+func RenderMetricsCapacity(r *render.Renderer, rows []metrics.CapacityRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"LABELS", "JOBS", "JOBS/H", "AVG DUR", "LOAD", "RUNNERS", "RECOMMENDED", "DELTA", "EST WAIT", "WAIT P95"})
+	for _, row := range rows {
+		t.Append([]string{
+			row.LabelSet(),
+			strconv.Itoa(row.Jobs),
+			fmt.Sprintf("%.1f", row.ArrivalPerHour),
+			FormatDurationStat(row.AvgDuration, row.Jobs),
+			fmt.Sprintf("%.2f", row.Load),
+			strconv.Itoa(row.Runners),
+			strconv.Itoa(row.Recommended),
+			FormatDelta(row.Delta),
+			FormatDurationStat(row.EstimatedWait, row.Jobs),
+			FormatDurationStat(row.ObservedWaitP95, row.Jobs),
+		})
+	}
+	return t.Render()
+}
+
 // RenderMetricsConcurrency prints the concurrency timeline, one line per bucket.
 func RenderMetricsConcurrency(r *render.Renderer, rows []metrics.ConcurrencyRow) error {
 	if r.HasExporter() {
@@ -197,6 +250,20 @@ func FormatDurationStat(d time.Duration, samples int) string {
 // FormatPercent renders a ratio in the 0..1 range as a percentage.
 func FormatPercent(v float64) string {
 	return fmt.Sprintf("%.1f%%", v*100)
+}
+
+// FormatDelta renders a signed difference, keeping the plus sign so that a shortfall
+// and a surplus are told apart at a glance.
+func FormatDelta(v int) string {
+	if v > 0 {
+		return "+" + strconv.Itoa(v)
+	}
+	return strconv.Itoa(v)
+}
+
+// FormatCost renders an amount of money in USD.
+func FormatCost(v float64) string {
+	return fmt.Sprintf("$%.2f", v)
 }
 
 // FormatTime renders a timestamp, or a dash when it is unset.

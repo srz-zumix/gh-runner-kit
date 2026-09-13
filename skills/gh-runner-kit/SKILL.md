@@ -1,6 +1,6 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency and per-workflow activity.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including Prometheus and step summary output.
 ---
 
 # gh-runner-kit
@@ -49,7 +49,10 @@ gh runner-kit                # Root command
 │   └── view                  # Show the settings of a runner group
 ├── list                     # List self-hosted runners (organization by default)
 ├── metrics                  # Runner utilization and queue time reports
+│   ├── capacity              # Recommended pool size per runs-on label set
 │   ├── concurrency           # Jobs running at the same time, per time bucket
+│   ├── cost                  # Billable time of the GitHub-hosted jobs, per OS
+│   ├── export                # Prometheus or step summary output for monitoring
 │   ├── label                 # Demand and supply per single label
 │   ├── queue                 # Wait time per runs-on label set
 │   ├── runner                # Activity per runner, label set or group
@@ -451,13 +454,44 @@ Definitions to be aware of when reading the numbers:
 Job lists of completed runs are cached under the user cache directory
 (`~/Library/Caches/gh-runner-kit/metrics/` on macOS,
 `~/.cache/gh-runner-kit/metrics/` on Linux) with `0700`/`0600` permissions, keyed
-by host, owner, repository and run ID. Use `--refresh` to rewrite the entries and
-`--no-cache` to bypass the cache entirely.
+by host, owner, repository and run ID. `metrics cost` caches the billable usage
+of a run the same way. Use `--refresh` to rewrite the entries and `--no-cache`
+to bypass the cache entirely.
 
 The table output always ends with a footer stating the window and the number of
 runs, and warns when `--max-runs` truncated the data. Repositories the token
 cannot read are reported as warnings on stderr and skipped instead of failing the
 command.
+
+### metrics capacity
+
+Sizes every `runs-on` label set against a target queue time, without issuing any
+extra API request.
+
+```bash
+gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--all-repos] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--target-utilization` | `0.7` | Highest share of the time a runner may be busy, greater than 0 and at most 1 |
+| `--target-wait` | `1m0s` | Mean queue time the recommended pool aims for, such as `60s` |
+
+Table columns: `LABELS`, `JOBS`, `JOBS/H`, `AVG DUR`, `LOAD`, `RUNNERS`,
+`RECOMMENDED`, `DELTA`, `EST WAIT`, `WAIT P95`.
+
+`LOAD` is the offered load in Erlangs, that is the busy time of the set divided
+by the window length, so it equals the number of runners the set kept busy on
+average. `RECOMMENDED` is the smallest pool that keeps both the modelled mean
+queue time at or below `--target-wait` and the utilization at or below
+`--target-utilization`; `DELTA` is `RECOMMENDED - RUNNERS`, and rows with the
+largest shortfall come first.
+
+The model is an M/M/c queue (Erlang C). It assumes jobs arrive independently and
+that any runner of the pool can serve any of its jobs. Scheduled bursts and
+fan-out inside a single workflow break the first assumption, so compare
+`EST WAIT` against the measured `WAIT P95` before acting on `DELTA`.
 
 ### metrics concurrency
 
@@ -484,6 +518,57 @@ window, and `UTIL` is the busy time divided by the bucket length times
 
 `--label` narrows both sides: only the jobs whose `runs-on` set carries every
 given label are counted, and only the runners that can serve that set.
+
+### metrics cost
+
+Reports the billable time of the collected workflow runs, broken down by
+operating system.
+
+```bash
+gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
+
+Table columns: `OS`, `RUNS`, `JOBS`, `BILLABLE`, `RATE/MIN`, `EST COST`, plus a
+total line below the table.
+
+Only GitHub-hosted jobs are billed, so self-hosted jobs contribute nothing and
+the total doubles as the saving already made by running them on the fleet.
+Public repositories are not billed either, so their runs report zero. Prices are
+in USD and default to the public rate of the standard two core runners.
+
+This is the only report that reads the usage of every run, which costs **one API
+request per run**, so keep `--max-runs` in mind. The per run job listing is
+skipped because the report does not need it, and completed runs are cached the
+same way job lists are.
+
+### metrics export
+
+Publishes the fleet overview, the queue time of every `runs-on` label set and the
+demand for every label in a form a monitoring system can ingest.
+
+```bash
+gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--summary] [--days N | --since TIME] [--all-repos] [--format prometheus|json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--format` | `prometheus` | Output format: `prometheus` or `json` |
+| `--summary` | `false` | Also append a Markdown report to `$GITHUB_STEP_SUMMARY` |
+
+The Prometheus exposition names every series `gh_runner_kit_*`, expresses
+durations in seconds and ratios in the `0..1` range. Fleet-wide gauges carry no
+labels; per label set gauges carry `labels="..."` and per label gauges carry
+`label="..."` and `status="..."`. `--jq` and `--template` require
+`--format json`.
+
+`--summary` fails when `$GITHUB_STEP_SUMMARY` is not set, which is the case
+outside GitHub Actions.
 
 ### metrics label
 
@@ -806,6 +891,37 @@ gh runner-kit metrics concurrency --owner my-org --days 7 --label linux --format
   -q '.[] | select(.Peak >= .Runners and .Runners > 0) | .Start'
 ```
 
+### Decide how many runners to add
+
+```bash
+# Recommended pool size per runs-on label set for a one minute target wait
+gh runner-kit metrics capacity --owner my-org --days 14 --target-wait 60s
+
+# Only the pools that are short of runners
+gh runner-kit metrics capacity --owner my-org --days 14 --format json \
+  -q '.[] | select(.Delta > 0) | {Labels, Runners, Recommended, Delta}'
+```
+
+### Estimate what the self-hosted fleet saves
+
+```bash
+# Billable time of the jobs GitHub still hosts, per operating system
+gh runner-kit metrics cost --owner my-org --repo my-org/app --days 30 --max-runs 500
+
+# With the price of a larger Linux runner
+gh runner-kit metrics cost --repo my-org/app --days 30 --rate ubuntu=0.032
+```
+
+### Publish the fleet metrics from a scheduled workflow
+
+```bash
+# Prometheus exposition for a Pushgateway or a static file
+gh runner-kit metrics export --owner my-org --all-repos --days 1 > fleet.prom
+
+# Same numbers on the workflow run page
+gh runner-kit metrics export --repo my-org/app --days 7 --summary > /dev/null
+```
+
 ### Find the workflows that cost the fleet the most
 
 ```bash
@@ -844,6 +960,14 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics concurrency` returns one row per minute | `--bucket` was set too small for the window. Widen it, for example `--bucket 1h`. |
 | `metrics label` does not list a label a runner carries | No job requested it in the window, so it is hidden by default. Pass `--include-unused`. |
 | `metrics label` lists a label as `unused` that is clearly in use | The jobs requesting it fall outside the window or were dropped by `--max-runs`. Widen `--days` or raise `--max-runs`. |
+| `the target utilization must be greater than 0 and at most 1` | `--target-utilization` is a ratio, not a percentage. Pass `0.7`, not `70`. |
+| `metrics capacity` recommends far more runners than `metrics queue` suggests | The pool is close to saturation, where the modelled wait grows steeply, or the load is bursty rather than independent. Compare `EST WAIT` with the measured `WAIT P95` and widen `--days`. |
+| `metrics capacity` reports `RECOMMENDED 0` | The label set produced no busy time in the window, usually because every one of its jobs was dropped as a check run or ran on a hosted runner. |
+| `metrics cost` reports `BILLABLE 0s` everywhere | The repository is public, or every job ran on a self-hosted runner. Neither is billed. |
+| `metrics cost` is much slower than the other reports | It reads the usage of every run, one API request each. Lower `--max-runs`, or rely on the cache by keeping the same window. |
+| `invalid rate "...", expected the OS=PRICE format` | `--rate` takes one `OS=PRICE` pair per occurrence, such as `--rate ubuntu=0.008`. |
+| `--summary requires the GITHUB_STEP_SUMMARY environment variable` | `--summary` only works inside GitHub Actions, which sets that variable. |
+| `cannot use --jq without specifying --format json` | `--jq` and `--template` only apply to JSON. `metrics export` defaults to `--format prometheus`. |
 | `metrics workflow` shows `RETRY 0.0%` although jobs were re-run | Only whole-run restarts are visible. Re-running a single job stays inside the same attempt and cannot be detected. |
 | `metrics workflow` counts more jobs than the other reports | It includes GitHub-hosted jobs by default. Pass `--self-hosted-only`. |
 | Labels are not restored by `uncordon` | `--label-prefix` differs from the value used for `cordon`. |
