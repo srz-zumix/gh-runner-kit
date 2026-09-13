@@ -40,13 +40,13 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 	f.IntVar(&m.Days, "days", metrics.DefaultDays, "Aggregate over the last N days")
 	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (cannot be used with --days)")
 	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per scope (0 for no limit)")
-	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of job requests to issue in parallel")
+	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of per-run API requests to issue in parallel")
 	f.StringVar(&m.Branch, "branch", "", "Keep only the workflow runs of this branch")
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")
 	f.StringVar(&m.Workflow, "workflow", "", "Keep only the runs of this workflow file, such as ci.yml")
 	f.BoolVar(&m.AllRepos, "all-repos", false, "Collect the workflow runs of every repository in the organization")
-	f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write the local job cache")
-	f.BoolVar(&m.Refresh, "refresh", false, "Ignore the cached jobs and fetch them again")
+	f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
+	f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
 	cmdutil.AddFormatFlags(cmd, &m.Exporter)
 
 	cmd.MarkFlagsMutuallyExclusive("days", "since")
@@ -160,6 +160,11 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 		return nil, err
 	}
 
+	var jobs metrics.JobFetcher
+	if !usage {
+		jobs = m.jobFetcher(client)
+	}
+
 	collector := metrics.NewCollector(client, scope, metrics.Options{
 		Repos:       repos,
 		Window:      window,
@@ -170,7 +175,7 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
 		SkipJobs:    usage,
-	}, m.jobFetcher(client))
+	}, jobs)
 
 	if usage {
 		collector.SetUsageFetcher(m.usageFetcher(client))

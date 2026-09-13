@@ -24,6 +24,7 @@ func exportReport() metrics.ExportReport {
 			Jobs:        4,
 			WaitP95:     90 * time.Second,
 			Utilization: 0.25,
+			Warnings:    []string{"one repository was skipped"},
 		},
 		Pools: []metrics.QueueRow{
 			{Labels: []string{"self-hosted", `weird"label`}, Jobs: 4, Runners: 2, WaitP95: 90 * time.Second},
@@ -46,6 +47,7 @@ func TestWriteMetricsPrometheus(t *testing.T) {
 		"gh_runner_kit_wait_p95_seconds 90\n",
 		"gh_runner_kit_utilization 0.25\n",
 		"gh_runner_kit_window_seconds 3600\n",
+		"gh_runner_kit_collection_warnings 1\n",
 		`gh_runner_kit_label_jobs{label="self-hosted",status="ok"} 4`,
 	} {
 		if !strings.Contains(got, want) {
@@ -90,6 +92,7 @@ func TestWriteMetricsMarkdown(t *testing.T) {
 		"## Self-hosted runner metrics",
 		"| Metric | Value |",
 		"| Runners | 2 |",
+		"| Collection warnings | 1 |",
 		"### Queue time per runs-on label set",
 		"### Demand per label",
 		"| self-hosted | ok | 4 | 2 |",
@@ -100,16 +103,23 @@ func TestWriteMetricsMarkdown(t *testing.T) {
 	}
 }
 
-func TestWriteMetricsMarkdownEscapesCells(t *testing.T) {
-	b := &strings.Builder{}
-	report := exportReport()
-	report.Pools[0].Labels = []string{"a|b"}
-
-	if err := WriteMetricsMarkdown(b, report); err != nil {
-		t.Fatalf("WriteMetricsMarkdown() error = %v", err)
+func TestEscapeMarkdownCell(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "pipe", value: "a|b", want: `a\|b`},
+		{name: "backslash before pipe", value: `a\|b`, want: `a\\\|b`},
+		{name: "line endings", value: "a\r\nb", want: "a  b"},
 	}
-	if !strings.Contains(b.String(), `| a\|b |`) {
-		t.Errorf("WriteMetricsMarkdown() did not escape the cell separator:\n%s", b.String())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeMarkdownCell(tt.value); got != tt.want {
+				t.Errorf("escapeMarkdownCell(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
 	}
 }
 

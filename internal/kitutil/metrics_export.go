@@ -45,6 +45,7 @@ func WriteMetricsPrometheus(w io.Writer, report metrics.ExportReport) error {
 		{name: "failure_rate", help: "Share of the decided self-hosted jobs that failed.", value: s.FailureRate},
 		{name: "peak_concurrency", help: "Highest number of self-hosted jobs that ran at the same time.", value: float64(s.PeakConcurrency)},
 		{name: "truncated", help: "1 when the collection stopped at the run limit.", value: boolValue(s.Truncated)},
+		{name: "collection_warnings", help: "Number of collection warnings; non-zero means metrics may be incomplete.", value: float64(len(s.Warnings))},
 	}
 
 	for _, pool := range report.Pools {
@@ -169,6 +170,7 @@ func WriteMetricsMarkdown(w io.Writer, report metrics.ExportReport) error {
 		{"Utilization", FormatPercent(s.Utilization)},
 		{"Failure rate", FormatPercent(s.FailureRate)},
 		{"Peak concurrency", fmt.Sprintf("%d", s.PeakConcurrency)},
+		{"Collection warnings", fmt.Sprintf("%d", len(s.Warnings))},
 	} {
 		fmt.Fprintf(b, "| %s | %s |\n", row[0], escapeMarkdownCell(row[1]))
 	}
@@ -211,5 +213,5 @@ func WriteMetricsMarkdown(w io.Writer, report metrics.ExportReport) error {
 
 // escapeMarkdownCell keeps user-defined label names from breaking out of a table cell.
 func escapeMarkdownCell(value string) string {
-	return strings.NewReplacer("|", `\|`, "\n", " ").Replace(value)
+	return strings.NewReplacer(`\`, `\\`, "|", `\|`, "\r", " ", "\n", " ").Replace(value)
 }

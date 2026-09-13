@@ -21,7 +21,7 @@ const (
 	DefaultDays = 7
 	// DefaultMaxRuns caps how many workflow runs a single command retrieves.
 	DefaultMaxRuns = 300
-	// DefaultConcurrency is the number of job requests issued in parallel.
+	// DefaultConcurrency is the number of per-run API requests issued in parallel.
 	DefaultConcurrency = 6
 
 	// maxRetries is how often a rate limited request is retried before giving up.
@@ -157,7 +157,8 @@ type Collector struct {
 }
 
 // NewCollector builds a Collector for repo. When repo.Name is empty the runner
-// inventory is read at the organization level.
+// inventory is read at the organization level. jobs may be nil when opts.SkipJobs is
+// true, because that collection mode never requests job details.
 func NewCollector(client *gh.GitHubClient, repo repository.Repository, opts Options, jobs JobFetcher) *Collector {
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = DefaultConcurrency

@@ -405,15 +405,15 @@ Shared options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of job requests to issue in parallel |
+| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write the local job cache |
+| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore the cached jobs and fetch them again |
+| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |

@@ -126,7 +126,7 @@ func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
 			row.OS,
 			strconv.Itoa(row.Runs),
 			strconv.Itoa(row.Jobs),
-			FormatDurationStat(row.Billable, row.Jobs),
+			FormatMeasuredDuration(row.Billable),
 			fmt.Sprintf("%.4f", row.Rate),
 			FormatCost(row.Cost),
 		})
