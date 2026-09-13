@@ -40,7 +40,8 @@ it, and completed runs are cached like they are for the other reports.`,
 				return err
 			}
 
-			rows := metricspkg.BuildCostStats(data, priceList)
+			rows, warnings := metricspkg.BuildCostStats(data, priceList)
+			data.Warnings = append(data.Warnings, warnings...)
 
 			r := render.NewRenderer(flags.Exporter)
 			if err := kitutil.RenderMetricsCost(r, rows); err != nil {

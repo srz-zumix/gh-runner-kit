@@ -59,7 +59,7 @@ Actions, where that variable is not set.`,
 			}
 
 			if summary {
-				if err := writeStepSummary(summaryPath, report); err != nil {
+				if err := kitutil.WriteMetricsStepSummary(summaryPath, report); err != nil {
 					return err
 				}
 			}
@@ -73,21 +73,4 @@ Actions, where that variable is not set.`,
 	cmd.Flags().BoolVar(&summary, "summary", false, "Also append a Markdown report to $"+stepSummaryEnv)
 
 	return cmd
-}
-
-// writeStepSummary appends the Markdown report to the workflow step summary.
-func writeStepSummary(path string, report metricspkg.ExportReport) error {
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("failed to open the step summary %s: %w", path, err)
-	}
-
-	if err := kitutil.WriteMetricsMarkdown(file, report); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("failed to write the step summary %s: %w", path, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("failed to close the step summary %s: %w", path, err)
-	}
-	return nil
 }

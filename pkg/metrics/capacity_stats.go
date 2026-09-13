@@ -18,8 +18,10 @@ type CapacityRow struct {
 	ArrivalPerHour float64
 	// AvgDuration is the mean time a job of this set occupied a runner.
 	AvgDuration time.Duration
-	// Load is the offered load in Erlangs: the number of runners the set kept busy on
-	// average across the window.
+	// Load is the offered load in Erlangs: the arrival rate multiplied by the mean
+	// service time, i.e. the average number of runners this set's jobs demand. It is
+	// derived from the full job durations, so a job that crosses the window boundary
+	// still contributes its whole service time and stays consistent with AvgDuration.
 	Load        float64
 	Runners     int
 	Recommended int
@@ -87,11 +89,14 @@ func BuildCapacityStats(data *Data, targetWait time.Duration, targetUtilization 
 	window := data.Window.Duration()
 	rows := make([]CapacityRow, 0, len(buckets))
 	for _, b := range buckets {
-		// The offered load is the busy time the set produced per unit of window time,
-		// which is exactly the arrival rate multiplied by the mean service time.
+		// The offered load is the total service time the set demanded per unit of window
+		// time, which equals the arrival rate multiplied by the mean service time. It is
+		// built from the full job durations so that it stays consistent with AvgDuration
+		// even for jobs that cross the window boundary; the clamped busy time is only used
+		// by reports that measure activity strictly inside the window.
 		load := 0.0
 		if window > 0 {
-			load = float64(b.stats.busy) / float64(window)
+			load = float64(sumDurations(b.stats.durations)) / float64(window)
 		}
 
 		row := CapacityRow{
@@ -131,10 +136,13 @@ func meanDuration(durations []time.Duration) time.Duration {
 	if len(durations) == 0 {
 		return 0
 	}
+	return sumDurations(durations) / time.Duration(len(durations))
+}
 
+func sumDurations(durations []time.Duration) time.Duration {
 	var total time.Duration
 	for _, d := range durations {
 		total += d
 	}
-	return total / time.Duration(len(durations))
+	return total
 }

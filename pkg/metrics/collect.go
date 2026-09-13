@@ -195,7 +195,6 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	data.Repos = repos
 
 	remaining := c.opts.MaxRuns
 	for _, repo := range repos {
@@ -212,6 +211,10 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 			}
 			return nil, fmt.Errorf("failed to list the workflow runs of %s: %w", parser.GetRepositoryFullName(repo), err)
 		}
+		// Only repositories whose runs were read successfully count as collected, so the
+		// repository total never includes ones skipped above or left unvisited by
+		// truncation.
+		data.Repos = append(data.Repos, repo)
 		if c.opts.MaxRuns > 0 && len(runs) >= remaining {
 			data.Truncated = true
 		}

@@ -537,7 +537,8 @@ Table columns: `OS`, `RUNS`, `JOBS`, `BILLABLE`, `RATE/MIN`, `EST COST`, plus a
 total line below the table.
 
 Only GitHub-hosted jobs are billed, so self-hosted jobs contribute nothing and
-the total doubles as the saving already made by running them on the fleet.
+the total is both the current hosted spend and what moving the same work to
+self-hosted runners would avoid.
 Public repositories are not billed either, so their runs report zero. Prices are
 in USD and default to the public rate of the standard two core runners.
 
@@ -895,14 +896,14 @@ gh runner-kit metrics concurrency --owner my-org --days 7 --label linux --format
 
 ```bash
 # Recommended pool size per runs-on label set for a one minute target wait
-gh runner-kit metrics capacity --owner my-org --days 14 --target-wait 60s
+gh runner-kit metrics capacity --owner my-org --all-repos --days 14 --target-wait 60s
 
 # Only the pools that are short of runners
-gh runner-kit metrics capacity --owner my-org --days 14 --format json \
+gh runner-kit metrics capacity --owner my-org --all-repos --days 14 --format json \
   -q '.[] | select(.Delta > 0) | {Labels, Runners, Recommended, Delta}'
 ```
 
-### Estimate what the self-hosted fleet saves
+### Estimate what moving hosted jobs to the fleet would save
 
 ```bash
 # Billable time of the jobs GitHub still hosts, per operating system
@@ -962,7 +963,7 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics label` lists a label as `unused` that is clearly in use | The jobs requesting it fall outside the window or were dropped by `--max-runs`. Widen `--days` or raise `--max-runs`. |
 | `the target utilization must be greater than 0 and at most 1` | `--target-utilization` is a ratio, not a percentage. Pass `0.7`, not `70`. |
 | `metrics capacity` recommends far more runners than `metrics queue` suggests | The pool is close to saturation, where the modelled wait grows steeply, or the load is bursty rather than independent. Compare `EST WAIT` with the measured `WAIT P95` and widen `--days`. |
-| `metrics capacity` reports `RECOMMENDED 0` | The label set produced no busy time in the window, usually because every one of its jobs was dropped as a check run or ran on a hosted runner. |
+| `metrics capacity` reports `RECOMMENDED 0` | A retained fleet label set produced no service time inside the window, for example because its jobs had zero duration or finished entirely after the window boundary. |
 | `metrics cost` reports `BILLABLE 0s` everywhere | The repository is public, or every job ran on a self-hosted runner. Neither is billed. |
 | `metrics cost` is much slower than the other reports | It reads the usage of every run, one API request each. Lower `--max-runs`, or rely on the cache by keeping the same window. |
 | `invalid rate "...", expected the OS=PRICE format` | `--rate` takes one `OS=PRICE` pair per occurrence, such as `--rate ubuntu=0.008`. |

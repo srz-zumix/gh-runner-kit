@@ -52,8 +52,23 @@ func ErlangWait(servers int, load float64, service time.Duration) (time.Duration
 	if load <= 0 || service <= 0 {
 		return 0, true
 	}
+	return waitFromErlangB(servers, load, service, erlangB(servers, load))
+}
 
-	wait := ErlangC(servers, load) * float64(service) / (float64(servers) - load)
+// waitFromErlangB returns the mean queue time for a pool of the given size, reusing an
+// already computed Erlang B blocking probability b = erlangB(servers, load). It lets
+// callers that scan consecutive pool sizes carry the recurrence forward instead of
+// recomputing B from scratch each time.
+func waitFromErlangB(servers int, load float64, service time.Duration, b float64) (time.Duration, bool) {
+	if servers <= 0 || float64(servers) <= load {
+		return 0, false
+	}
+	if load <= 0 || service <= 0 {
+		return 0, true
+	}
+	rho := load / float64(servers)
+	c := b / (1 - rho*(1-b))
+	wait := c * float64(service) / (float64(servers) - load)
 	return time.Duration(wait), true
 }
 
@@ -75,10 +90,20 @@ func RequiredRunners(load float64, service, targetWait time.Duration, targetUtil
 	// The queue only drains while the pool is strictly larger than the load.
 	servers = max(servers, int(math.Floor(load))+1)
 
+	if servers > MaxRecommendedRunners {
+		return MaxRecommendedRunners, false
+	}
+
+	// Carry the Erlang B recurrence forward across candidate pool sizes so the search
+	// stays linear in the number of servers instead of recomputing B from scratch for
+	// every candidate. b holds B(servers-1) at the top of the loop and is advanced to
+	// B(servers) by one recurrence step before the wait is evaluated.
+	b := erlangB(servers-1, load)
 	// The cap itself is evaluated, so the loop only falls through when no pool up to and
 	// including MaxRecommendedRunners meets the target.
 	for ; servers <= MaxRecommendedRunners; servers++ {
-		wait, ok := ErlangWait(servers, load, service)
+		b = load * b / (float64(servers) + load*b)
+		wait, ok := waitFromErlangB(servers, load, service, b)
 		if ok && wait <= targetWait {
 			return servers, true
 		}

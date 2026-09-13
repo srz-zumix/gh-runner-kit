@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/google/go-github/v90/github"
 )
 
 func TestErlangC(t *testing.T) {
@@ -191,5 +193,44 @@ func TestBuildCapacityStatsExcludesHostedJobs(t *testing.T) {
 				t.Fatalf("BuildCapacityStats() reported a hosted label set: %+v", row)
 			}
 		}
+	}
+}
+
+// TestBuildCapacityStatsLoadUsesFullDurations checks that the offered load is built from
+// the full job durations, not the busy time clamped to the window, so it stays consistent
+// with AvgDuration for a job that crosses the window boundary.
+func TestBuildCapacityStatsLoadUsesFullDurations(t *testing.T) {
+	data := &Data{
+		// A 30 minute window that a 60 minute job straddles: only half of the job runs
+		// inside it, so the clamped busy time would be 30 minutes.
+		Window: Window{Start: at(30), End: at(60)},
+		Runners: []*github.Runner{
+			testRunner(1, "runner-a", "online", false, "self-hosted", "linux"),
+		},
+		Runs: []*github.WorkflowRun{{ID: github.Ptr(int64(1))}},
+		Jobs: []*github.WorkflowJob{
+			testJob("build", 1, "runner-a", []string{"self-hosted", "linux"}, "success", 0, 0, 60),
+		},
+	}
+
+	rows := BuildCapacityStats(data, DefaultTargetWait, DefaultTargetUtilization)
+	if len(rows) != 1 {
+		t.Fatalf("len(BuildCapacityStats()) = %d, want 1", len(rows))
+	}
+
+	row := rows[0]
+	if got, want := row.AvgDuration, 60*time.Minute; got != want {
+		t.Fatalf("AvgDuration = %v, want %v (the full service time)", got, want)
+	}
+	// Load from full durations: 60 minutes over a 30 minute window is 2.0. The clamped
+	// busy time would instead give 1.0, which is what this test guards against.
+	if got, want := row.Load, 2.0; got != want {
+		t.Fatalf("Load = %v, want %v (full duration basis, not clamped busy)", got, want)
+	}
+	// The M/M/c identity load = arrivalRate * meanService must hold: one job over a 30
+	// minute window times a 60 minute mean service is 2.0.
+	arrivalPerWindow := float64(row.Jobs) / data.Window.Duration().Minutes()
+	if got, want := arrivalPerWindow*row.AvgDuration.Minutes(), row.Load; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("arrivalRate * service = %v, want it to equal Load %v", got, want)
 	}
 }

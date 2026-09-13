@@ -88,9 +88,12 @@ func TestBuildCostStats(t *testing.T) {
 		},
 	}
 
-	rows := BuildCostStats(data, DefaultRates)
+	rows, warnings := BuildCostStats(data, DefaultRates)
 	if len(rows) != 2 {
 		t.Fatalf("len(BuildCostStats()) = %d, want 2", len(rows))
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("BuildCostStats() warnings = %v, want none", warnings)
 	}
 
 	// MACOS costs one minute at 0.08 and UBUNTU three minutes at 0.008, so macOS leads.
@@ -128,11 +131,16 @@ func TestBuildCostStatsUsesZeroForUnknownOS(t *testing.T) {
 		},
 	}
 
-	rows := BuildCostStats(data, DefaultRates)
+	rows, warnings := BuildCostStats(data, DefaultRates)
 	if len(rows) != 1 {
 		t.Fatalf("len(BuildCostStats()) = %d, want 1", len(rows))
 	}
 	if rows[0].Rate != 0 || rows[0].Cost != 0 {
 		t.Fatalf("rows[0] = %+v, want a zero rate and cost for an OS without a price", rows[0])
+	}
+	// A billable OS without a known rate is estimated at $0, which must be warned about
+	// rather than silently understating the total.
+	if len(warnings) != 1 {
+		t.Fatalf("BuildCostStats() warnings = %v, want one for the unpriced OS", warnings)
 	}
 }

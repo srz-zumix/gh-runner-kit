@@ -3,6 +3,7 @@ package kitutil
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -121,6 +122,26 @@ func boolValue(v bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// WriteMetricsStepSummary appends the Markdown report to the file named by
+// GITHUB_STEP_SUMMARY, opening it for append and closing it. Keeping the file handling
+// here rather than in the command follows the repository convention that cobra commands
+// only wire flags while output lives in the shared package.
+func WriteMetricsStepSummary(path string, report metrics.ExportReport) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open the step summary %s: %w", path, err)
+	}
+
+	if err := WriteMetricsMarkdown(file, report); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("failed to write the step summary %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close the step summary %s: %w", path, err)
+	}
+	return nil
 }
 
 // WriteMetricsMarkdown writes the report as Markdown, which is what a workflow appends to

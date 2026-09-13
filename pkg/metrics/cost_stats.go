@@ -81,8 +81,11 @@ func ParseRates(overrides []string) (map[string]float64, error) {
 
 // BuildCostStats turns the billable usage of the collected runs into one row per
 // operating system. GitHub only bills the jobs it hosted, so self-hosted jobs contribute
-// nothing and the totals describe what moving them off the hosted runners already saves.
-func BuildCostStats(data *Data, rates map[string]float64) []CostRow {
+// nothing and the totals describe both the current hosted spend and what moving the same
+// work to self-hosted runners would avoid. It also returns one warning per operating
+// system that has billable time but no known per-minute rate, because such a row is
+// estimated at $0 and would otherwise understate the total silently.
+func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) {
 	type bucket struct {
 		runs     int
 		jobs     int
@@ -112,8 +115,12 @@ func BuildCostStats(data *Data, rates map[string]float64) []CostRow {
 	}
 
 	rows := make([]CostRow, 0, len(buckets))
+	var warnings []string
 	for os, b := range buckets {
-		rate := rates[os]
+		rate, known := rates[os]
+		if !known && b.billable > 0 {
+			warnings = append(warnings, fmt.Sprintf("no per-minute rate for %q, its billable time is estimated at $0.00; pass --rate %s=PRICE to price it", os, strings.ToLower(os)))
+		}
 		rows = append(rows, CostRow{
 			OS:       os,
 			Runs:     b.runs,
@@ -131,5 +138,5 @@ func BuildCostStats(data *Data, rates map[string]float64) []CostRow {
 		}
 		return cmp.Compare(a.OS, b.OS)
 	})
-	return rows
+	return rows, warnings
 }
