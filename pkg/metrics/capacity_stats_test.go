@@ -196,6 +196,23 @@ func TestBuildCapacityStatsExcludesHostedJobs(t *testing.T) {
 	}
 }
 
+func TestBuildCapacityStatsDistinguishesCommaLabels(t *testing.T) {
+	rows := BuildCapacityStats(commaLabelData(), DefaultTargetWait, DefaultTargetUtilization)
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2 distinct label sets", len(rows))
+	}
+
+	jobsByLabelSet := make(map[string]int, len(rows))
+	for _, row := range rows {
+		jobsByLabelSet[row.LabelSet()] = row.Jobs
+	}
+	for _, labelSet := range []string{`"a,b"`, "a,b"} {
+		if got := jobsByLabelSet[labelSet]; got != 1 {
+			t.Errorf("jobs for label set %q = %d, want 1", labelSet, got)
+		}
+	}
+}
+
 // TestBuildCapacityStatsLoadUsesFullDurations checks that the offered load is built from
 // the full job durations, not the busy time clamped to the window, so it stays consistent
 // with AvgDuration for a job that crosses the window boundary.

@@ -129,7 +129,7 @@ func boolValue(v bool) float64 {
 // here rather than in the command follows the repository convention that cobra commands
 // only wire flags while output lives in the shared package.
 func WriteMetricsStepSummary(path string, report metrics.ExportReport) error {
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open the step summary %s: %w", path, err)
 	}

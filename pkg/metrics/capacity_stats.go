@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -41,7 +40,7 @@ type CapacityRow struct {
 
 // LabelSet renders the label set as it would be written in runs-on.
 func (r CapacityRow) LabelSet() string {
-	return strings.Join(r.Labels, ",")
+	return formatLabelSet(r.Labels)
 }
 
 // ValidateCapacityTargets rejects the target values the model cannot work with.
@@ -73,10 +72,7 @@ func BuildCapacityStats(data *Data, targetWait time.Duration, targetUtilization 
 	buckets := map[string]*bucket{}
 	for _, job := range FleetJobs(NewJobs(data)) {
 		labels := NormalizeLabelSet(job.Labels)
-		key := strings.Join(labels, ",")
-		if key == "" {
-			key = unknownKey
-		}
+		key := labelSetKey(labels)
 
 		b, ok := buckets[key]
 		if !ok {

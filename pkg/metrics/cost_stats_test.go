@@ -78,9 +78,11 @@ func TestBuildCostStats(t *testing.T) {
 			1: usageOf(map[string]*github.WorkflowRunBill{
 				"UBUNTU": bill(60_000, 2),
 				"MACOS":  bill(60_000, 1),
+				"UNUSED": bill(0, 0),
 			}),
 			2: usageOf(map[string]*github.WorkflowRunBill{
-				"UBUNTU": bill(120_000, 3),
+				"UBUNTU":  bill(120_000, 3),
+				"WINDOWS": bill(0, 3),
 			}),
 			// A run without billable usage, such as a fully self-hosted one.
 			3: usageOf(map[string]*github.WorkflowRunBill{}),
@@ -89,8 +91,8 @@ func TestBuildCostStats(t *testing.T) {
 	}
 
 	rows, warnings := BuildCostStats(data, DefaultRates)
-	if len(rows) != 2 {
-		t.Fatalf("len(BuildCostStats()) = %d, want 2", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("len(BuildCostStats()) = %d, want 3", len(rows))
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("BuildCostStats() warnings = %v, want none", warnings)
@@ -113,6 +115,22 @@ func TestBuildCostStats(t *testing.T) {
 	}
 	if got, want := ubuntu.Billable, 3*time.Minute; got != want {
 		t.Fatalf("UBUNTU Billable = %v, want %v", got, want)
+	}
+
+	var windows *CostRow
+	for i := range rows {
+		if rows[i].OS == "UNUSED" {
+			t.Fatal("BuildCostStats() returned an unused zero-valued operating system")
+		}
+		if rows[i].OS == "WINDOWS" {
+			windows = &rows[i]
+		}
+	}
+	if windows == nil {
+		t.Fatal("BuildCostStats() omitted an operating system with jobs and zero duration")
+	}
+	if windows.Runs != 1 || windows.Jobs != 3 || windows.Billable != 0 {
+		t.Fatalf("WINDOWS row = %+v, want one run, three jobs, and zero billable duration", *windows)
 	}
 
 	billable, cost := CostTotal(rows)

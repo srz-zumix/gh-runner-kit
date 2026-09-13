@@ -481,9 +481,9 @@ gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--typ
 Table columns: `LABELS`, `JOBS`, `JOBS/H`, `AVG DUR`, `LOAD`, `RUNNERS`,
 `RECOMMENDED`, `DELTA`, `EST WAIT`, `WAIT P95`.
 
-`LOAD` is the offered load in Erlangs, that is the busy time of the set divided
-by the window length, so it equals the number of runners the set kept busy on
-average. `RECOMMENDED` is the smallest pool that keeps both the modelled mean
+`LOAD` is the offered load in Erlangs: the total duration of the set's jobs
+divided by the window length, equivalently its arrival rate multiplied by its
+mean duration. `RECOMMENDED` is the smallest pool that keeps both the modelled mean
 queue time at or below `--target-wait` and the utilization at or below
 `--target-utilization`; `DELTA` is `RECOMMENDED - RUNNERS`, and rows with the
 largest shortfall come first.
@@ -963,7 +963,7 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics label` lists a label as `unused` that is clearly in use | The jobs requesting it fall outside the window or were dropped by `--max-runs`. Widen `--days` or raise `--max-runs`. |
 | `the target utilization must be greater than 0 and at most 1` | `--target-utilization` is a ratio, not a percentage. Pass `0.7`, not `70`. |
 | `metrics capacity` recommends far more runners than `metrics queue` suggests | The pool is close to saturation, where the modelled wait grows steeply, or the load is bursty rather than independent. Compare `EST WAIT` with the measured `WAIT P95` and widen `--days`. |
-| `metrics capacity` reports `RECOMMENDED 0` | A retained fleet label set produced no service time inside the window, for example because its jobs had zero duration or finished entirely after the window boundary. |
+| `metrics capacity` reports `RECOMMENDED 0` | Every retained job of that runs-on label set recorded a zero-length duration, so the set provided no positive service time from which to size a pool. |
 | `metrics cost` reports `BILLABLE 0s` everywhere | The repository is public, or every job ran on a self-hosted runner. Neither is billed. |
 | `metrics cost` is much slower than the other reports | It reads the usage of every run, one API request each. Lower `--max-runs`, or rely on the cache by keeping the same window. |
 | `invalid rate "...", expected the OS=PRICE format` | `--rate` takes one `OS=PRICE` pair per occurrence, such as `--rate ubuntu=0.008`. |

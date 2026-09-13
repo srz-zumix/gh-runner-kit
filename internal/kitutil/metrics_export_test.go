@@ -1,6 +1,8 @@
 package kitutil
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +60,7 @@ func TestWriteMetricsPrometheusEscapesLabelValues(t *testing.T) {
 		t.Fatalf("WriteMetricsPrometheus() error = %v", err)
 	}
 
-	want := `gh_runner_kit_pool_jobs{labels="self-hosted,weird\"label"} 4`
+	want := `gh_runner_kit_pool_jobs{labels="self-hosted,\"weird\"\"label\""} 4`
 	if !strings.Contains(b.String(), want) {
 		t.Errorf("WriteMetricsPrometheus() output does not contain %q:\n%s", want, b.String())
 	}
@@ -108,5 +110,45 @@ func TestWriteMetricsMarkdownEscapesCells(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), `| a\|b |`) {
 		t.Errorf("WriteMetricsMarkdown() did not escape the cell separator:\n%s", b.String())
+	}
+}
+
+func TestWriteMetricsStepSummaryCreatesAndAppendsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "summary.md")
+	report := exportReport()
+
+	for range 2 {
+		if err := WriteMetricsStepSummary(path, report); err != nil {
+			t.Fatalf("WriteMetricsStepSummary() error = %v", err)
+		}
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := strings.Count(string(content), "## Self-hosted runner metrics"); got != 2 {
+		t.Fatalf("summary heading count = %d, want 2 to prove create-plus-append behavior", got)
+	}
+}
+
+func TestWriteMetricsPrometheusDistinguishesCommaLabels(t *testing.T) {
+	report := exportReport()
+	report.Pools = []metrics.QueueRow{
+		{Labels: []string{"a,b"}, Jobs: 1},
+		{Labels: []string{"a", "b"}, Jobs: 1},
+	}
+
+	b := &strings.Builder{}
+	if err := WriteMetricsPrometheus(b, report); err != nil {
+		t.Fatalf("WriteMetricsPrometheus() error = %v", err)
+	}
+	for _, want := range []string{
+		`gh_runner_kit_pool_jobs{labels="\"a,b\""} 1`,
+		`gh_runner_kit_pool_jobs{labels="a,b"} 1`,
+	} {
+		if got := strings.Count(b.String(), want); got != 1 {
+			t.Errorf("output contains %q %d times, want once:\n%s", want, got, b.String())
+		}
 	}
 }

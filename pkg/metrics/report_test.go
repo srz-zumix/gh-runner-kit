@@ -63,6 +63,20 @@ func testData() *Data {
 	}
 }
 
+func commaLabelData() *Data {
+	return &Data{
+		Window: Window{Start: at(0), End: at(60)},
+		Runners: []*github.Runner{
+			testRunner(1, "runner-a", "online", false, "self-hosted"),
+		},
+		Runs: []*github.WorkflowRun{{ID: github.Ptr(int64(1))}},
+		Jobs: []*github.WorkflowJob{
+			testJob("single-label", 1, "runner-a", []string{"a,b"}, "success", 0, 1, 11),
+			testJob("two-labels", 1, "runner-a", []string{"a", "b"}, "success", 0, 1, 11),
+		},
+	}
+}
+
 func TestNewJobs(t *testing.T) {
 	jobs := NewJobs(testData())
 
@@ -227,5 +241,22 @@ func TestBuildQueueStats(t *testing.T) {
 	}
 	if got, want := row.Saturation, 2.0/3.0; got != want {
 		t.Fatalf("Saturation = %v, want %v", got, want)
+	}
+}
+
+func TestBuildQueueStatsDistinguishesCommaLabels(t *testing.T) {
+	rows := BuildQueueStats(commaLabelData())
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2 distinct label sets", len(rows))
+	}
+
+	jobsByLabelSet := make(map[string]int, len(rows))
+	for _, row := range rows {
+		jobsByLabelSet[row.LabelSet()] = row.Jobs
+	}
+	for _, labelSet := range []string{`"a,b"`, "a,b"} {
+		if got := jobsByLabelSet[labelSet]; got != 1 {
+			t.Errorf("jobs for label set %q = %d, want 1", labelSet, got)
+		}
 	}
 }

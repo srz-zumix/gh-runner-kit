@@ -102,6 +102,11 @@ func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) 
 			if bill == nil {
 				continue
 			}
+			jobs := bill.GetJobs()
+			totalMS := bill.GetTotalMS()
+			if jobs <= 0 && totalMS <= 0 {
+				continue
+			}
 
 			b, ok := buckets[os]
 			if !ok {
@@ -109,8 +114,8 @@ func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) 
 				buckets[os] = b
 			}
 			b.runs++
-			b.jobs += bill.GetJobs()
-			b.billable += time.Duration(bill.GetTotalMS()) * time.Millisecond
+			b.jobs += jobs
+			b.billable += time.Duration(totalMS) * time.Millisecond
 		}
 	}
 
