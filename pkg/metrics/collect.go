@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -44,6 +45,9 @@ type Options struct {
 	// AllRepos collects the runs of every repository owned by the organization instead
 	// of only the repositories listed in Repos.
 	AllRepos bool
+	// SkipJobs leaves the per run job listing out of the collection. Reports that work
+	// from the runs alone save one API request per run with it.
+	SkipJobs bool
 }
 
 // Data holds everything a Collector gathered, together with what it could not gather.
@@ -60,8 +64,11 @@ type Data struct {
 	// how per-workflow aggregation keeps runs of equally named workflows in distinct
 	// repositories apart, which matters most under --all-repos.
 	RunRepositories map[int64]string
-	Warnings        []string
-	Truncated       bool
+	// Usage holds the billable time of every collected run, keyed by run ID. Only the
+	// commands that ask for it populate this, because it costs one request per run.
+	Usage     map[int64]*github.WorkflowRunUsage
+	Warnings  []string
+	Truncated bool
 }
 
 // SelfHostedRunnerIDs indexes the currently registered runners by ID, which is the
@@ -146,6 +153,7 @@ type Collector struct {
 	repo   repository.Repository
 	opts   Options
 	jobs   JobFetcher
+	usage  UsageFetcher
 }
 
 // NewCollector builds a Collector for repo. When repo.Name is empty the runner
@@ -157,11 +165,21 @@ func NewCollector(client *gh.GitHubClient, repo repository.Repository, opts Opti
 	return &Collector{client: client, repo: repo, opts: opts, jobs: jobs}
 }
 
+// SetUsageFetcher makes Collect also retrieve the billable usage of every run, which
+// costs one extra API request per run. Only the cost report needs it.
+func (c *Collector) SetUsageFetcher(usage UsageFetcher) {
+	c.usage = usage
+}
+
 // Collect gathers the runner inventory and the workflow activity of the window.
 // Repositories the token cannot read are recorded in Data.Warnings and skipped rather
 // than aborting the whole command.
 func (c *Collector) Collect(ctx context.Context) (*Data, error) {
-	data := &Data{Window: c.opts.Window, RunRepositories: map[int64]string{}}
+	data := &Data{
+		Window:          c.opts.Window,
+		RunRepositories: map[int64]string{},
+		Usage:           map[int64]*github.WorkflowRunUsage{},
+	}
 
 	runners, err := gh.ListRunners(ctx, c.client, c.repo)
 	switch {
@@ -207,12 +225,23 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 			data.RunRepositories[run.GetID()] = repoName
 		}
 
-		jobs, warnings, err := c.collectJobs(ctx, repo, runs)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list the workflow jobs of %s: %w", parser.GetRepositoryFullName(repo), err)
+		if !c.opts.SkipJobs {
+			jobs, warnings, err := c.collectJobs(ctx, repo, runs)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list the workflow jobs of %s: %w", parser.GetRepositoryFullName(repo), err)
+			}
+			data.Jobs = append(data.Jobs, jobs...)
+			data.Warnings = append(data.Warnings, warnings...)
 		}
-		data.Jobs = append(data.Jobs, jobs...)
-		data.Warnings = append(data.Warnings, warnings...)
+
+		if c.usage != nil {
+			usage, warnings, err := c.collectUsage(ctx, repo, runs)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read the usage of the workflow runs of %s: %w", parser.GetRepositoryFullName(repo), err)
+			}
+			maps.Copy(data.Usage, usage)
+			data.Warnings = append(data.Warnings, warnings...)
+		}
 	}
 
 	return data, nil
@@ -315,7 +344,46 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 	return jobs, warnings, nil
 }
 
-// isSkippableJobError reports whether a failed job request may be downgraded to a
+// collectUsage fetches the billable usage of every run in parallel, bounded by
+// --concurrency. A run whose usage cannot be read is reported as a warning, exactly as
+// an unreadable job list is, so one run never costs the whole report.
+func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository, runs []*github.WorkflowRun) (map[int64]*github.WorkflowRunUsage, []string, error) {
+	var (
+		mu       sync.Mutex
+		usage    = make(map[int64]*github.WorkflowRunUsage, len(runs))
+		warnings []string
+	)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(c.opts.Concurrency)
+
+	for _, run := range runs {
+		g.Go(func() error {
+			runUsage, err := c.usage.Usage(ctx, repo, run)
+			if err != nil {
+				if !isSkippableJobError(err) {
+					return err
+				}
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("skipped the usage of workflow run %d: %v", run.GetID(), err))
+				mu.Unlock()
+				return nil
+			}
+
+			mu.Lock()
+			usage[run.GetID()] = runUsage
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+	return usage, warnings, nil
+}
+
+// isSkippableJobError reports whether a failed per run request may be downgraded to a
 // warning. Besides the repositories the token cannot read, GitHub answers with 5xx for
 // individual runs of large repositories, and one such run must not lose the whole report.
 func isSkippableJobError(err error) bool {

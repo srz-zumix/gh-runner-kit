@@ -114,6 +114,75 @@ func RenderMetricsLabels(r *render.Renderer, rows []metrics.LabelRow) error {
 	return t.Render()
 }
 
+// RenderMetricsCost prints one line per operating system with its billable time.
+func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"OS", "RUNS", "JOBS", "BILLABLE", "RATE/MIN", "EST COST"})
+	for _, row := range rows {
+		t.Append([]string{
+			row.OS,
+			strconv.Itoa(row.Runs),
+			strconv.Itoa(row.Jobs),
+			FormatDurationStat(row.Billable, row.Jobs),
+			fmt.Sprintf("%.4f", row.Rate),
+			FormatCost(row.Cost),
+		})
+	}
+	if err := t.Render(); err != nil {
+		return err
+	}
+
+	billable, cost := metrics.CostTotal(rows)
+	if !r.HasExporter() {
+		// The total is a completed aggregate, so an all-self-hosted window reports a
+		// measured zero rather than the dash used for unmeasured per-row values.
+		r.WriteLine(fmt.Sprintf("Total %s billable, about %s. Self-hosted runners and public repositories are not billed.",
+			FormatMeasuredDuration(billable), FormatCost(cost)))
+	}
+	return nil
+}
+
+// RenderMetricsCapacity prints one line per runs-on label set with its recommended size.
+func RenderMetricsCapacity(r *render.Renderer, rows []metrics.CapacityRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"LABELS", "JOBS", "JOBS/H", "AVG DUR", "LOAD", "RUNNERS", "RECOMMENDED", "DELTA", "EST WAIT", "WAIT P95"})
+	for _, row := range rows {
+		// A recommendation that never met the target is a lower bound, so it is marked and
+		// its delta hidden to keep it from reading as an ordinary actionable number.
+		recommended := strconv.Itoa(row.Recommended)
+		delta := FormatDelta(row.Delta)
+		if !row.TargetMet {
+			recommended = ">=" + recommended
+			delta = "-"
+		}
+		// The mean queue time only exists while the pool keeps up, so an unstable
+		// recommendation shows a dash instead of a misleading 0s.
+		estWait := "-"
+		if row.EstimatedWaitKnown {
+			estWait = FormatDurationStat(row.EstimatedWait, row.Jobs)
+		}
+		t.Append([]string{
+			row.LabelSet(),
+			strconv.Itoa(row.Jobs),
+			fmt.Sprintf("%.1f", row.ArrivalPerHour),
+			FormatDurationStat(row.AvgDuration, row.Jobs),
+			fmt.Sprintf("%.2f", row.Load),
+			strconv.Itoa(row.Runners),
+			recommended,
+			delta,
+			estWait,
+			FormatDurationStat(row.ObservedWaitP95, row.Jobs),
+		})
+	}
+	return t.Render()
+}
+
 // RenderMetricsConcurrency prints the concurrency timeline, one line per bucket.
 func RenderMetricsConcurrency(r *render.Renderer, rows []metrics.ConcurrencyRow) error {
 	if r.HasExporter() {
@@ -194,9 +263,29 @@ func FormatDurationStat(d time.Duration, samples int) string {
 	return max(d, 0).Round(time.Second).String()
 }
 
+// FormatMeasuredDuration renders a duration that is always the result of a completed
+// measurement, so a zero is shown as 0s rather than the dash used for unmeasured values.
+func FormatMeasuredDuration(d time.Duration) string {
+	return max(d, 0).Round(time.Second).String()
+}
+
 // FormatPercent renders a ratio in the 0..1 range as a percentage.
 func FormatPercent(v float64) string {
 	return fmt.Sprintf("%.1f%%", v*100)
+}
+
+// FormatDelta renders a signed difference, keeping the plus sign so that a shortfall
+// and a surplus are told apart at a glance.
+func FormatDelta(v int) string {
+	if v > 0 {
+		return "+" + strconv.Itoa(v)
+	}
+	return strconv.Itoa(v)
+}
+
+// FormatCost renders an amount of money in USD.
+func FormatCost(v float64) string {
+	return fmt.Sprintf("$%.2f", v)
 }
 
 // FormatTime renders a timestamp, or a dash when it is unset.

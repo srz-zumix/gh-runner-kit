@@ -83,6 +83,30 @@ func (m *MetricsFlags) ResolveConcurrency(bucket string) (metrics.Window, time.D
 	return window, width, nil
 }
 
+// ResolveCapacity parses the textual --target-wait duration and validates it together with
+// --target-utilization, without issuing any API request. It keeps the flag parsing and the
+// non-library validation out of the command RunE, following the repository convention that
+// cobra commands only wire flags, and returns the resolved target wait for the caller.
+func (m *MetricsFlags) ResolveCapacity(targetWait string, targetUtilization float64) (time.Duration, error) {
+	wait, err := time.ParseDuration(targetWait)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse --target-wait %q: %w", targetWait, err)
+	}
+	if err := metrics.ValidateCapacityTargets(wait, targetUtilization); err != nil {
+		return 0, err
+	}
+	return wait, nil
+}
+
+// WarnMetricsWarnings emits the collection warnings to stderr without writing anything to
+// stdout, so a machine-readable export stays clean while skipped repositories or runs are
+// still surfaced the same way the other reports surface them.
+func WarnMetricsWarnings(warnings []string) {
+	for _, warning := range warnings {
+		logger.Warn("metrics: " + warning)
+	}
+}
+
 // Collect resolves the target scope and gathers the workflow activity the reports need.
 func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 	window, err := m.Window()
@@ -94,6 +118,21 @@ func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 
 // CollectWithWindow collects metrics data for an already-resolved window.
 func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Window) (*metrics.Data, error) {
+	return m.collect(cmd, window, false)
+}
+
+// CollectUsage gathers the workflow runs together with the billable time GitHub charges
+// for them. The per run job listing is skipped because the cost report works from the
+// usage alone, which keeps the command at one request per run rather than two.
+func (m *MetricsFlags) CollectUsage(cmd *cobra.Command) (*metrics.Data, error) {
+	window, err := m.Window()
+	if err != nil {
+		return nil, err
+	}
+	return m.collect(cmd, window, true)
+}
+
+func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage bool) (*metrics.Data, error) {
 	ctx := cmd.Context()
 
 	repo, err := parser.Repository(
@@ -130,7 +169,12 @@ func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Wind
 		Event:       m.Event,
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
+		SkipJobs:    usage,
 	}, m.jobFetcher(client))
+
+	if usage {
+		collector.SetUsageFetcher(m.usageFetcher(client))
+	}
 
 	return collector.Collect(ctx)
 }
@@ -140,14 +184,31 @@ func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Wind
 // safe to share across a repository collection.
 func (m *MetricsFlags) jobFetcher(client *gh.GitHubClient) metrics.JobFetcher {
 	fetcher := metrics.JobFetcher(metrics.NewAPIJobFetcher(client))
+	if cache, ok := m.cache(); ok {
+		return metrics.NewCachedJobFetcher(fetcher, cache, m.Refresh)
+	}
+	return fetcher
+}
+
+// usageFetcher wraps the API fetcher with the on-disk cache, like jobFetcher does.
+func (m *MetricsFlags) usageFetcher(client *gh.GitHubClient) metrics.UsageFetcher {
+	fetcher := metrics.UsageFetcher(metrics.NewAPIUsageFetcher(client))
+	if cache, ok := m.cache(); ok {
+		return metrics.NewCachedUsageFetcher(fetcher, cache, m.Refresh)
+	}
+	return fetcher
+}
+
+// cache opens the on-disk cache, reporting false when it is disabled or unusable.
+func (m *MetricsFlags) cache() (*metrics.Cache, bool) {
 	if m.NoCache {
-		return fetcher
+		return nil, false
 	}
 
 	cache, err := metrics.NewCache()
 	if err != nil {
-		logger.Warn("metrics: continuing without the job cache", "error", err)
-		return fetcher
+		logger.Warn("metrics: continuing without the local cache", "error", err)
+		return nil, false
 	}
-	return metrics.NewCachedJobFetcher(fetcher, cache, m.Refresh)
+	return cache, true
 }
