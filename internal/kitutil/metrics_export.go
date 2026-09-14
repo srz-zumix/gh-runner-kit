@@ -102,7 +102,7 @@ func formatPrometheusLabels(labels map[string]string) string {
 		return ""
 	}
 
-	// Only the two label names below are ever used, and they are emitted in this order.
+	// Only the label names below are ever used, and they are emitted in this order.
 	var parts []string
 	for _, name := range []string{"label", "labels", "status"} {
 		if value, ok := labels[name]; ok {

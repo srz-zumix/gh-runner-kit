@@ -42,6 +42,12 @@ func TestErlangCDecreasesWithMoreRunners(t *testing.T) {
 }
 
 func TestErlangWait(t *testing.T) {
+	if wait, ok := ErlangWait(0, 0, time.Minute); !ok || wait != 0 {
+		t.Fatalf("ErlangWait(0, 0, 1m) = %v, %v, want 0, true", wait, ok)
+	}
+	if _, ok := ErlangWait(0, 5, 0); ok {
+		t.Fatal("ErlangWait(0, 5, 0) reported a mean for a pool with positive load and no runners")
+	}
 	if _, ok := ErlangWait(2, 2, time.Minute); ok {
 		t.Fatal("ErlangWait() reported a mean for a pool that cannot keep up with the load")
 	}
@@ -210,6 +216,25 @@ func TestBuildCapacityStatsDistinguishesCommaLabels(t *testing.T) {
 		if got := jobsByLabelSet[labelSet]; got != 1 {
 			t.Errorf("jobs for label set %q = %d, want 1", labelSet, got)
 		}
+	}
+}
+
+func TestBuildCapacityStatsZeroLoadHasKnownZeroWait(t *testing.T) {
+	data := testData()
+	data.Jobs = []*github.WorkflowJob{
+		testJob("instant", 1, "runner-a", []string{"self-hosted", "linux"}, "success", 10, 10, 10),
+	}
+
+	rows := BuildCapacityStats(data, DefaultTargetWait, DefaultTargetUtilization)
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Recommended != 0 || !row.TargetMet {
+		t.Fatalf("recommendation = %d (met=%v), want 0 (met=true)", row.Recommended, row.TargetMet)
+	}
+	if row.EstimatedWait != 0 || !row.EstimatedWaitKnown {
+		t.Fatalf("estimated wait = %v (known=%v), want 0s (known=true)", row.EstimatedWait, row.EstimatedWaitKnown)
 	}
 }
 

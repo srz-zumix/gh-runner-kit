@@ -326,7 +326,7 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 		g.Go(func() error {
 			runJobs, err := c.jobs.Jobs(ctx, repo, run)
 			if err != nil {
-				if !isSkippableJobError(err) {
+				if !isSkippableRunRequestError(err) {
 					return err
 				}
 				mu.Lock()
@@ -365,7 +365,7 @@ func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository
 		g.Go(func() error {
 			runUsage, err := c.usage.Usage(ctx, repo, run)
 			if err != nil {
-				if !isSkippableJobError(err) {
+				if !isSkippableRunRequestError(err) {
 					return err
 				}
 				mu.Lock()
@@ -387,10 +387,11 @@ func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository
 	return usage, warnings, nil
 }
 
-// isSkippableJobError reports whether a failed per run request may be downgraded to a
-// warning. Besides the repositories the token cannot read, GitHub answers with 5xx for
-// individual runs of large repositories, and one such run must not lose the whole report.
-func isSkippableJobError(err error) bool {
+// isSkippableRunRequestError reports whether a failed per run request may be downgraded
+// to a warning. Besides the repositories the token cannot read, GitHub answers with 5xx
+// for individual runs of large repositories, and one such run must not lose the whole
+// report.
+func isSkippableRunRequestError(err error) bool {
 	if gh.IsHTTPForbidden(err) || gh.IsHTTPNotFound(err) {
 		return true
 	}

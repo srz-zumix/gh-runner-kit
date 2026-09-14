@@ -17,10 +17,11 @@ func NewCapacityCmd() *cobra.Command {
 		Short: "Recommend how many runners each runs-on label set needs",
 		Long: `Size every runs-on label set against a target queue time.
 
-LOAD is the offered load in Erlangs: the number of runners the label set kept busy on
-average across the window. RECOMMENDED is the smallest pool that keeps both the modelled
-mean queue time at or below --target-wait and the utilization at or below
---target-utilization, and DELTA is how many runners to add, or to remove when negative.
+LOAD is the offered load in Erlangs: the total duration of the label set's jobs divided
+by the window length, equivalently its arrival rate multiplied by its mean duration.
+RECOMMENDED is the smallest pool that keeps both the modelled mean queue time at or below
+--target-wait and the utilization at or below --target-utilization, and DELTA is how many
+runners to add, or to remove when negative.
 
 The model is an M/M/c queue, which assumes jobs arrive independently of each other and
 that any runner of the pool can serve any of its jobs. Workloads driven by a scheduled

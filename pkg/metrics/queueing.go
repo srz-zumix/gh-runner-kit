@@ -46,10 +46,13 @@ func ErlangC(servers int, load float64) float64 {
 // time a job occupies a runner. It reports false when the pool cannot keep up with the
 // load, in which case the queue grows without bound and no mean exists.
 func ErlangWait(servers int, load float64, service time.Duration) (time.Duration, bool) {
+	if load <= 0 {
+		return 0, true
+	}
 	if servers <= 0 || float64(servers) <= load {
 		return 0, false
 	}
-	if load <= 0 || service <= 0 {
+	if service <= 0 {
 		return 0, true
 	}
 	return waitFromErlangB(servers, load, service, erlangB(servers, load))
@@ -60,10 +63,13 @@ func ErlangWait(servers int, load float64, service time.Duration) (time.Duration
 // callers that scan consecutive pool sizes carry the recurrence forward instead of
 // recomputing B from scratch each time.
 func waitFromErlangB(servers int, load float64, service time.Duration, b float64) (time.Duration, bool) {
+	if load <= 0 {
+		return 0, true
+	}
 	if servers <= 0 || float64(servers) <= load {
 		return 0, false
 	}
-	if load <= 0 || service <= 0 {
+	if service <= 0 {
 		return 0, true
 	}
 	rho := load / float64(servers)

@@ -385,7 +385,7 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--rate` | see above | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
+| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |

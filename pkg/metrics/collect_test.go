@@ -35,7 +35,7 @@ func jobWithID(id int64) *github.WorkflowJob {
 	return &github.WorkflowJob{ID: github.Ptr(id)}
 }
 
-func TestIsSkippableJobError(t *testing.T) {
+func TestIsSkippableRunRequestError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -51,8 +51,8 @@ func TestIsSkippableJobError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isSkippableJobError(tt.err); got != tt.want {
-				t.Errorf("isSkippableJobError() = %v, want %v", got, tt.want)
+			if got := isSkippableRunRequestError(tt.err); got != tt.want {
+				t.Errorf("isSkippableRunRequestError() = %v, want %v", got, tt.want)
 			}
 		})
 	}

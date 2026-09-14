@@ -212,6 +212,23 @@ func TestBuildRunnerStatsGroupByLabel(t *testing.T) {
 	}
 }
 
+func TestBuildRunnerStatsGroupByLabelDistinguishesCommaLabels(t *testing.T) {
+	rows := BuildRunnerStats(commaLabelData(), GroupByLabel)
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2 distinct label sets", len(rows))
+	}
+
+	jobsByKey := make(map[string]int, len(rows))
+	for _, row := range rows {
+		jobsByKey[row.Key] = row.Jobs
+	}
+	for _, key := range []string{`"a,b"`, "a,b"} {
+		if got := jobsByKey[key]; got != 1 {
+			t.Errorf("jobs for key %q = %d, want 1", key, got)
+		}
+	}
+}
+
 func TestBuildQueueStats(t *testing.T) {
 	rows := BuildQueueStats(testData())
 
