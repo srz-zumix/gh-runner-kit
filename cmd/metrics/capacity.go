@@ -52,8 +52,9 @@ Jobs that ran on GitHub-hosted runners are excluded.`,
 	}
 
 	flags.Add(cmd)
-	cmd.Flags().StringVar(&targetWait, "target-wait", metricspkg.DefaultTargetWait.String(), "Mean queue time the recommended pool aims for, such as 60s")
-	cmd.Flags().Float64Var(&targetUtilization, "target-utilization", metricspkg.DefaultTargetUtilization, "Highest share of the time a runner may be busy, between 0 and 1")
+	f := cmd.Flags()
+	f.StringVar(&targetWait, "target-wait", metricspkg.DefaultTargetWait.String(), "Mean queue time the recommended pool aims for, such as 60s")
+	f.Float64Var(&targetUtilization, "target-utilization", metricspkg.DefaultTargetUtilization, "Highest share of the time a runner may be busy, greater than 0 and at most 1")
 
 	return cmd
 }
