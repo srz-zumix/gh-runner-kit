@@ -3,7 +3,6 @@ package metrics
 import (
 	"cmp"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -22,7 +21,7 @@ type QueueRow struct {
 
 // LabelSet renders the label set as it would be written in runs-on.
 func (r QueueRow) LabelSet() string {
-	return strings.Join(r.Labels, ",")
+	return formatLabelSet(r.Labels)
 }
 
 // BuildQueueStats groups the fleet jobs by their runs-on label set and measures how
@@ -37,10 +36,7 @@ func BuildQueueStats(data *Data) []QueueRow {
 	buckets := map[string]*bucket{}
 	for _, job := range FleetJobs(NewJobs(data)) {
 		labels := NormalizeLabelSet(job.Labels)
-		key := strings.Join(labels, ",")
-		if key == "" {
-			key = unknownKey
-		}
+		key := labelSetKey(labels)
 
 		b, ok := buckets[key]
 		if !ok {

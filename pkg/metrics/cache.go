@@ -17,12 +17,18 @@ const (
 	cacheFilePerm os.FileMode = 0o600
 )
 
-// Cache stores the job list of completed workflow runs on local disk.
-// Entries are scoped per host/owner/repository so that runs from different hosts,
-// accounts or repositories are kept apart for normal GitHub identifiers.
+// Cache stores per run data of completed workflow runs on local disk.
+// Entries are scoped per host/owner/repository and per kind, so that runs from different
+// hosts, accounts or repositories are kept apart for normal GitHub identifiers.
 type Cache struct {
 	base string
 }
+
+// The kinds of per run data the cache keeps apart. They double as directory names.
+const (
+	jobsKind  = "jobs"
+	usageKind = "usage"
+)
 
 // NewCache prepares the on-disk cache root. Individual entries are placed under a
 // per-repository subdirectory derived from the repository passed to LoadJobs and
@@ -40,46 +46,79 @@ func NewCache() (*Cache, error) {
 	return &Cache{base: base}, nil
 }
 
-// jobsDir returns the per-repository directory that holds cached job lists.
-func (c *Cache) jobsDir(repo repository.Repository) string {
+// LoadJobs returns the cached job list of repo's runID, reporting whether it was present.
+func (c *Cache) LoadJobs(repo repository.Repository, runID int64) ([]*github.WorkflowJob, bool) {
+	return load[[]*github.WorkflowJob](c, repo, jobsKind, runID)
+}
+
+// SaveJobs writes the job list of repo's runID.
+func (c *Cache) SaveJobs(repo repository.Repository, runID int64, jobs []*github.WorkflowJob) error {
+	return c.save(repo, jobsKind, runID, jobs)
+}
+
+// LoadUsage returns the cached billable usage of repo's runID, reporting whether it was
+// present.
+func (c *Cache) LoadUsage(repo repository.Repository, runID int64) (*github.WorkflowRunUsage, bool) {
+	usage, ok := load[*github.WorkflowRunUsage](c, repo, usageKind, runID)
+	if !ok || usage == nil {
+		return nil, false
+	}
+	return usage, true
+}
+
+// SaveUsage writes the billable usage of repo's runID.
+func (c *Cache) SaveUsage(repo repository.Repository, runID int64, usage *github.WorkflowRunUsage) error {
+	return c.save(repo, usageKind, runID, usage)
+}
+
+// dir returns the per-repository directory that holds the cached entries of one kind.
+func (c *Cache) dir(repo repository.Repository, kind string) string {
 	return filepath.Join(
 		c.base,
 		sanitizePathSegment(repo.Host),
 		sanitizePathSegment(repo.Owner),
 		sanitizePathSegment(repo.Name),
-		"jobs",
+		kind,
 	)
 }
 
-// LoadJobs returns the cached job list of repo's runID, reporting whether it was present.
-func (c *Cache) LoadJobs(repo repository.Repository, runID int64) ([]*github.WorkflowJob, bool) {
-	data, err := os.ReadFile(c.jobsPath(repo, runID))
-	if err != nil {
-		return nil, false
-	}
-
-	var jobs []*github.WorkflowJob
-	if err := json.Unmarshal(data, &jobs); err != nil {
-		return nil, false
-	}
-	return jobs, true
+// path builds the entry path from the numeric run ID, so no caller-supplied string ever
+// reaches the file name.
+func (c *Cache) path(repo repository.Repository, kind string, runID int64) string {
+	return filepath.Join(c.dir(repo, kind), strconv.FormatInt(runID, 10)+".json")
 }
 
-// SaveJobs writes the job list of repo's runID. It writes to a temporary file and renames
-// it into place, which is atomic on Unix, so an interrupted write never leaves a truncated
-// entry behind. A partial entry would in any case be treated as a cache miss on load.
-func (c *Cache) SaveJobs(repo repository.Repository, runID int64, jobs []*github.WorkflowJob) error {
-	data, err := json.Marshal(jobs)
+// load decodes the entry of repo's runID, reporting whether a usable one was present.
+// A missing, unreadable or partially written entry is reported as a miss.
+func load[T any](c *Cache, repo repository.Repository, kind string, runID int64) (T, bool) {
+	var value T
+
+	data, err := os.ReadFile(c.path(repo, kind, runID))
 	if err != nil {
-		return fmt.Errorf("failed to encode the jobs of workflow run %d: %w", runID, err)
+		return value, false
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		var zero T
+		return zero, false
+	}
+	return value, true
+}
+
+// save writes the entry of repo's runID. It writes to a temporary file and renames it into
+// place, which is atomic on Unix, so an interrupted write never leaves a truncated entry
+// behind. A partial entry would in any case be treated as a cache miss on load.
+func (c *Cache) save(repo repository.Repository, kind string, runID int64, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to encode the %s of workflow run %d: %w", kind, runID, err)
 	}
 
-	dir := c.jobsDir(repo)
+	dir := c.dir(repo, kind)
 	if err := os.MkdirAll(dir, cacheDirPerm); err != nil {
 		return fmt.Errorf("failed to create the cache directory %s: %w", dir, err)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".jobs-*")
+	tmp, err := os.CreateTemp(dir, "."+kind+"-*")
 	if err != nil {
 		return fmt.Errorf("failed to create a cache entry for workflow run %d: %w", runID, err)
 	}
@@ -96,16 +135,10 @@ func (c *Cache) SaveJobs(repo repository.Repository, runID int64, jobs []*github
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("failed to close the cache entry for workflow run %d: %w", runID, err)
 	}
-	if err := os.Rename(tmp.Name(), c.jobsPath(repo, runID)); err != nil {
+	if err := os.Rename(tmp.Name(), c.path(repo, kind, runID)); err != nil {
 		return fmt.Errorf("failed to store the cache entry for workflow run %d: %w", runID, err)
 	}
 	return nil
-}
-
-// jobsPath builds the entry path from the numeric run ID, so no caller-supplied string
-// ever reaches the file name.
-func (c *Cache) jobsPath(repo repository.Repository, runID int64) string {
-	return filepath.Join(c.jobsDir(repo), strconv.FormatInt(runID, 10)+".json")
 }
 
 // sanitizePathSegment reduces s to a single safe path element.

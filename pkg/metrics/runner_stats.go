@@ -3,7 +3,6 @@ package metrics
 import (
 	"cmp"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/go-github/v90/github"
@@ -48,47 +47,54 @@ type RunnerRow struct {
 // When grouping by name every registered runner gets a row, so that a runner which
 // picked up no work at all is still visible.
 func BuildRunnerStats(data *Data, groupBy Grouping) []RunnerRow {
-	stats := map[string]*jobStats{}
-	kinds := map[string]JobKind{}
+	type bucket struct {
+		display string
+		kind    JobKind
+		stats   jobStats
+	}
+
+	buckets := map[string]*bucket{}
 
 	if groupBy == GroupByName {
 		for _, runner := range data.Runners {
 			name := runner.GetName()
-			stats[name] = &jobStats{}
-			kinds[name] = JobKindSelfHosted
+			buckets[name] = &bucket{display: name, kind: JobKindSelfHosted}
 		}
 	}
 
 	for _, job := range FleetJobs(NewJobs(data)) {
-		key := runnerRowKey(job, groupBy)
-		if _, ok := stats[key]; !ok {
-			stats[key] = &jobStats{}
-			kinds[key] = job.Kind
+		key, display := runnerRowKeys(job, groupBy)
+		b, ok := buckets[key]
+		if !ok {
+			b = &bucket{display: display, kind: job.Kind}
+			buckets[key] = b
 		}
-		stats[key].add(job, data.Window)
+		b.stats.add(job, data.Window)
 	}
 
 	runners := indexRunnersByName(data)
 	window := data.Window.Duration()
 
-	rows := make([]RunnerRow, 0, len(stats))
-	for key, s := range stats {
+	rows := make([]RunnerRow, 0, len(buckets))
+	for _, b := range buckets {
 		row := RunnerRow{
-			Key:         key,
-			Kind:        kinds[key],
-			Jobs:        s.count,
-			BusyTime:    s.busy,
-			FailureRate: s.failureRate(),
-			WaitP50:     Percentile(s.waits, 50),
-			DurationP50: Percentile(s.durations, 50),
-			DurationP95: Percentile(s.durations, 95),
-			LastJobAt:   s.lastJobAt,
-			Utilization: Utilization(s.busy, window),
+			Key:         b.display,
+			Kind:        b.kind,
+			Jobs:        b.stats.count,
+			BusyTime:    b.stats.busy,
+			FailureRate: b.stats.failureRate(),
+			WaitP50:     Percentile(b.stats.waits, 50),
+			DurationP50: Percentile(b.stats.durations, 50),
+			DurationP95: Percentile(b.stats.durations, 95),
+			LastJobAt:   b.stats.lastJobAt,
+			Utilization: Utilization(b.stats.busy, window),
 		}
 
-		if runner, ok := runners[key]; ok {
-			row.Status = runner.GetStatus()
-			row.Cordoned = runnerpkg.IsCordoned(runner)
+		if groupBy == GroupByName {
+			if runner, ok := runners[b.display]; ok {
+				row.Status = runner.GetStatus()
+				row.Cordoned = runnerpkg.IsCordoned(runner)
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -103,21 +109,26 @@ func BuildRunnerStats(data *Data, groupBy Grouping) []RunnerRow {
 	return rows
 }
 
-func runnerRowKey(job Job, groupBy Grouping) string {
-	var key string
+func runnerRowKeys(job Job, groupBy Grouping) (string, string) {
+	var display string
 	switch groupBy {
 	case GroupByLabel:
-		key = strings.Join(NormalizeLabelSet(job.Labels), ",")
+		labels := NormalizeLabelSet(job.Labels)
+		if len(labels) == 0 || len(labels) == 1 && labels[0] == "" {
+			return unknownKey, unknownKey
+		}
+		display = formatLabelSet(labels)
+		return labelSetKey(labels), display
 	case GroupByGroup:
-		key = job.RunnerGroup
+		display = job.RunnerGroup
 	default:
-		key = job.RunnerName
+		display = job.RunnerName
 	}
 
-	if key == "" {
-		return unknownKey
+	if display == "" {
+		return unknownKey, unknownKey
 	}
-	return key
+	return display, display
 }
 
 // indexRunnersByName maps the registered runners by name so that rows can be enriched

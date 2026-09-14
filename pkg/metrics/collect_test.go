@@ -35,7 +35,7 @@ func jobWithID(id int64) *github.WorkflowJob {
 	return &github.WorkflowJob{ID: github.Ptr(id)}
 }
 
-func TestIsSkippableJobError(t *testing.T) {
+func TestIsSkippableRunRequestError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -51,8 +51,8 @@ func TestIsSkippableJobError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isSkippableJobError(tt.err); got != tt.want {
-				t.Errorf("isSkippableJobError() = %v, want %v", got, tt.want)
+			if got := isSkippableRunRequestError(tt.err); got != tt.want {
+				t.Errorf("isSkippableRunRequestError() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -91,5 +91,86 @@ func TestCollectJobsFailsOnUnexpectedError(t *testing.T) {
 
 	if _, _, err := c.collectJobs(context.Background(), repo, []*github.WorkflowRun{runWithID(1)}); err == nil {
 		t.Fatal("collectJobs() error = nil, want an error")
+	}
+}
+
+type stubUsageFetcher struct {
+	usage map[int64]*github.WorkflowRunUsage
+	errs  map[int64]error
+}
+
+func (f *stubUsageFetcher) Usage(_ context.Context, _ repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, error) {
+	if err := f.errs[run.GetID()]; err != nil {
+		return nil, err
+	}
+	return f.usage[run.GetID()], nil
+}
+
+func usageWithBillable(ms int64) *github.WorkflowRunUsage {
+	return &github.WorkflowRunUsage{
+		Billable: &github.WorkflowRunBillMap{
+			"UBUNTU": &github.WorkflowRunBill{TotalMS: github.Ptr(ms)},
+		},
+	}
+}
+
+func TestCollectUsageCollectsPerRun(t *testing.T) {
+	fetcher := &stubUsageFetcher{
+		usage: map[int64]*github.WorkflowRunUsage{
+			1: usageWithBillable(1000),
+			2: usageWithBillable(2000),
+		},
+	}
+	repo := repository.Repository{Owner: "o", Name: "r"}
+	c := NewCollector(nil, repo, Options{Concurrency: 1}, nil)
+	c.SetUsageFetcher(fetcher)
+
+	usage, warnings, err := c.collectUsage(context.Background(), repo, []*github.WorkflowRun{runWithID(1), runWithID(2)})
+	if err != nil {
+		t.Fatalf("collectUsage() error = %v", err)
+	}
+	if len(usage) != 2 {
+		t.Errorf("len(usage) = %d, want 2", len(usage))
+	}
+	if len(warnings) != 0 {
+		t.Errorf("len(warnings) = %d, want 0", len(warnings))
+	}
+}
+
+func TestCollectUsageSkipsServerErrors(t *testing.T) {
+	fetcher := &stubUsageFetcher{
+		usage: map[int64]*github.WorkflowRunUsage{
+			1: usageWithBillable(1000),
+			3: usageWithBillable(3000),
+		},
+		errs: map[int64]error{2: statusError(http.StatusBadGateway)},
+	}
+	repo := repository.Repository{Owner: "o", Name: "r"}
+	c := NewCollector(nil, repo, Options{Concurrency: 1}, nil)
+	c.SetUsageFetcher(fetcher)
+
+	usage, warnings, err := c.collectUsage(context.Background(), repo, []*github.WorkflowRun{runWithID(1), runWithID(2), runWithID(3)})
+	if err != nil {
+		t.Fatalf("collectUsage() error = %v", err)
+	}
+	if len(usage) != 2 {
+		t.Errorf("len(usage) = %d, want 2", len(usage))
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("len(warnings) = %d, want 1", len(warnings))
+	}
+	if want := "skipped the usage of workflow run 2"; !strings.Contains(warnings[0], want) {
+		t.Errorf("warnings[0] = %q, want it to contain %q", warnings[0], want)
+	}
+}
+
+func TestCollectUsageFailsOnUnexpectedError(t *testing.T) {
+	fetcher := &stubUsageFetcher{errs: map[int64]error{1: statusError(http.StatusUnauthorized)}}
+	repo := repository.Repository{Owner: "o", Name: "r"}
+	c := NewCollector(nil, repo, Options{Concurrency: 1}, nil)
+	c.SetUsageFetcher(fetcher)
+
+	if _, _, err := c.collectUsage(context.Background(), repo, []*github.WorkflowRun{runWithID(1)}); err == nil {
+		t.Fatal("collectUsage() error = nil, want an error")
 	}
 }

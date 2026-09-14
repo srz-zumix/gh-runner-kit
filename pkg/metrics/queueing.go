@@ -1,0 +1,118 @@
+package metrics
+
+import (
+	"math"
+	"time"
+)
+
+// MaxRecommendedRunners bounds the search RequiredRunners performs, so a pool whose
+// demand cannot be met with a sane fleet size fails fast instead of looping.
+const MaxRecommendedRunners = 10_000
+
+// DefaultTargetUtilization is the share of the time a runner may be busy before the
+// pool is considered too small. Queue time grows sharply above it.
+const DefaultTargetUtilization = 0.7
+
+// DefaultTargetWait is the mean queue time the recommended fleet size aims for.
+const DefaultTargetWait = time.Minute
+
+// erlangB returns the blocking probability of an M/M/c/c system by the recurrence
+// B(k) = a*B(k-1) / (k + a*B(k-1)), which avoids the overflow of the factorial form.
+func erlangB(servers int, load float64) float64 {
+	b := 1.0
+	for k := 1; k <= servers; k++ {
+		b = load * b / (float64(k) + load*b)
+	}
+	return b
+}
+
+// ErlangC returns the probability that an arriving job finds every runner busy and has
+// to queue, for a pool of the given size under the given offered load. A pool that is
+// not larger than its load can never drain, so the probability is 1.
+func ErlangC(servers int, load float64) float64 {
+	if load <= 0 {
+		return 0
+	}
+	if servers <= 0 || float64(servers) <= load {
+		return 1
+	}
+
+	b := erlangB(servers, load)
+	rho := load / float64(servers)
+	return b / (1 - rho*(1-b))
+}
+
+// ErlangWait returns the mean queue time of an M/M/c pool, where service is the mean
+// time a job occupies a runner. It reports false when the pool cannot keep up with the
+// load, in which case the queue grows without bound and no mean exists.
+func ErlangWait(servers int, load float64, service time.Duration) (time.Duration, bool) {
+	if load <= 0 {
+		return 0, true
+	}
+	if servers <= 0 || float64(servers) <= load {
+		return 0, false
+	}
+	if service <= 0 {
+		return 0, true
+	}
+	return waitFromErlangB(servers, load, service, erlangB(servers, load))
+}
+
+// waitFromErlangB returns the mean queue time for a pool of the given size, reusing an
+// already computed Erlang B blocking probability b = erlangB(servers, load). It lets
+// callers that scan consecutive pool sizes carry the recurrence forward instead of
+// recomputing B from scratch each time.
+func waitFromErlangB(servers int, load float64, service time.Duration, b float64) (time.Duration, bool) {
+	if load <= 0 {
+		return 0, true
+	}
+	if servers <= 0 || float64(servers) <= load {
+		return 0, false
+	}
+	if service <= 0 {
+		return 0, true
+	}
+	rho := load / float64(servers)
+	c := b / (1 - rho*(1-b))
+	wait := c * float64(service) / (float64(servers) - load)
+	return time.Duration(wait), true
+}
+
+// RequiredRunners returns the smallest pool that keeps both the mean queue time at or
+// below targetWait and the utilization at or below targetUtilization, given the offered
+// load and the mean service time. The search is capped at MaxRecommendedRunners: the
+// second return value is false when even that cap, or a larger pool the util target
+// already demands, cannot satisfy the constraints, so a capped recommendation is never
+// mistaken for a verified one.
+func RequiredRunners(load float64, service, targetWait time.Duration, targetUtilization float64) (int, bool) {
+	if load <= 0 {
+		return 0, true
+	}
+
+	servers := 1
+	if targetUtilization > 0 {
+		servers = int(math.Ceil(load / targetUtilization))
+	}
+	// The queue only drains while the pool is strictly larger than the load.
+	servers = max(servers, int(math.Floor(load))+1)
+
+	if servers > MaxRecommendedRunners {
+		return MaxRecommendedRunners, false
+	}
+
+	// Carry the Erlang B recurrence forward across candidate pool sizes so the search
+	// stays linear in the number of servers instead of recomputing B from scratch for
+	// every candidate. b holds B(servers-1) at the top of the loop and is advanced to
+	// B(servers) by one recurrence step before the wait is evaluated.
+	b := erlangB(servers-1, load)
+	// The cap itself is evaluated, so the loop only falls through when no pool up to and
+	// including MaxRecommendedRunners meets the target.
+	for ; servers <= MaxRecommendedRunners; servers++ {
+		b = load * b / (float64(servers) + load*b)
+		wait, ok := waitFromErlangB(servers, load, service, b)
+		if ok && wait <= targetWait {
+			return servers, true
+		}
+	}
+	return MaxRecommendedRunners, false
+}

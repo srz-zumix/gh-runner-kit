@@ -253,6 +253,30 @@ func NormalizeLabelSet(labels []string) []string {
 	return slices.Compact(normalized)
 }
 
+// labelSetKey encodes a normalized label set without allowing separators inside a
+// user-defined label to collide with the boundaries between labels.
+func labelSetKey(labels []string) string {
+	var b strings.Builder
+	for _, label := range labels {
+		fmt.Fprintf(&b, "%d:%s", len(label), label)
+	}
+	return b.String()
+}
+
+// formatLabelSet renders labels as a compact CSV-style list. Ordinary labels keep the
+// existing comma-separated form, while labels containing separators are quoted so two
+// distinct sets never produce the same displayed or exported value.
+func formatLabelSet(labels []string) string {
+	formatted := make([]string, len(labels))
+	for i, label := range labels {
+		if label == "" || strings.ContainsAny(label, ",\"\r\n") {
+			label = `"` + strings.ReplaceAll(label, `"`, `""`) + `"`
+		}
+		formatted[i] = label
+	}
+	return strings.Join(formatted, ",")
+}
+
 func hasLabel(labels []string, want string) bool {
 	return slices.ContainsFunc(labels, func(label string) bool {
 		return strings.EqualFold(label, want)
