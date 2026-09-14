@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,20 @@ func usageOf(bills map[string]*github.WorkflowRunBill) *github.WorkflowRunUsage 
 
 func bill(totalMS int64, jobs int) *github.WorkflowRunBill {
 	return &github.WorkflowRunBill{TotalMS: &totalMS, Jobs: &jobs}
+}
+
+func detailedBill(durations ...int64) *github.WorkflowRunBill {
+	var totalMS int64
+	jobRuns := make([]*github.WorkflowRunJobRun, 0, len(durations))
+	for i, duration := range durations {
+		totalMS += duration
+		jobRuns = append(jobRuns, &github.WorkflowRunJobRun{
+			JobID:      github.Ptr(i + 1),
+			DurationMS: github.Ptr(duration),
+		})
+	}
+	jobs := len(jobRuns)
+	return &github.WorkflowRunBill{TotalMS: &totalMS, Jobs: &jobs, JobRuns: jobRuns}
 }
 
 func TestParseRates(t *testing.T) {
@@ -76,13 +91,13 @@ func TestBuildCostStats(t *testing.T) {
 	data := &Data{
 		Usage: map[int64]*github.WorkflowRunUsage{
 			1: usageOf(map[string]*github.WorkflowRunBill{
-				"UBUNTU": bill(60_000, 2),
-				"MACOS":  bill(60_000, 1),
+				"UBUNTU": detailedBill(30_000, 30_000),
+				"MACOS":  detailedBill(60_000),
 				"UNUSED": bill(0, 0),
 			}),
 			2: usageOf(map[string]*github.WorkflowRunBill{
-				"UBUNTU":  bill(120_000, 3),
-				"WINDOWS": bill(0, 3),
+				"UBUNTU":  detailedBill(40_000, 40_000, 40_000),
+				"WINDOWS": detailedBill(0, 0, 0),
 			}),
 			// A run without billable usage, such as a fully self-hosted one.
 			3: usageOf(map[string]*github.WorkflowRunBill{}),
@@ -98,7 +113,8 @@ func TestBuildCostStats(t *testing.T) {
 		t.Fatalf("BuildCostStats() warnings = %v, want none", warnings)
 	}
 
-	// MACOS costs one minute at 0.08 and UBUNTU three minutes at 0.008, so macOS leads.
+	// MACOS costs one minute at 0.08 and UBUNTU five rounded job-minutes at 0.008,
+	// so macOS leads.
 	if got, want := rows[0].OS, "MACOS"; got != want {
 		t.Fatalf("rows[0].OS = %q, want %q", got, want)
 	}
@@ -113,7 +129,7 @@ func TestBuildCostStats(t *testing.T) {
 	if got, want := ubuntu.Jobs, 5; got != want {
 		t.Fatalf("UBUNTU Jobs = %d, want %d", got, want)
 	}
-	if got, want := ubuntu.Billable, 3*time.Minute; got != want {
+	if got, want := ubuntu.Billable, 5*time.Minute; got != want {
 		t.Fatalf("UBUNTU Billable = %v, want %v", got, want)
 	}
 
@@ -134,18 +150,47 @@ func TestBuildCostStats(t *testing.T) {
 	}
 
 	billable, cost := CostTotal(rows)
-	if got, want := billable, 4*time.Minute; got != want {
+	if got, want := billable, 6*time.Minute; got != want {
 		t.Fatalf("CostTotal() billable = %v, want %v", got, want)
 	}
-	if got, want := cost, 0.104; got < want-1e-9 || got > want+1e-9 {
+	if got, want := cost, 0.12; got < want-1e-9 || got > want+1e-9 {
 		t.Fatalf("CostTotal() cost = %v, want %v", got, want)
+	}
+}
+
+func TestBuildCostStatsFallsBackWithoutPerJobDurations(t *testing.T) {
+	data := &Data{
+		Runs: []*github.WorkflowRun{runWithID(1)},
+		Usage: map[int64]*github.WorkflowRunUsage{
+			1: usageOf(map[string]*github.WorkflowRunBill{"UBUNTU": bill(20_000, 2)}),
+		},
+	}
+
+	rows, warnings := BuildCostStats(data, DefaultRates)
+	if len(rows) != 1 || rows[0].Billable != 20*time.Second {
+		t.Fatalf("BuildCostStats() rows = %+v, want a 20-second aggregate fallback", rows)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "without per-job minute rounding") {
+		t.Fatalf("BuildCostStats() warnings = %v, want an unrounded fallback warning", warnings)
+	}
+}
+
+func TestBuildCostStatsWarnsWhenUsageIsPartial(t *testing.T) {
+	data := &Data{
+		Runs:  []*github.WorkflowRun{runWithID(1), runWithID(2)},
+		Usage: map[int64]*github.WorkflowRunUsage{1: usageOf(map[string]*github.WorkflowRunBill{})},
+	}
+
+	_, warnings := BuildCostStats(data, DefaultRates)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "usage was available for 1 of 2 workflow runs") {
+		t.Fatalf("BuildCostStats() warnings = %v, want a partial-usage warning", warnings)
 	}
 }
 
 func TestBuildCostStatsUsesZeroForUnknownOS(t *testing.T) {
 	data := &Data{
 		Usage: map[int64]*github.WorkflowRunUsage{
-			1: usageOf(map[string]*github.WorkflowRunBill{"UBUNTU_64_CORE": bill(60_000, 1)}),
+			1: usageOf(map[string]*github.WorkflowRunBill{"UBUNTU_64_CORE": detailedBill(60_000)}),
 		},
 	}
 

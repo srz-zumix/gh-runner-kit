@@ -27,7 +27,9 @@ match a plan or a larger runner, for example --rate ubuntu=0.016.
 
 This command reads the usage of every run, which costs one API request per run, so keep
 --max-runs in mind. The per run job listing is skipped because the report does not need
-it, and completed runs are cached like they are for the other reports.`,
+it, and completed runs are cached like they are for the other reports. Per-job durations
+are rounded up to whole minutes when available; otherwise the aggregate duration is used
+and the report warns that the estimate may be low.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			priceList, err := metricspkg.ParseRates(rates)

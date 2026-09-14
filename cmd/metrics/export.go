@@ -1,9 +1,7 @@
 package metrics
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/internal/kitutil"
@@ -11,9 +9,6 @@ import (
 	"github.com/srz-zumix/go-gh-extension/pkg/cmdflags"
 	"github.com/srz-zumix/go-gh-extension/pkg/render"
 )
-
-// stepSummaryEnv names the file GitHub Actions renders on the run summary page.
-const stepSummaryEnv = "GITHUB_STEP_SUMMARY"
 
 func NewExportCmd() *cobra.Command {
 	var flags kitutil.MetricsFlags
@@ -35,9 +30,9 @@ shows them on the workflow summary page. It is an error to ask for it outside of
 Actions, where that variable is not set.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			summaryPath := os.Getenv(stepSummaryEnv)
-			if summary && summaryPath == "" {
-				return errors.New("--summary requires the " + stepSummaryEnv + " environment variable, which GitHub Actions sets")
+			summaryPath, err := kitutil.ResolveMetricsStepSummary(summary)
+			if err != nil {
+				return err
 			}
 
 			data, err := flags.Collect(cmd)
@@ -70,7 +65,7 @@ Actions, where that variable is not set.`,
 	flags.Add(cmd)
 	// The setup can only fail when the format flag is missing, which flags.Add registers.
 	cobra.CheckErr(cmdflags.SetupFormatFlagWithNonJSONFormats(cmd, &flags.Exporter, &exportFormat, "prometheus", []string{"prometheus"}))
-	cmd.Flags().BoolVar(&summary, "summary", false, "Also append a Markdown report to $"+stepSummaryEnv)
+	cmd.Flags().BoolVar(&summary, "summary", false, "Also append a Markdown report to $"+kitutil.MetricsStepSummaryEnv)
 
 	return cmd
 }

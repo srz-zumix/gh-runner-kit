@@ -47,3 +47,19 @@ func TestResolveConcurrency(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveMetricsStepSummary(t *testing.T) {
+	t.Setenv(MetricsStepSummaryEnv, "/tmp/summary.md")
+
+	if got, err := ResolveMetricsStepSummary(false); err != nil || got != "" {
+		t.Fatalf("ResolveMetricsStepSummary(false) = %q, %v, want empty path and nil error", got, err)
+	}
+	if got, err := ResolveMetricsStepSummary(true); err != nil || got != "/tmp/summary.md" {
+		t.Fatalf("ResolveMetricsStepSummary(true) = %q, %v, want configured path and nil error", got, err)
+	}
+
+	t.Setenv(MetricsStepSummaryEnv, "")
+	if _, err := ResolveMetricsStepSummary(true); err == nil {
+		t.Fatal("ResolveMetricsStepSummary(true) error = nil, want an error without GITHUB_STEP_SUMMARY")
+	}
+}

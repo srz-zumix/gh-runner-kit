@@ -524,6 +524,10 @@ given label are counted, and only the runners that can serve that set.
 Reports the billable time of the collected workflow runs, broken down by
 operating system.
 
+Per-job durations are rounded up to whole minutes when the usage API provides
+them. If only an aggregate duration is available, the command uses it and warns
+that the estimate may be low.
+
 ```bash
 gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
   [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]

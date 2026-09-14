@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/go-github/v90/github"
 )
 
 // DefaultRates lists the per-minute price in USD that GitHub charges for its standard
@@ -26,7 +28,8 @@ type CostRow struct {
 	OS   string
 	Runs int
 	Jobs int
-	// Billable is the time GitHub charges for, which is rounded up per job on its side.
+	// Billable is the estimated time GitHub charges for, rounded up per job when the
+	// usage API provides individual job durations.
 	Billable time.Duration
 	// Rate is the per-minute price applied to Billable.
 	Rate float64
@@ -84,12 +87,15 @@ func ParseRates(overrides []string) (map[string]float64, error) {
 // nothing and the totals describe both the current hosted spend and what moving the same
 // work to self-hosted runners would avoid. It also returns one warning per operating
 // system that has billable time but no known per-minute rate, because such a row is
-// estimated at $0 and would otherwise understate the total silently.
+// estimated at $0 and would otherwise understate the total silently. When the API omits
+// per-job durations, it falls back to the aggregate duration and warns that the result
+// cannot include GitHub's per-job minute rounding.
 func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) {
 	type bucket struct {
-		runs     int
-		jobs     int
-		billable time.Duration
+		runs          int
+		jobs          int
+		billable      time.Duration
+		unroundedRuns int
 	}
 
 	buckets := map[string]*bucket{}
@@ -104,6 +110,7 @@ func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) 
 			}
 			jobs := bill.GetJobs()
 			totalMS := bill.GetTotalMS()
+			jobRuns := bill.GetJobRuns()
 			if jobs <= 0 && totalMS <= 0 {
 				continue
 			}
@@ -115,16 +122,36 @@ func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) 
 			}
 			b.runs++
 			b.jobs += jobs
-			b.billable += time.Duration(totalMS) * time.Millisecond
+			if rounded, ok := roundedJobRunsDuration(jobRuns, jobs, totalMS); ok {
+				if jobs <= 0 {
+					b.jobs += len(jobRuns)
+				}
+				b.billable += rounded
+			} else {
+				b.billable += time.Duration(totalMS) * time.Millisecond
+				b.unroundedRuns++
+			}
 		}
 	}
 
 	rows := make([]CostRow, 0, len(buckets))
 	var warnings []string
+	if len(data.Runs) > len(data.Usage) {
+		warnings = append(warnings, fmt.Sprintf(
+			"cost estimate is partial: usage was available for %d of %d workflow runs",
+			len(data.Usage), len(data.Runs),
+		))
+	}
 	for os, b := range buckets {
 		rate, known := rates[os]
 		if !known && b.billable > 0 {
 			warnings = append(warnings, fmt.Sprintf("no per-minute rate for %q, its billable time is estimated at $0.00; pass --rate %s=PRICE to price it", os, strings.ToLower(os)))
+		}
+		if b.unroundedRuns > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"%q usage omitted per-job durations for %d run(s); aggregate time was used without per-job minute rounding and may understate the cost",
+				os, b.unroundedRuns,
+			))
 		}
 		rows = append(rows, CostRow{
 			OS:       os,
@@ -144,4 +171,37 @@ func BuildCostStats(data *Data, rates map[string]float64) ([]CostRow, []string) 
 		return cmp.Compare(a.OS, b.OS)
 	})
 	return rows, warnings
+}
+
+func roundedJobRunsDuration(jobRuns []*github.WorkflowRunJobRun, jobs int, totalMS int64) (time.Duration, bool) {
+	if len(jobRuns) == 0 || (jobs > 0 && len(jobRuns) != jobs) {
+		return 0, false
+	}
+
+	var (
+		rawMS   int64
+		rounded time.Duration
+	)
+	for _, jobRun := range jobRuns {
+		if jobRun == nil || jobRun.DurationMS == nil {
+			return 0, false
+		}
+		rawMS += jobRun.GetDurationMS()
+		rounded += roundedBillableDuration(jobRun.GetDurationMS())
+	}
+	if totalMS > 0 && rawMS == 0 {
+		return 0, false
+	}
+	return rounded, true
+}
+
+func roundedBillableDuration(milliseconds int64) time.Duration {
+	if milliseconds <= 0 {
+		return 0
+	}
+	minutes := milliseconds / int64(time.Minute/time.Millisecond)
+	if milliseconds%int64(time.Minute/time.Millisecond) != 0 {
+		minutes++
+	}
+	return time.Duration(minutes) * time.Minute
 }

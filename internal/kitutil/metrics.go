@@ -1,7 +1,9 @@
 package kitutil
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -12,6 +14,9 @@ import (
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 )
+
+// MetricsStepSummaryEnv names the file GitHub Actions renders on the run summary page.
+const MetricsStepSummaryEnv = "GITHUB_STEP_SUMMARY"
 
 // MetricsFlags carries the options shared by every metrics subcommand.
 type MetricsFlags struct {
@@ -96,6 +101,19 @@ func (m *MetricsFlags) ResolveCapacity(targetWait string, targetUtilization floa
 		return 0, err
 	}
 	return wait, nil
+}
+
+// ResolveMetricsStepSummary returns the GitHub Actions step-summary path when the
+// summary export is enabled.
+func ResolveMetricsStepSummary(enabled bool) (string, error) {
+	if !enabled {
+		return "", nil
+	}
+	path := os.Getenv(MetricsStepSummaryEnv)
+	if path == "" {
+		return "", errors.New("--summary requires the " + MetricsStepSummaryEnv + " environment variable, which GitHub Actions sets")
+	}
+	return path, nil
 }
 
 // WarnMetricsWarnings emits the collection warnings to stderr without writing anything to

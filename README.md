@@ -369,7 +369,7 @@ GitHub only bills the jobs it hosted, so self-hosted jobs contribute nothing to 
 
 `EST COST` multiplies the billable minutes by the per-minute price of the operating system. The defaults are the public prices of the standard two core runners (`UBUNTU` `0.008`, `WINDOWS` `0.016`, `MACOS` `0.08` USD), so pass `--rate` to match a plan or a larger runner, for example `--rate ubuntu=0.016`.
 
-This command reads the usage of every run, which costs one API request per run, so keep `--max-runs` in mind. The per run job listing is skipped because the report does not need it, and completed runs are cached like they are for the other reports.
+This command reads the usage of every run, which costs one API request per run, so keep `--max-runs` in mind. The per run job listing is skipped because the report does not need it, and completed runs are cached like they are for the other reports. Per-job durations are rounded up to whole minutes when available; otherwise the aggregate duration is used and the report warns that the estimate may be low.
 
 Options:
 
