@@ -231,6 +231,39 @@ func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) erro
 	return t.Render()
 }
 
+// RenderMetricsJobs prints one line per collected job.
+func RenderMetricsJobs(r *render.Renderer, rows []metrics.JobRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"REPO", "WORKFLOW", "JOB", "RUNNER", "LABELS", "STATUS", "QUEUED", "WAIT", "DURATION"})
+	for _, row := range rows {
+		// A job that never started, or never finished, has no measurement to show rather
+		// than a zero that would read as an instant pickup.
+		wait := "-"
+		if row.StartedAt != nil {
+			wait = FormatMeasuredDuration(row.Wait)
+		}
+		duration := "-"
+		if row.CompletedAt != nil {
+			duration = FormatMeasuredDuration(row.Duration)
+		}
+		t.Append([]string{
+			FormatOptional(row.Repo),
+			FormatOptional(row.Workflow),
+			row.JobName,
+			FormatOptional(row.RunnerName),
+			row.LabelSet(),
+			row.Status,
+			FormatOptionalTime(row.QueuedAt),
+			wait,
+			duration,
+		})
+	}
+	return t.Render()
+}
+
 // WriteMetricsFooter states which window the numbers cover and whether they are based
 // on incomplete data, so that a truncated report is never mistaken for a full one.
 func WriteMetricsFooter(r *render.Renderer, w metrics.Window, runs int, truncated bool, warnings []string) {
@@ -294,6 +327,14 @@ func FormatTime(t time.Time) string {
 		return "-"
 	}
 	return t.Format(time.RFC3339)
+}
+
+// FormatOptionalTime renders a timestamp GitHub may never have recorded.
+func FormatOptionalTime(t *time.Time) string {
+	if t == nil {
+		return "-"
+	}
+	return FormatTime(*t)
 }
 
 // FormatOptional renders a string, or a dash when it is empty, so a missing value is not

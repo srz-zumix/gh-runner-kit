@@ -1,6 +1,6 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including Prometheus and step summary output.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including the unaggregated job listing, Prometheus and step summary output.
 ---
 
 # gh-runner-kit
@@ -53,6 +53,7 @@ gh runner-kit                # Root command
 │   ├── concurrency           # Jobs running at the same time, per time bucket
 │   ├── cost                  # Billable time of the GitHub-hosted jobs, per OS
 │   ├── export                # Prometheus or step summary output for monitoring
+│   ├── jobs                  # The collected jobs, one row each, unaggregated
 │   ├── label                 # Demand and supply per single label
 │   ├── queue                 # Wait time per runs-on label set
 │   ├── runner                # Activity per runner, label set or group
@@ -575,6 +576,44 @@ labels; per label set gauges carry `labels="..."` and per label gauges carry
 `--summary` fails when `$GITHUB_STEP_SUMMARY` is not set, which is the case
 outside GitHub Actions.
 
+### metrics jobs
+
+Lists every job the metrics were aggregated from, one row each, so a downstream
+tool can group them on an axis the aggregated reports do not offer, such as the
+busy timeline of a single runner.
+
+```bash
+gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... \
+  [--kind all|self-hosted|github-hosted] \
+  [--limit N] [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--exclude-runner` | - | Drop the jobs that ran on this runner name, repeatable, combined with OR, accepting a `*` wildcard and winning over `--runner` |
+| `--format` | `json` | Output format: `json`, `ndjson` or `table` |
+| `--kind` | `all` | Keep only the jobs of this runner kind |
+| `--label` | all label sets | Keep only the jobs requesting this label, repeatable and combined with AND |
+| `--limit` | `0` | Stop after this many rows, counted after the filters |
+| `--runner` | all runners | Keep only the jobs that ran on this runner name, repeatable, combined with OR and accepting a `*` wildcard |
+
+Table columns: `REPO`, `WORKFLOW`, `JOB`, `RUNNER`, `LABELS`, `STATUS`,
+`QUEUED`, `WAIT`, `DURATION`.
+
+The rows come from the same collection and the same local job cache the other
+`metrics` subcommands use, so this issues **no extra API request** when it
+follows one of them over the same window. Timestamps are exported as RFC3339 or
+`null`, and `Wait` and `Duration` as nanoseconds. Unlike the aggregated reports
+the listing keeps the jobs that were skipped and the jobs that never started,
+and only the check runs apps publish alongside the jobs are left out.
+`--kind self-hosted` also keeps the jobs whose runner could not be identified.
+
+`--format ndjson` writes one JSON object per line, which is what a large listing
+should use. `--jq` and `--template` require an explicit `--format json`.
+Use `--exclude-runner` to drop a noisy runner from the listing, for example
+`--runner 'i-0*' --exclude-runner 'i-0deadbeef*'`.
+
 ### metrics label
 
 Matches the labels the jobs requested against the labels the registered runners
@@ -927,6 +966,20 @@ gh runner-kit metrics export --owner my-org --all-repos --days 1 > fleet.prom
 gh runner-kit metrics export --repo my-org/app --days 7 --summary > /dev/null
 ```
 
+### Rebuild an axis the reports do not cover
+
+```bash
+# Every self-hosted job as NDJSON, ready to be grouped downstream
+gh runner-kit metrics jobs --owner my-org --days 7 --kind self-hosted --format ndjson > jobs.ndjson
+
+# Busy timeline of a single runner, reusing the cache the other reports filled
+gh runner-kit metrics jobs --repo my-org/app --days 7 --runner 'i-0*' --format ndjson
+
+# Longest jobs of one runs-on label set
+gh runner-kit metrics jobs --owner my-org --days 7 --label self-hosted --label gpu --format json \
+  -q 'sort_by(-.Duration) | .[:10] | .[] | {JobName, RunnerName, Duration}'
+```
+
 ### Find the workflows that cost the fleet the most
 
 ```bash
@@ -972,7 +1025,11 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics cost` is much slower than the other reports | It reads the usage of every run, one API request each. Lower `--max-runs`, or rely on the cache by keeping the same window. |
 | `invalid rate "...", expected the OS=PRICE format` | `--rate` takes one `OS=PRICE` pair per occurrence, such as `--rate ubuntu=0.008`. |
 | `--summary requires the GITHUB_STEP_SUMMARY environment variable` | `--summary` only works inside GitHub Actions, which sets that variable. |
-| `cannot use --jq without specifying --format json` | `--jq` and `--template` only apply to JSON. `metrics export` defaults to `--format prometheus`. |
+| `cannot use --jq without specifying --format json` | `--jq` and `--template` only apply to JSON. `metrics export` defaults to `--format prometheus`, and `metrics jobs` needs an explicit `--format json` even though JSON is its default. |
+| `metrics jobs --kind self-hosted` lists more rows than `metrics summary` reports as `JOBS` | The listing keeps the skipped and the unfinished jobs the aggregated reports drop. Filter them out downstream on `Conclusion` and `Status`. |
+| `metrics jobs` lists rows with an empty `RUNNER` | GitHub did not record the runner for those jobs. They are kept as collected, so a downstream tool can decide what to do with them. |
+| `metrics jobs` returns an enormous document | `--format json` buffers the whole listing. Use `--format ndjson` and narrow the scope with `--label`, `--runner`, `--exclude-runner`, `--limit` or `--max-runs`. |
+| `invalid --runner pattern "..."` | The pattern is matched with shell-style globbing, so an unclosed `[` is rejected. Use a plain `*` wildcard. The same applies to `--exclude-runner`. |
 | `metrics workflow` shows `RETRY 0.0%` although jobs were re-run | Only whole-run restarts are visible. Re-running a single job stays inside the same attempt and cannot be detected. |
 | `metrics workflow` counts more jobs than the other reports | It includes GitHub-hosted jobs by default. Pass `--self-hosted-only`. |
 | Labels are not restored by `uncordon` | `--label-prefix` differs from the value used for `cordon`. |
