@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/go-github/v90/github"
@@ -129,6 +130,18 @@ func matchesAnyRunnerPattern(patterns []string, name string) bool {
 	return false
 }
 
+// normalizeRunnerName drops the runner ID GitHub appends to the name of its own hosted
+// runners, so that every hosted job reports the same runner instead of one name per
+// machine. The ID is only dropped when the name is exactly the hosted prefix followed by
+// it, which leaves a self-hosted name that happens to end in a number untouched, and it
+// stays available in RunnerID.
+func normalizeRunnerName(name string, id int64) string {
+	if id != 0 && name == hostedRunnerGroup+" "+strconv.FormatInt(id, 10) {
+		return hostedRunnerGroup
+	}
+	return name
+}
+
 // BuildJobRows turns the collected jobs into one row each, ordered by the instant they
 // started so that the same collection always produces the same listing. Unlike the
 // aggregated reports it keeps the jobs that were skipped and the jobs that have not
@@ -164,7 +177,8 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 		if len(filter) > 0 && !MatchesRunner(filter, raw.Labels) {
 			continue
 		}
-		if !opts.matchRunner(raw.GetRunnerName()) {
+		runnerName := normalizeRunnerName(raw.GetRunnerName(), raw.GetRunnerID())
+		if !opts.matchRunner(runnerName) {
 			continue
 		}
 
@@ -187,7 +201,7 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 			Labels:       raw.Labels,
 			Kind:         kind,
 			RunnerID:     raw.GetRunnerID(),
-			RunnerName:   raw.GetRunnerName(),
+			RunnerName:   runnerName,
 			RunnerGroup:  raw.GetRunnerGroupName(),
 			Status:       raw.GetStatus(),
 			Conclusion:   raw.GetConclusion(),

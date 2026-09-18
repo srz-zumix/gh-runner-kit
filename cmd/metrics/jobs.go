@@ -49,6 +49,10 @@ way the other reports count them as fleet activity.
 --runner selects the runner names to keep and --exclude-runner the ones to drop, the
 latter winning when a name matches both.
 
+GitHub names its own hosted runners after their runner ID, which would give every hosted
+job a runner of its own. The ID is dropped from RUNNER, leaving every hosted job on
+"GitHub Actions", and stays available as RunnerID.
+
 The output is large: a busy organization produces hundreds of thousands of rows over the
 default window. Prefer --format ndjson to consume it row by row, and narrow it with
 --label, --runner, --exclude-runner or --limit.`,

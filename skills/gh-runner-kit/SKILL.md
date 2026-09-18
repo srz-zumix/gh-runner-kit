@@ -614,6 +614,12 @@ should use. `--jq` and `--template` require an explicit `--format json`.
 Use `--exclude-runner` to drop a noisy runner from the listing, for example
 `--runner 'i-0*' --exclude-runner 'i-0deadbeef*'`.
 
+GitHub names its own hosted runners after their runner ID, such as
+`GitHub Actions 1000299771`. The ID is dropped from `RunnerName`, so every hosted
+job reports `GitHub Actions` and `--exclude-runner 'GitHub Actions'` drops them
+all. The ID stays available as `RunnerID`, and a self-hosted name that happens to
+end in a number is left untouched.
+
 ### metrics label
 
 Matches the labels the jobs requested against the labels the registered runners

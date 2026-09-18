@@ -129,6 +129,49 @@ func TestBuildJobRowsFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeRunnerName(t *testing.T) {
+	cases := []struct {
+		name     string
+		runner   string
+		runnerID int64
+		want     string
+	}{
+		{"hosted name drops the id", "GitHub Actions 1000299771", 1000299771, "GitHub Actions"},
+		{"a different id is not the hosted form", "GitHub Actions 1000299771", 42, "GitHub Actions 1000299771"},
+		{"self-hosted name ending in a number is kept", "runner-1", 1, "runner-1"},
+		{"unknown runner", "", 0, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeRunnerName(tc.runner, tc.runnerID); got != tc.want {
+				t.Fatalf("normalizeRunnerName(%q, %d) = %q, want %q", tc.runner, tc.runnerID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildJobRowsNormalizesHostedRunnerName(t *testing.T) {
+	data := testData()
+	for _, job := range data.Jobs {
+		if job.GetName() == "deploy" {
+			job.RunnerID = github.Ptr(int64(1000299771))
+			job.RunnerName = github.Ptr("GitHub Actions 1000299771")
+		}
+	}
+
+	rows := BuildJobRows(data, JobRowOptions{Kind: JobKindFilterHosted})
+	if len(rows) != 1 {
+		t.Fatalf("len(BuildJobRows()) = %d, want 1", len(rows))
+	}
+	if got, want := rows[0].RunnerName, "GitHub Actions"; got != want {
+		t.Fatalf("RunnerName = %q, want %q", got, want)
+	}
+	if got, want := rows[0].RunnerID, int64(1000299771); got != want {
+		t.Fatalf("RunnerID = %d, want %d (the id stays available)", got, want)
+	}
+}
+
 func TestBuildJobRowsKeepsSkippedJobsAndDropsCheckRuns(t *testing.T) {
 	rows := BuildJobRows(testData(), JobRowOptions{})
 

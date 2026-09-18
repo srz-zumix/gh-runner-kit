@@ -447,6 +447,8 @@ Unlike the aggregated reports the listing keeps the jobs that were skipped and t
 
 `--runner` selects the runner names to keep and `--exclude-runner` the ones to drop, the latter winning when a name matches both.
 
+GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
+
 The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`.
 
 Options:
