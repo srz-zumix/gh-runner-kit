@@ -132,11 +132,13 @@ func matchesAnyRunnerPattern(patterns []string, name string) bool {
 
 // normalizeRunnerName drops the runner ID GitHub appends to the name of its own hosted
 // runners, so that every hosted job reports the same runner instead of one name per
-// machine. The ID is only dropped when the name is exactly the hosted prefix followed by
-// it, which leaves a self-hosted name that happens to end in a number untouched, and it
-// stays available in RunnerID.
-func normalizeRunnerName(name string, id int64) string {
-	if id != 0 && name == hostedRunnerGroup+" "+strconv.FormatInt(id, 10) {
+// machine. It only rewrites jobs classified as hosted, so a self-hosted runner that is
+// deliberately named after its own registration ID keeps its name, and the ID is only
+// dropped when the name is exactly the hosted prefix followed by it, which leaves a
+// self-hosted name that happens to end in a number untouched. The ID stays available in
+// RunnerID.
+func normalizeRunnerName(kind JobKind, name string, id int64) string {
+	if kind == JobKindHosted && id != 0 && name == hostedRunnerGroup+" "+strconv.FormatInt(id, 10) {
 		return hostedRunnerGroup
 	}
 	return name
@@ -177,7 +179,7 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 		if len(filter) > 0 && !MatchesRunner(filter, raw.Labels) {
 			continue
 		}
-		runnerName := normalizeRunnerName(raw.GetRunnerName(), raw.GetRunnerID())
+		runnerName := normalizeRunnerName(kind, raw.GetRunnerName(), raw.GetRunnerID())
 		if !opts.matchRunner(runnerName) {
 			continue
 		}

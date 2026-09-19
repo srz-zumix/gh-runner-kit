@@ -43,9 +43,9 @@
 
 * ディレクトリ・ファイル構成は以下の責務分割に従うこと
   * cmd/: CLIコマンド定義・引数/フラグ処理・cobra.Command生成のみを担当し、ビジネスロジックは持たない
-    * cmd/直下に主要コマンド（create.go, delete.go, diff.go, get.go, list.go, member.go, move.go, org.go, rename.go, repo.go, root.go, tree.go, update.go, user.go など）を配置
-    * cmd/member/, cmd/org/, cmd/repo/, cmd/user/ などのサブディレクトリに、各コマンドのサブコマンドを配置
-    * サブディレクトリ内にもさらに role/, sets/, sync/ などの細分化されたコマンドを配置する場合がある
+    * cmd/直下に主要コマンドを配置
+    * cmd/のサブディレクトリに、各コマンドのサブコマンドを配置
+    * サブディレクトリ内にもさらに細分化されたコマンドを配置する場合がある
   * go-gh-extension/pkg: 共通パッケージ群
     * actions/: GitHub Actions関連のユーティリティ
     * cmdflags/: コマンドラインフラグの共通処理

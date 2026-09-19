@@ -132,22 +132,50 @@ func TestBuildJobRowsFields(t *testing.T) {
 func TestNormalizeRunnerName(t *testing.T) {
 	cases := []struct {
 		name     string
+		kind     JobKind
 		runner   string
 		runnerID int64
 		want     string
 	}{
-		{"hosted name drops the id", "GitHub Actions 1000299771", 1000299771, "GitHub Actions"},
-		{"a different id is not the hosted form", "GitHub Actions 1000299771", 42, "GitHub Actions 1000299771"},
-		{"self-hosted name ending in a number is kept", "runner-1", 1, "runner-1"},
-		{"unknown runner", "", 0, ""},
+		{"hosted name drops the id", JobKindHosted, "GitHub Actions 1000299771", 1000299771, "GitHub Actions"},
+		{"a different id is not the hosted form", JobKindHosted, "GitHub Actions 1000299771", 42, "GitHub Actions 1000299771"},
+		{"self-hosted name ending in a number is kept", JobKindSelfHosted, "runner-1", 1, "runner-1"},
+		{"self-hosted runner named after its own id is kept", JobKindSelfHosted, "GitHub Actions 42", 42, "GitHub Actions 42"},
+		{"unknown runner named after its own id is kept", JobKindUnknown, "GitHub Actions 42", 42, "GitHub Actions 42"},
+		{"unknown runner", JobKindUnknown, "", 0, ""},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := normalizeRunnerName(tc.runner, tc.runnerID); got != tc.want {
-				t.Fatalf("normalizeRunnerName(%q, %d) = %q, want %q", tc.runner, tc.runnerID, got, tc.want)
+			if got := normalizeRunnerName(tc.kind, tc.runner, tc.runnerID); got != tc.want {
+				t.Fatalf("normalizeRunnerName(%q, %q, %d) = %q, want %q", tc.kind, tc.runner, tc.runnerID, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildJobRowsKeepsSelfHostedNameMatchingHostedForm(t *testing.T) {
+	data := testData()
+	// runner-a is registered as a self-hosted runner with ID 1, so a job it ran keeps
+	// its name even when the operator named the runner after its own registration ID.
+	for _, job := range data.Jobs {
+		if job.GetName() == "build" {
+			job.RunnerName = github.Ptr("GitHub Actions 1")
+		}
+	}
+
+	rows := BuildJobRows(data, JobRowOptions{Runners: []string{"GitHub Actions 1"}})
+	if len(rows) != 1 {
+		t.Fatalf("len(BuildJobRows()) = %d, want 1", len(rows))
+	}
+	if got, want := rows[0].JobName, "build"; got != want {
+		t.Fatalf("JobName = %q, want %q", got, want)
+	}
+	if got, want := rows[0].Kind, JobKindSelfHosted; got != want {
+		t.Fatalf("Kind = %q, want %q", got, want)
+	}
+	if got, want := rows[0].RunnerName, "GitHub Actions 1"; got != want {
+		t.Fatalf("RunnerName = %q, want %q (a self-hosted name is left unchanged)", got, want)
 	}
 }
 
