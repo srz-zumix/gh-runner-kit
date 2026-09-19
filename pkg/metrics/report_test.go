@@ -56,8 +56,6 @@ func testData() *Data {
 			testJob("lint", 2, "runner-b", []string{"self-hosted", "linux"}, "success", 0, 10, 20),
 			testJob("deploy", 0, "", []string{"ubuntu-latest"}, "success", 0, 1, 41),
 			testJob("docs", 0, "", []string{"self-hosted", "linux"}, "skipped", 0, 0, 0),
-			// A check run published by an app, which the jobs API returns without labels.
-			testJob("actionlint", 0, "", nil, "success", 5, 5, 5),
 		},
 		Repos: []repository.Repository{{Host: "github.com", Owner: "octo", Name: "demo"}},
 	}
@@ -81,7 +79,7 @@ func TestNewJobs(t *testing.T) {
 	jobs := NewJobs(testData())
 
 	if got, want := len(jobs), 4; got != want {
-		t.Fatalf("len(NewJobs()) = %d, want %d (skipped jobs, unfinished jobs and check runs are dropped)", got, want)
+		t.Fatalf("len(NewJobs()) = %d, want %d (skipped and unfinished jobs are dropped)", got, want)
 	}
 
 	build := jobs[0]

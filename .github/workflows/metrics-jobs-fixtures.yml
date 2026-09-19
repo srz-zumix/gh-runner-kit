@@ -1,0 +1,118 @@
+name: Metrics jobs fixtures
+
+# Publishes the entries the Actions jobs API returns without runs-on labels, a check run
+# and a skipped job, so that metrics jobs can be checked against a real payload instead of
+# a hand-written fixture.
+on:
+  workflow_dispatch:
+    inputs:
+      run_skipped_job:
+        description: 'Let the skipped_job fixture run instead of being skipped'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/metrics-jobs-fixtures.yml'
+      - 'pkg/metrics/job_rows.go'
+
+permissions: {}
+
+env:
+  CHECK_RUN_NAME: metrics-jobs-check-run-fixture
+
+jobs:
+  publish_check_run:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Publish a check run into the check suite of this workflow run
+        run: |
+          set -euo pipefail
+          # The check suite is keyed on the commit the workflow run itself reports, not
+          # on the merge commit GITHUB_SHA may point at.
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.head_sha')"
+          gh api "repos/${GITHUB_REPOSITORY}/check-runs" --method POST \
+            -f "name=${CHECK_RUN_NAME}" \
+            -f "head_sha=${head_sha}" \
+            -f 'status=completed' \
+            -f 'conclusion=neutral' \
+            -f 'output[title]=metrics jobs fixture' \
+            -f 'output[summary]=A check run carrying no runs-on labels, published so that metrics jobs can be compared against the jobs endpoint.'
+
+  skipped_job:
+    # Skipped by default, which is how the jobs API comes to report it without runs-on
+    # labels. Run it from the input to compare the two payloads.
+    if: ${{ inputs.run_skipped_job }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+
+  verify:
+    needs: [publish_check_run, skipped_job]
+    if: ${{ always() && needs.publish_check_run.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -o gh-runner-kit
+
+      - name: Read the jobs endpoint of this run
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '.jobs[] | "\(.name)\tconclusion=\(.conclusion)\tlabels=\(.labels)"'
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '.jobs[].name' | sort > returned.txt
+
+      - name: List the jobs of this run through metrics jobs
+        run: |
+          set -euo pipefail
+          ./gh-runner-kit metrics jobs -R "${GITHUB_REPOSITORY}" \
+            --workflow metrics-jobs-fixtures.yml --days 1 --no-cache \
+            --format json --jq ".[] | select(.RunID == ${GITHUB_RUN_ID}) | .JobName" \
+            | sort > listed.txt
+          cat listed.txt
+
+      - name: Assert metrics jobs lists every entry the endpoint returned
+        run: |
+          set -euo pipefail
+          if ! diff -u returned.txt listed.txt; then
+            echo "::error::metrics jobs and the jobs endpoint disagree"
+            exit 1
+          fi
+
+      - name: Assert the skipped job is kept
+        if: ${{ !inputs.run_skipped_job }}
+        run: |
+          set -euo pipefail
+          if ! grep -Fxq 'skipped_job' listed.txt; then
+            echo "::error::metrics jobs dropped the skipped job"
+            exit 1
+          fi
+
+      - name: Report whether the endpoint returned the check run
+        run: |
+          set -euo pipefail
+          if grep -Fxq "${CHECK_RUN_NAME}" returned.txt; then
+            echo "The jobs endpoint returns the check runs published into the check suite of the run."
+          else
+            echo "The jobs endpoint ignores the check runs published into the check suite of the run."
+          fi

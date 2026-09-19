@@ -605,8 +605,8 @@ The rows come from the same collection and the same local job cache the other
 `metrics` subcommands use, so this issues **no extra API request** when it
 follows one of them over the same window. Timestamps are exported as RFC3339 or
 `null`, and `Wait` and `Duration` as nanoseconds. Unlike the aggregated reports
-the listing keeps the jobs that were skipped and the jobs that never started,
-and only the check runs apps publish alongside the jobs are left out.
+the listing keeps the jobs that were skipped and the jobs that never started, so
+it shows every job the workflow-run jobs endpoint returned.
 `--kind self-hosted` also keeps the jobs whose runner could not be identified.
 
 `--format ndjson` writes one JSON object per line, which is what a large listing

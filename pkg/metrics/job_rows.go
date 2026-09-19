@@ -148,8 +148,7 @@ func normalizeRunnerName(kind JobKind, name string, id int64) string {
 // started so that the same collection always produces the same listing. Unlike the
 // aggregated reports it keeps the jobs that were skipped and the jobs that have not
 // finished yet, reporting their missing timestamps as unset, because a listing exists to
-// show what was collected. Only the check runs apps publish alongside the jobs are left
-// out, because they are not jobs at all.
+// show every job the workflow-run jobs endpoint returned.
 func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 	filter := NormalizeLabelSet(opts.Labels)
 	runnerIDs := data.SelfHostedRunnerIDs()
@@ -163,13 +162,6 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 
 	rows := make([]JobRow, 0, len(data.Jobs))
 	for _, raw := range data.Jobs {
-		// Check runs published by apps share the check suite of the workflow run, so the
-		// jobs API returns them too. They carry no runs-on labels, which every real job
-		// has. See NewJobs.
-		if len(raw.Labels) == 0 {
-			continue
-		}
-
 		kind := ClassifyJob(raw, runnerIDs)
 		if !opts.matchKind(kind) {
 			continue

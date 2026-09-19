@@ -200,23 +200,53 @@ func TestBuildJobRowsNormalizesHostedRunnerName(t *testing.T) {
 	}
 }
 
-func TestBuildJobRowsKeepsSkippedJobsAndDropsCheckRuns(t *testing.T) {
-	rows := BuildJobRows(testData(), JobRowOptions{})
+// skippedNoLabelJobData adds a job that was skipped before it acquired a runner, which
+// the workflow-run jobs endpoint returns without runs-on labels and without a runner.
+func skippedNoLabelJobData() *Data {
+	data := testData()
+	data.Jobs = append(data.Jobs, &github.WorkflowJob{
+		ID:          github.Ptr(int64(88)),
+		RunID:       github.Ptr(int64(1)),
+		Name:        github.Ptr("publish"),
+		Status:      github.Ptr("completed"),
+		Conclusion:  github.Ptr("skipped"),
+		RunnerName:  github.Ptr(""),
+		Labels:      nil,
+		CreatedAt:   github.Ptr(ts(5)),
+		StartedAt:   github.Ptr(ts(5)),
+		CompletedAt: github.Ptr(ts(5)),
+	})
+	return data
+}
 
-	var skipped, checkRun bool
-	for _, row := range rows {
-		switch row.JobName {
-		case "docs":
-			skipped = true
-		case "actionlint":
-			checkRun = true
-		}
+func TestBuildJobRowsKeepsSkippedLabelLessJobs(t *testing.T) {
+	cases := []struct {
+		name string
+		opts JobRowOptions
+		want bool
+	}{
+		{"listed by default", JobRowOptions{}, true},
+		{"kept as an unknown runner", JobRowOptions{Kind: JobKindFilterSelfHosted}, true},
+		{"dropped when only github-hosted jobs are kept", JobRowOptions{Kind: JobKindFilterHosted}, false},
+		{"dropped by a label filter it cannot satisfy", JobRowOptions{Labels: []string{"linux"}}, false},
 	}
-	if !skipped {
-		t.Fatalf("BuildJobRows() = %v, want the skipped job to be listed", jobNames(rows))
-	}
-	if checkRun {
-		t.Fatalf("BuildJobRows() = %v, want the check run to be dropped", jobNames(rows))
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var row *JobRow
+			for _, r := range BuildJobRows(skippedNoLabelJobData(), tc.opts) {
+				if r.JobName == "publish" {
+					found := r
+					row = &found
+				}
+			}
+			if tc.want != (row != nil) {
+				t.Fatalf("publish present = %v, want %v", row != nil, tc.want)
+			}
+			if row != nil && row.Kind != JobKindUnknown {
+				t.Fatalf("Kind = %q, want %q (a job without a runner is unknown)", row.Kind, JobKindUnknown)
+			}
+		})
 	}
 }
 

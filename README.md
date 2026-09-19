@@ -441,7 +441,7 @@ The rows come from the same collection and the same local job cache the other `m
 
 `QUEUED`, `STARTED` and `COMPLETED` are the timestamps GitHub recorded; `WAIT` is the time between the first two and `DURATION` the time between the last two. A job that never started has no `STARTED`, no `COMPLETED` and no `DURATION`.
 
-Unlike the aggregated reports the listing keeps the jobs that were skipped and the jobs that have not finished yet, so that it shows everything that was collected. Only the check runs apps publish alongside the jobs are left out, because they are not jobs.
+Unlike the aggregated reports the listing keeps the jobs that were skipped and the jobs that have not finished yet, so that it shows every job the workflow-run jobs endpoint returned, including the ones that never occupied a runner.
 
 `--kind self-hosted` also keeps the jobs whose runner could not be identified, the same way the other reports count them as fleet activity.
 
