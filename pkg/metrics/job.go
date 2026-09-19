@@ -51,9 +51,8 @@ func NewJobs(data *Data) []Job {
 			continue
 		}
 
-		// A job that never occupied a runner carries no runs-on labels. The aggregate
-		// reports measure runner demand, so such a record contributes nothing to them
-		// and is left out; the skipped and unfinished jobs are already dropped above.
+		// A reusable workflow call the caller never entered carries no runs-on labels,
+		// so it never occupied a runner and adds nothing to the reports.
 		if len(raw.Labels) == 0 {
 			continue
 		}
