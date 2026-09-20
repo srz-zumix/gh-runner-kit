@@ -44,7 +44,7 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 	AddTypeFlag(cmd, &m.Type)
 	f.IntVar(&m.Days, "days", metrics.DefaultDays, "Aggregate over the last N days")
 	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (cannot be used with --days)")
-	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per scope (0 for no limit)")
+	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per repository (0 for no limit)")
 	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of per-run API requests to issue in parallel")
 	f.StringVar(&m.Branch, "branch", "", "Keep only the workflow runs of this branch")
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")

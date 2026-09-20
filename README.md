@@ -310,7 +310,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -347,7 +347,7 @@ Options:
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -382,7 +382,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
@@ -405,6 +405,8 @@ The default `--format prometheus` writes a Prometheus text exposition to standar
 
 `--summary` additionally appends a Markdown version of the report to the file named by `$GITHUB_STEP_SUMMARY`, so the numbers show up on the workflow run page. It fails outside GitHub Actions, where that variable is not set.
 
+The report also carries the per-repository coverage of the collection, as `Repos[].Runs` and `Repos[].Truncated` in JSON and as the `repository_runs` and `repository_truncated` series in Prometheus. Under `--all-repos` this is what tells a quiet repository apart from one whose collection `--max-runs` cut short.
+
 Jobs that ran on GitHub-hosted runners are excluded from the job metrics.
 
 Options:
@@ -418,7 +420,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | `prometheus` | Output format: `{json\|prometheus}` |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires `--format json` |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -466,7 +468,7 @@ Options:
 | `--kind` | `all` | Keep only the jobs of this runner kind: `{all\|self-hosted\|github-hosted}` |
 | `--label` | all label sets | Keep only the jobs requesting this label. Repeatable, and a job must carry every one of them |
 | `--limit` | `0` | Stop after this many rows, counted after the filters. `0` keeps every row |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -503,7 +505,7 @@ Options:
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `--include-unused` | `false` | List the labels no job requested in the window |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -536,7 +538,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -570,7 +572,7 @@ Options:
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `--group-by` | `name` | Aggregate the jobs by this key: `{name\|label\|group}` |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -592,7 +594,7 @@ The runner counts describe the fleet right now, because the API keeps no history
 
 Wait time is measured from the moment a job was created until it started, so it also includes the time the job spent waiting on `needs` dependencies and concurrency groups. Utilization divides the total busy time by the window length multiplied by the number of registered runners, and the failure rate counts failed and timed out jobs against the jobs that produced a pass or fail outcome.
 
-Check runs published by apps share the check suite of a workflow run, so the jobs API returns them alongside the real jobs. They carry no `runs-on` labels and never occupied a runner, so they are excluded.
+Skipped jobs never occupied a runner and are excluded, together with the label-less entries the jobs API returns for a skipped reusable workflow call. `metrics jobs` lists them.
 
 The footer always states the window and the number of runs the report is based on.
 
@@ -607,7 +609,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -642,7 +644,7 @@ Options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |

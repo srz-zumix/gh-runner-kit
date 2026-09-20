@@ -28,18 +28,21 @@ type Summary struct {
 	FailureRate     float64
 	PeakConcurrency int
 	Truncated       bool
-	Warnings        []string
+	// TruncatedRepos counts the repositories the run limit cut short.
+	TruncatedRepos int
+	Warnings       []string
 }
 
 // BuildSummary aggregates data into the fleet overview.
 func BuildSummary(data *Data) Summary {
 	summary := Summary{
-		Window:    data.Window,
-		Repos:     len(data.Repos),
-		Runners:   len(data.Runners),
-		Runs:      len(data.Runs),
-		Truncated: data.Truncated,
-		Warnings:  data.Warnings,
+		Window:         data.Window,
+		Repos:          len(data.Repos),
+		Runners:        len(data.Runners),
+		Runs:           len(data.Runs),
+		Truncated:      data.Truncated,
+		TruncatedRepos: data.TruncatedRepos(),
+		Warnings:       data.Warnings,
 	}
 
 	for _, runner := range data.Runners {

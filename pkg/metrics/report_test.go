@@ -57,7 +57,7 @@ func testData() *Data {
 			testJob("deploy", 0, "", []string{"ubuntu-latest"}, "success", 0, 1, 41),
 			testJob("docs", 0, "", []string{"self-hosted", "linux"}, "skipped", 0, 0, 0),
 		},
-		Repos: []repository.Repository{{Host: "github.com", Owner: "octo", Name: "demo"}},
+		Repos: []RepoCoverage{{Repository: repository.Repository{Host: "github.com", Owner: "octo", Name: "demo"}, Runs: 1}},
 	}
 }
 

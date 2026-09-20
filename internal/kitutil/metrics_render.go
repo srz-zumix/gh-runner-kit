@@ -41,7 +41,7 @@ func RenderMetricsSummary(r *render.Renderer, s metrics.Summary) error {
 		return err
 	}
 
-	WriteMetricsFooter(r, s.Window, s.Runs, s.Truncated, s.Warnings)
+	WriteMetricsFooter(r, s.Window, s.Runs, s.TruncatedRepos, s.Warnings)
 	return nil
 }
 
@@ -266,13 +266,16 @@ func RenderMetricsJobs(r *render.Renderer, rows []metrics.JobRow) error {
 
 // WriteMetricsFooter states which window the numbers cover and whether they are based
 // on incomplete data, so that a truncated report is never mistaken for a full one.
-func WriteMetricsFooter(r *render.Renderer, w metrics.Window, runs int, truncated bool, warnings []string) {
+func WriteMetricsFooter(r *render.Renderer, w metrics.Window, runs, truncatedRepos int, warnings []string) {
 
 	r.WriteLine("")
 	r.WriteLine(fmt.Sprintf("Window: %s - %s (%s), runs: %d",
 		w.Start.Format(time.RFC3339), w.End.Format(time.RFC3339), FormatDuration(w.Duration()), runs))
-	if truncated {
+	switch {
+	case truncatedRepos == 1:
 		r.WriteLine("Warning: --max-runs was reached, so the report covers only part of the window")
+	case truncatedRepos > 1:
+		r.WriteLine(fmt.Sprintf("Warning: --max-runs was reached in %d repositories, so the report covers only part of the window", truncatedRepos))
 	}
 	for _, warning := range warnings {
 		logger.Warn("metrics: " + warning)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
@@ -33,6 +34,57 @@ func runWithID(id int64) *github.WorkflowRun {
 
 func jobWithID(id int64) *github.WorkflowJob {
 	return &github.WorkflowJob{ID: github.Ptr(id)}
+}
+
+func runCreatedAt(id int64, at time.Time) *github.WorkflowRun {
+	return &github.WorkflowRun{ID: github.Ptr(id), CreatedAt: &github.Timestamp{Time: at}}
+}
+
+func TestSelectWindowRuns(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	window := Window{Start: start, End: start.AddDate(0, 0, 1)}
+	inside := runCreatedAt(1, start.Add(time.Hour))
+	before := runCreatedAt(2, start.Add(-time.Hour))
+
+	tests := []struct {
+		name          string
+		runs          []*github.WorkflowRun
+		limit         int
+		wantKept      int
+		wantTruncated bool
+	}{
+		{name: "drops the runs outside the window", runs: []*github.WorkflowRun{inside, before}, limit: 0, wantKept: 1},
+		{name: "reports a spent limit the kept count hides", runs: []*github.WorkflowRun{inside, before}, limit: 2, wantKept: 1, wantTruncated: true},
+		{name: "keeps quiet below the limit", runs: []*github.WorkflowRun{inside}, limit: 2, wantKept: 1},
+		{name: "never truncates without a limit", runs: []*github.WorkflowRun{inside, before}, limit: 0, wantKept: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kept, truncated := selectWindowRuns(window, tt.runs, tt.limit)
+			if len(kept) != tt.wantKept {
+				t.Errorf("len(kept) = %d, want %d", len(kept), tt.wantKept)
+			}
+			if truncated != tt.wantTruncated {
+				t.Errorf("truncated = %v, want %v", truncated, tt.wantTruncated)
+			}
+		})
+	}
+}
+
+func TestDataTruncatedRepos(t *testing.T) {
+	data := &Data{Repos: []RepoCoverage{
+		{Repository: repository.Repository{Owner: "o", Name: "a"}, Runs: 300, Truncated: true},
+		{Repository: repository.Repository{Owner: "o", Name: "b"}, Runs: 12},
+		{Repository: repository.Repository{Owner: "o", Name: "c"}, Runs: 300, Truncated: true},
+	}}
+
+	if got := data.TruncatedRepos(); got != 2 {
+		t.Errorf("TruncatedRepos() = %d, want 2", got)
+	}
+	if got := data.Repos[1].FullName(); got != "o/b" {
+		t.Errorf("FullName() = %q, want %q", got, "o/b")
+	}
 }
 
 func TestIsSkippableRunRequestError(t *testing.T) {

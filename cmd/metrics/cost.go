@@ -49,7 +49,7 @@ and the report warns that the estimate may be low.`,
 			if err := kitutil.RenderMetricsCost(r, rows); err != nil {
 				return err
 			}
-			kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.Truncated, data.Warnings)
+			kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.TruncatedRepos(), data.Warnings)
 			return nil
 		},
 	}

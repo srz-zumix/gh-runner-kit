@@ -77,7 +77,7 @@ default window. Prefer --format ndjson to consume it row by row, and narrow it w
 				if err := kitutil.RenderMetricsJobs(r, rows); err != nil {
 					return err
 				}
-				kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.Truncated, data.Warnings)
+				kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.TruncatedRepos(), data.Warnings)
 				return nil
 			}
 

@@ -19,7 +19,7 @@ import (
 const (
 	// DefaultDays is the aggregation window used when neither --days nor --since is given.
 	DefaultDays = 7
-	// DefaultMaxRuns caps how many workflow runs a single command retrieves.
+	// DefaultMaxRuns caps how many workflow runs a single command retrieves per repository.
 	DefaultMaxRuns = 300
 	// DefaultConcurrency is the number of per-run API requests issued in parallel.
 	DefaultConcurrency = 6
@@ -34,8 +34,10 @@ const (
 type Options struct {
 	// Repos are the repositories whose workflow runs are collected. It is ignored when
 	// AllRepos is set.
-	Repos       []repository.Repository
-	Window      Window
+	Repos  []repository.Repository
+	Window Window
+	// MaxRuns caps the runs retrieved from each repository. The budget is per repository
+	// so that a busy one cannot leave the repositories collected after it unvisited.
 	MaxRuns     int
 	Concurrency int
 	Branch      string
@@ -58,7 +60,9 @@ type Data struct {
 	Runners []*github.Runner
 	Runs    []*github.WorkflowRun
 	Jobs    []*github.WorkflowJob
-	Repos   []repository.Repository
+	// Repos reports what the collection read of every repository it could read, which is
+	// how a quiet repository is told apart from one the run limit cut short.
+	Repos []RepoCoverage
 	// RunRepositories maps a workflow run ID to the full name (owner/repo) of the
 	// repository it belongs to. The raw jobs do not carry their repository, so this is
 	// how per-workflow aggregation keeps runs of equally named workflows in distinct
@@ -66,9 +70,34 @@ type Data struct {
 	RunRepositories map[int64]string
 	// Usage holds the billable time of every collected run, keyed by run ID. Only the
 	// commands that ask for it populate this, because it costs one request per run.
-	Usage     map[int64]*github.WorkflowRunUsage
-	Warnings  []string
+	Usage    map[int64]*github.WorkflowRunUsage
+	Warnings []string
+	// Truncated reports whether the run limit cut at least one repository short. Repos
+	// names which ones.
 	Truncated bool
+}
+
+// RepoCoverage records how much of a repository a collection managed to read.
+type RepoCoverage struct {
+	Repository repository.Repository
+	Runs       int
+	Truncated  bool
+}
+
+// FullName renders the repository as owner/repo.
+func (c RepoCoverage) FullName() string {
+	return parser.GetRepositoryFullName(c.Repository)
+}
+
+// TruncatedRepos counts the repositories the run limit cut short.
+func (d *Data) TruncatedRepos() int {
+	n := 0
+	for _, repo := range d.Repos {
+		if repo.Truncated {
+			n++
+		}
+	}
+	return n
 }
 
 // SelfHostedRunnerIDs indexes the currently registered runners by ID, which is the
@@ -197,14 +226,8 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		return nil, err
 	}
 
-	remaining := c.opts.MaxRuns
 	for _, repo := range repos {
-		if c.opts.MaxRuns > 0 && remaining <= 0 {
-			data.Truncated = true
-			break
-		}
-
-		runs, err := c.collectRuns(ctx, repo, remaining)
+		runs, truncated, err := c.collectRuns(ctx, repo, c.opts.MaxRuns)
 		if err != nil {
 			if gh.IsHTTPForbidden(err) || gh.IsHTTPNotFound(err) {
 				data.warnf("skipped the workflow runs of %s: %v", parser.GetRepositoryFullName(repo), err)
@@ -213,13 +236,9 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 			return nil, fmt.Errorf("failed to list the workflow runs of %s: %w", parser.GetRepositoryFullName(repo), err)
 		}
 		// Only repositories whose runs were read successfully count as collected, so the
-		// repository total never includes ones skipped above or left unvisited by
-		// truncation.
-		data.Repos = append(data.Repos, repo)
-		if c.opts.MaxRuns > 0 && len(runs) >= remaining {
-			data.Truncated = true
-		}
-		remaining -= len(runs)
+		// repository total never includes the ones skipped above.
+		data.Repos = append(data.Repos, RepoCoverage{Repository: repo, Runs: len(runs), Truncated: truncated})
+		data.Truncated = data.Truncated || truncated
 		data.Runs = append(data.Runs, runs...)
 
 		// Record which repository every run came from so per-workflow aggregation can
@@ -273,12 +292,13 @@ func (c *Collector) targetRepositories(ctx context.Context) ([]repository.Reposi
 		repos = append(repos, repository.Repository{Host: c.repo.Host, Owner: c.repo.Owner, Name: r.GetName()})
 	}
 
-	logger.Warn("metrics: collecting workflow runs across repositories, this issues many API requests", "repositories", len(repos))
+	logger.Warn("metrics: collecting workflow runs across repositories, this issues many API requests", "repositories", len(repos), "max_runs_per_repository", c.opts.MaxRuns)
 	return repos, nil
 }
 
-// collectRuns lists the workflow runs of repo that started inside the window.
-func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository, limit int) ([]*github.WorkflowRun, error) {
+// collectRuns lists the workflow runs of repo that started inside the window, reporting
+// whether limit stopped the listing before the window did.
+func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository, limit int) ([]*github.WorkflowRun, bool, error) {
 	options := &gh.ListWorkflowRunsOptions{
 		Branch:  c.opts.Branch,
 		Event:   c.opts.Event,
@@ -297,18 +317,25 @@ func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository,
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
+	filtered, truncated := selectWindowRuns(c.opts.Window, runs, limit)
+	return filtered, truncated, nil
+}
+
+// selectWindowRuns drops the runs outside w and reports whether limit was spent. The
+// limit applies before the window filter, so the kept count alone cannot show it.
+func selectWindowRuns(w Window, runs []*github.WorkflowRun, limit int) ([]*github.WorkflowRun, bool) {
 	// The created filter has day granularity, so drop the runs that fall outside the
 	// exact window.
 	filtered := make([]*github.WorkflowRun, 0, len(runs))
 	for _, run := range runs {
-		if c.opts.Window.Contains(run.GetCreatedAt().Time) {
+		if w.Contains(run.GetCreatedAt().Time) {
 			filtered = append(filtered, run)
 		}
 	}
-	return filtered, nil
+	return filtered, limit > 0 && len(runs) >= limit
 }
 
 // collectJobs fetches the jobs of every run in parallel, bounded by --concurrency.
