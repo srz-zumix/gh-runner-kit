@@ -51,9 +51,8 @@ func NewJobs(data *Data) []Job {
 			continue
 		}
 
-		// Check runs published by apps share the check suite of the workflow run, so the
-		// jobs API returns them too. They carry no runs-on labels, which every real job
-		// has, and their start and completion timestamps are identical.
+		// A reusable workflow call the caller never entered carries no runs-on labels,
+		// so it never occupied a runner and adds nothing to the reports.
 		if len(raw.Labels) == 0 {
 			continue
 		}

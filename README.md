@@ -429,6 +429,54 @@ Options:
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
+### List the jobs behind the metrics
+
+```sh
+gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List every job the metrics were aggregated from, one row each, so a downstream tool can group them on an axis this extension does not report, such as the busy timeline of a single runner.
+
+The rows come from the same collection and the same local job cache the other `metrics` subcommands use, so this issues no extra API request when it follows one of them over the same window.
+
+`QUEUED`, `STARTED` and `COMPLETED` are the timestamps GitHub recorded; `WAIT` is the time between the first two and `DURATION` the time between the last two. A job that never started has no `STARTED`, no `COMPLETED` and no `DURATION`.
+
+Unlike the aggregated reports the listing keeps the jobs that were skipped and the jobs that have not finished yet, so that it shows every job the workflow-run jobs endpoint returned, including the ones that never occupied a runner.
+
+`--kind self-hosted` also keeps the jobs whose runner could not be identified, the same way the other reports count them as fleet activity.
+
+`--runner` selects the runner names to keep and `--exclude-runner` the ones to drop, the latter winning when a name matches both.
+
+GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
+
+The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-runner` | - | Drop the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and it wins over `--runner` |
+| `--format` | `json` | Output format: `{json\|ndjson\|table}` |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires an explicit `--format json` |
+| `--kind` | `all` | Keep only the jobs of this runner kind: `{all\|self-hosted\|github-hosted}` |
+| `--label` | all label sets | Keep only the jobs requesting this label. Repeatable, and a job must carry every one of them |
+| `--limit` | `0` | Stop after this many rows, counted after the filters. `0` keeps every row |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--runner` | all runners | Keep only the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and a job matching any of them is kept |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template. Requires an explicit `--format json` |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
 ### Compare the demand for each label against the runners that carry it
 
 ```sh
