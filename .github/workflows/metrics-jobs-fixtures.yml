@@ -30,6 +30,10 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Publish a check run into the check suite of this workflow run
+        # A forked pull request, and a Dependabot one, only gets a read-only GITHUB_TOKEN
+        # that cannot create a check run, so publish it only from a trusted event and let
+        # the read-only verify job run without it on untrusted pull requests.
+        if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
         run: |
           set -euo pipefail
           # The check suite is keyed on the commit the workflow run itself reports, not
@@ -109,6 +113,9 @@ jobs:
           fi
 
       - name: Report whether the endpoint returned the check run
+        # The check run is only published from trusted events, so the report is only
+        # meaningful there; skip it when no check run was published.
+        if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
         run: |
           set -euo pipefail
           if grep -Fxq "${CHECK_RUN_NAME}" returned.txt; then
