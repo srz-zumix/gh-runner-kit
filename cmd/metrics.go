@@ -8,7 +8,7 @@ import (
 func NewMetricsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "metrics",
-		Short: "Report runner utilization, queue time, concurrency, label demand, capacity, cost and per-workflow activity",
+		Short: "Report runner utilization, queue time, concurrency, label demand, capacity, cost, runs and per-workflow activity",
 	}
 
 	cmd.AddCommand(metrics.NewCapacityCmd())
@@ -19,6 +19,7 @@ func NewMetricsCmd() *cobra.Command {
 	cmd.AddCommand(metrics.NewLabelCmd())
 	cmd.AddCommand(metrics.NewQueueCmd())
 	cmd.AddCommand(metrics.NewRunnerCmd())
+	cmd.AddCommand(metrics.NewRunsCmd())
 	cmd.AddCommand(metrics.NewSummaryCmd())
 	cmd.AddCommand(metrics.NewWorkflowCmd())
 
