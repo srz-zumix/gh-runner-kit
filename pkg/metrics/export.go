@@ -4,8 +4,10 @@ package metrics
 // per runs-on label set breakdown and the per label demand, so that every output format
 // describes the same collection.
 type ExportReport struct {
-	Window  Window
-	Repos   []string
+	Window Window
+	// Repos carries the per repository coverage, so that a consumer can tell which
+	// repositories the run limit cut short before comparing them.
+	Repos   []RepoCoverage
 	Summary Summary
 	Pools   []QueueRow
 	Labels  []LabelRow
@@ -13,14 +15,9 @@ type ExportReport struct {
 
 // BuildExportReport assembles the report from a single collection.
 func BuildExportReport(data *Data) ExportReport {
-	repos := make([]string, 0, len(data.Repos))
-	for _, repo := range data.Repos {
-		repos = append(repos, repo.Owner+"/"+repo.Name)
-	}
-
 	return ExportReport{
 		Window:  data.Window,
-		Repos:   repos,
+		Repos:   data.Repos,
 		Summary: BuildSummary(data),
 		Pools:   BuildQueueStats(data),
 		Labels:  BuildLabelStats(data, false),

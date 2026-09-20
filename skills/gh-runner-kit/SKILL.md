@@ -411,7 +411,7 @@ Shared options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
-| `--max-runs` | `300` | Stop after retrieving this many workflow runs per scope. `0` retrieves every run |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
@@ -426,7 +426,9 @@ Definitions to be aware of when reading the numbers:
 - **Scope.** `--type` selects where the runner inventory is read from, but the
   workflow runs always come from a repository because the API has no
   organization-wide run listing. Use `--all-repos` to walk every repository of
-  the organization, which issues many API requests.
+  the organization, which issues many API requests. `--max-runs` is a budget
+  **per repository**, so an organization-wide collection may retrieve up to
+  `repositories x --max-runs` runs.
 - **Wait time.** Measured from job creation to job start, so it also covers the
   time spent waiting on `needs` dependencies and concurrency groups. It is an
   upper bound on the pure runner queue time.
@@ -439,9 +441,9 @@ Definitions to be aware of when reading the numbers:
 - **Failure rate.** Failed and timed out jobs divided by the jobs that produced
   a pass or fail outcome. Cancelled jobs are excluded from both sides; skipped
   jobs are excluded entirely.
-- **Check runs.** Check runs published by apps share the check suite of a
-  workflow run, so the jobs API returns them alongside the real jobs. They carry
-  no `runs-on` labels and never occupied a runner, so they are excluded.
+- **Skipped jobs.** A skipped job never occupied a runner, so it is excluded
+  from every aggregate report, as is the label-less entry the jobs API returns
+  for a skipped reusable workflow call. `metrics jobs` lists both.
 - **Hosted jobs.** Jobs identified as running on GitHub-hosted runners are
   excluded from every fleet metric and only counted in `HOSTED JOBS`; the
   `metrics workflow` report is the exception and includes them by default so a
@@ -460,9 +462,12 @@ of a run the same way. Use `--refresh` to rewrite the entries and `--no-cache`
 to bypass the cache entirely.
 
 The table output always ends with a footer stating the window and the number of
-runs, and warns when `--max-runs` truncated the data. Repositories the token
-cannot read are reported as warnings on stderr and skipped instead of failing the
-command.
+runs, and warns when `--max-runs` truncated the data, naming how many
+repositories it cut short. `metrics export` publishes the per-repository
+coverage (`Repos[].Runs` and `Repos[].Truncated`), so a comparison between
+repositories can tell a quiet one from one the limit cut short. Repositories the
+token cannot read are reported as warnings on stderr and skipped instead of
+failing the command.
 
 ### metrics capacity
 
@@ -569,9 +574,14 @@ gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type 
 
 The Prometheus exposition names every series `gh_runner_kit_*`, expresses
 durations in seconds and ratios in the `0..1` range. Fleet-wide gauges carry no
-labels; per label set gauges carry `labels="..."` and per label gauges carry
-`label="..."` and `status="..."`. `--jq` and `--template` require
-`--format json`.
+labels; per label set gauges carry `labels="..."`, per label gauges carry
+`label="..."` and `status="..."`, and per repository gauges carry
+`repository="owner/name"`. `--jq` and `--template` require `--format json`.
+
+The report carries the per-repository coverage of the collection, as
+`Repos[].Runs` and `Repos[].Truncated` in JSON and as `repository_runs` and
+`repository_truncated` in Prometheus. Under `--all-repos` this is what tells a
+quiet repository apart from one whose collection `--max-runs` cut short.
 
 `--summary` fails when `$GITHUB_STEP_SUMMARY` is not set, which is the case
 outside GitHub Actions.
@@ -1016,10 +1026,10 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `collecting workflow runs requires a repository` | A `metrics` command was run outside a repository without `--repo`. Pass `--repo owner/name`, or `--all-repos` to walk the whole organization. |
 | `metrics` reports `JOBS 0` but `HOSTED JOBS` is high | Every job ran on GitHub-hosted runners. The metrics only cover self-hosted activity. |
 | `metrics` utilization looks far too low | The denominator is the whole window multiplied by the registered runners, including offline ones. Use `metrics runner` to see the per-runner breakdown. |
-| `metrics` warns that `--max-runs` was reached | The window holds more runs than the limit. Raise `--max-runs`, or narrow the scope with `--branch`, `--event` or `--workflow`. |
+| `metrics` warns that `--max-runs` was reached | The window holds more runs than the limit in at least one repository. Raise `--max-runs`, or narrow the scope with `--branch`, `--event` or `--workflow`. Under `--all-repos`, `metrics export` names the repositories that were cut short. |
 | `metrics` warns `skipped the jobs of workflow run N` | GitHub answered 403, 404 or 5xx for that run. The report is built without it, so the totals are slightly low. Large repositories hit 5xx occasionally; re-run to pick the run up again. |
 | `metrics` is slow the first time | Each run costs one job request. Results are cached per run, so subsequent invocations over the same window are much faster. |
-| `metrics` percentiles look implausibly low | Older caches may still hold the check runs that are now excluded. Re-run with `--refresh`. |
+| `metrics` percentiles look implausibly low | Older caches may still hold the entries that are now excluded. Re-run with `--refresh`. |
 | `metrics concurrency` shows `RUNNERS 0` | `--label` matched no registered runner, or the runner inventory could not be read. Check `metrics label` for orphan labels and the warnings on stderr. |
 | `metrics concurrency` returns one row per minute | `--bucket` was set too small for the window. Widen it, for example `--bucket 1h`. |
 | `metrics label` does not list a label a runner carries | No job requested it in the window, so it is hidden by default. Pass `--include-unused`. |

@@ -38,7 +38,7 @@ it down to the fleet, and --workflow to collect a single workflow file to begin 
 			if err := kitutil.RenderMetricsWorkflows(r, rows); err != nil {
 				return err
 			}
-			kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.Truncated, data.Warnings)
+			kitutil.WriteMetricsFooter(r, data.Window, len(data.Runs), data.TruncatedRepos(), data.Warnings)
 			return nil
 		},
 	}

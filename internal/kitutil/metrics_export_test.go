@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/srz-zumix/gh-runner-kit/pkg/metrics"
 )
 
@@ -16,7 +17,7 @@ func exportReport() metrics.ExportReport {
 
 	return metrics.ExportReport{
 		Window: window,
-		Repos:  []string{"owner/repo"},
+		Repos:  []metrics.RepoCoverage{{Repository: repository.Repository{Owner: "owner", Name: "repo"}, Runs: 3, Truncated: true}},
 		Summary: metrics.Summary{
 			Window:      window,
 			Runners:     2,
@@ -49,6 +50,8 @@ func TestWriteMetricsPrometheus(t *testing.T) {
 		"gh_runner_kit_window_seconds 3600\n",
 		"gh_runner_kit_collection_warnings 1\n",
 		`gh_runner_kit_label_jobs{label="self-hosted",status="ok"} 4`,
+		`gh_runner_kit_repository_runs{repository="owner/repo"} 3`,
+		`gh_runner_kit_repository_truncated{repository="owner/repo"} 1`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("WriteMetricsPrometheus() output does not contain %q:\n%s", want, got)
@@ -100,6 +103,41 @@ func TestWriteMetricsMarkdown(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("WriteMetricsMarkdown() output does not contain %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestWriteMetricsMarkdownReportsTruncatedRepositories(t *testing.T) {
+	tests := []struct {
+		name           string
+		truncatedRepos int
+		want           string
+	}{
+		{name: "none", truncatedRepos: 0, want: ""},
+		{name: "one", truncatedRepos: 1, want: "The collection stopped at the run limit, so the numbers cover only part of the window."},
+		{name: "many", truncatedRepos: 3, want: "The collection stopped at the run limit in 3 repositories, so the numbers cover only part of the window."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := exportReport()
+			report.Summary.TruncatedRepos = tt.truncatedRepos
+
+			b := &strings.Builder{}
+			if err := WriteMetricsMarkdown(b, report); err != nil {
+				t.Fatalf("WriteMetricsMarkdown() error = %v", err)
+			}
+			got := b.String()
+
+			if tt.want == "" {
+				if strings.Contains(got, "stopped at the run limit") {
+					t.Errorf("WriteMetricsMarkdown() reports truncation without a truncated repository:\n%s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("WriteMetricsMarkdown() output does not contain %q:\n%s", tt.want, got)
+			}
+		})
 	}
 }
 

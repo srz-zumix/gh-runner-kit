@@ -45,7 +45,16 @@ func WriteMetricsPrometheus(w io.Writer, report metrics.ExportReport) error {
 		{name: "failure_rate", help: "Share of the decided self-hosted jobs that failed.", value: s.FailureRate},
 		{name: "peak_concurrency", help: "Highest number of self-hosted jobs that ran at the same time.", value: float64(s.PeakConcurrency)},
 		{name: "truncated", help: "1 when the collection stopped at the run limit.", value: boolValue(s.Truncated)},
+		{name: "truncated_repositories", help: "Number of repositories whose collection stopped at the run limit.", value: float64(s.TruncatedRepos)},
 		{name: "collection_warnings", help: "Number of collection warnings; non-zero means metrics may be incomplete.", value: float64(len(s.Warnings))},
+	}
+
+	for _, repo := range report.Repos {
+		labels := map[string]string{"repository": repo.FullName()}
+		series = append(series,
+			promMetric{name: "repository_runs", help: "Number of workflow runs collected from this repository.", labels: labels, value: float64(repo.Runs)},
+			promMetric{name: "repository_truncated", help: "1 when the run limit cut the collection of this repository short.", labels: labels, value: boolValue(repo.Truncated)},
+		)
 	}
 
 	for _, pool := range report.Pools {
@@ -104,7 +113,7 @@ func formatPrometheusLabels(labels map[string]string) string {
 
 	// Only the label names below are ever used, and they are emitted in this order.
 	var parts []string
-	for _, name := range []string{"label", "labels", "status"} {
+	for _, name := range []string{"label", "labels", "repository", "status"} {
 		if value, ok := labels[name]; ok {
 			parts = append(parts, name+`="`+escapePrometheusLabel(value)+`"`)
 		}
@@ -203,8 +212,11 @@ func WriteMetricsMarkdown(w io.Writer, report metrics.ExportReport) error {
 		}
 	}
 
-	if s.Truncated {
+	switch {
+	case s.TruncatedRepos == 1:
 		b.WriteString("\nThe collection stopped at the run limit, so the numbers cover only part of the window.\n")
+	case s.TruncatedRepos > 1:
+		fmt.Fprintf(b, "\nThe collection stopped at the run limit in %d repositories, so the numbers cover only part of the window.\n", s.TruncatedRepos)
 	}
 
 	_, err := io.WriteString(w, b.String())

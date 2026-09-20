@@ -30,7 +30,7 @@ func testWorkflowData() *Data {
 			workflowJob(testJob("test", 1, "runner-a", selfHosted, "success", 0, 5, 10), "CI", 2),
 			workflowJob(testJob("deploy", 0, "", []string{"ubuntu-latest"}, "success", 0, 1, 11), "Release", 3),
 		},
-		Repos: []repository.Repository{{Host: "github.com", Owner: "octo", Name: "demo"}},
+		Repos: []RepoCoverage{{Repository: repository.Repository{Host: "github.com", Owner: "octo", Name: "demo"}, Runs: 3}},
 	}
 }
 
