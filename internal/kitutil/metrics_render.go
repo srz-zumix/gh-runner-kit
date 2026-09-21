@@ -264,6 +264,30 @@ func RenderMetricsJobs(r *render.Renderer, rows []metrics.JobRow) error {
 	return t.Render()
 }
 
+// RenderMetricsRuns prints one line per workflow run.
+func RenderMetricsRuns(r *render.Renderer, rows []metrics.RunRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"REPO", "WORKFLOW", "PATH", "RUN", "ATTEMPT", "STATUS", "CONCLUSION", "CREATED", "STARTED", "URL"})
+	for _, row := range rows {
+		t.Append([]string{
+			FormatOptional(row.Repository),
+			FormatOptional(row.Workflow),
+			FormatOptional(row.WorkflowPath),
+			strconv.Itoa(row.RunNumber),
+			strconv.Itoa(row.RunAttempt),
+			row.Status,
+			row.Conclusion,
+			FormatOptionalTime(row.CreatedAt),
+			FormatOptionalTime(row.StartedAt),
+			row.HTMLURL,
+		})
+	}
+	return t.Render()
+}
+
 // WriteMetricsFooter states which window the numbers cover and whether they are based
 // on incomplete data, so that a truncated report is never mistaken for a full one.
 func WriteMetricsFooter(r *render.Renderer, w metrics.Window, runs, truncatedRepos int, warnings []string) {

@@ -50,6 +50,10 @@ type Options struct {
 	// SkipJobs leaves the per run job listing out of the collection. Reports that work
 	// from the runs alone save one API request per run with it.
 	SkipJobs bool
+	// SkipRunners leaves the runner inventory out of the collection. Reports that work
+	// from the runs alone skip the request and cannot be aborted by a runner API error
+	// they do not need.
+	SkipRunners bool
 }
 
 // Data holds everything a Collector gathered, together with what it could not gather.
@@ -211,14 +215,16 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		Usage:           map[int64]*github.WorkflowRunUsage{},
 	}
 
-	runners, err := gh.ListRunners(ctx, c.client, c.repo)
-	switch {
-	case err == nil:
-		data.Runners = runners
-	case gh.IsHTTPForbidden(err), gh.IsHTTPNotFound(err):
-		data.warnf("skipped the runner inventory of %s: %v", parser.GetRepositoryFullName(c.repo), err)
-	default:
-		return nil, fmt.Errorf("failed to list the runners of %s: %w", parser.GetRepositoryFullName(c.repo), err)
+	if !c.opts.SkipRunners {
+		runners, err := gh.ListRunners(ctx, c.client, c.repo)
+		switch {
+		case err == nil:
+			data.Runners = runners
+		case gh.IsHTTPForbidden(err), gh.IsHTTPNotFound(err):
+			data.warnf("skipped the runner inventory of %s: %v", parser.GetRepositoryFullName(c.repo), err)
+		default:
+			return nil, fmt.Errorf("failed to list the runners of %s: %w", parser.GetRepositoryFullName(c.repo), err)
+		}
 	}
 
 	repos, err := c.targetRepositories(ctx)

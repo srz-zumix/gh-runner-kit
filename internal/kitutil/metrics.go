@@ -36,8 +36,26 @@ type MetricsFlags struct {
 	Exporter    cmdutil.Exporter
 }
 
+// AddOption configures which shared metrics flags Add registers.
+type AddOption func(*addOptions)
+
+type addOptions struct {
+	cacheFlags bool
+}
+
+// WithoutCacheFlags omits the --no-cache/--refresh flags for commands that never read or
+// write cached per-run metrics data, so the command does not advertise flags it ignores.
+func WithoutCacheFlags() AddOption {
+	return func(o *addOptions) { o.cacheFlags = false }
+}
+
 // Add registers the shared metrics flags on cmd.
-func (m *MetricsFlags) Add(cmd *cobra.Command) {
+func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
+	options := addOptions{cacheFlags: true}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	f := cmd.Flags()
 	f.StringVarP(&m.Repo, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
 	f.StringVar(&m.Owner, "owner", "", "Select an organization by owner name")
@@ -50,8 +68,10 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")
 	f.StringVar(&m.Workflow, "workflow", "", "Keep only the runs of this workflow file, such as ci.yml")
 	f.BoolVar(&m.AllRepos, "all-repos", false, "Collect the workflow runs of every repository in the organization")
-	f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
-	f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
+	if options.cacheFlags {
+		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
+		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
+	}
 	cmdutil.AddFormatFlags(cmd, &m.Exporter)
 
 	cmd.MarkFlagsMutuallyExclusive("days", "since")
@@ -136,7 +156,7 @@ func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 
 // CollectWithWindow collects metrics data for an already-resolved window.
 func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Window) (*metrics.Data, error) {
-	return m.collect(cmd, window, false)
+	return m.collect(cmd, window, collectFull)
 }
 
 // CollectUsage gathers the workflow runs together with the billable time GitHub charges
@@ -147,10 +167,33 @@ func (m *MetricsFlags) CollectUsage(cmd *cobra.Command) (*metrics.Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.collect(cmd, window, true)
+	return m.collect(cmd, window, collectUsage)
 }
 
-func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage bool) (*metrics.Data, error) {
+// CollectRuns gathers only the workflow runs, skipping the per run job listing. The run
+// listing works from the runs alone, so this keeps the command at one request per run
+// and avoids failing on a job-list error it does not need.
+func (m *MetricsFlags) CollectRuns(cmd *cobra.Command) (*metrics.Data, error) {
+	window, err := m.Window()
+	if err != nil {
+		return nil, err
+	}
+	return m.collect(cmd, window, collectRunsOnly)
+}
+
+// collectMode selects which per run data a collection fetches on top of the runs.
+type collectMode int
+
+const (
+	// collectFull fetches the per run jobs the timeline and other reports need.
+	collectFull collectMode = iota
+	// collectUsage skips the jobs and fetches the billable usage instead.
+	collectUsage
+	// collectRunsOnly fetches neither, because the run listing needs only the runs.
+	collectRunsOnly
+)
+
+func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode collectMode) (*metrics.Data, error) {
 	ctx := cmd.Context()
 
 	repo, err := parser.Repository(
@@ -179,7 +222,7 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 	}
 
 	var jobs metrics.JobFetcher
-	if !usage {
+	if mode == collectFull {
 		jobs = m.jobFetcher(client)
 	}
 
@@ -192,10 +235,11 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 		Event:       m.Event,
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
-		SkipJobs:    usage,
+		SkipJobs:    mode != collectFull,
+		SkipRunners: mode == collectRunsOnly,
 	}, jobs)
 
-	if usage {
+	if mode == collectUsage {
 		collector.SetUsageFetcher(m.usageFetcher(client))
 	}
 

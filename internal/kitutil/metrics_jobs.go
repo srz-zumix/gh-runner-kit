@@ -27,3 +27,23 @@ func WriteMetricsJobsNDJSON(w io.Writer, rows []metrics.JobRow) error {
 	}
 	return nil
 }
+
+// WriteMetricsRunsJSON writes the run listing as a single indented JSON array.
+func WriteMetricsRunsJSON(w io.Writer, rows []metrics.RunRow) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	return enc.Encode(rows)
+}
+
+// WriteMetricsRunsNDJSON writes one run object per line.
+func WriteMetricsRunsNDJSON(w io.Writer, rows []metrics.RunRow) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	for _, row := range rows {
+		if err := enc.Encode(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
