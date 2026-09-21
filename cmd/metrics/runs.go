@@ -36,7 +36,7 @@ reports how many repositories were truncated; metrics export also publishes per-
 coverage.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := flags.Collect(cmd)
+			data, err := flags.CollectRuns(cmd)
 			if err != nil {
 				return err
 			}

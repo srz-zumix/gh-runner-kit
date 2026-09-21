@@ -136,7 +136,7 @@ func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 
 // CollectWithWindow collects metrics data for an already-resolved window.
 func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Window) (*metrics.Data, error) {
-	return m.collect(cmd, window, false)
+	return m.collect(cmd, window, collectFull)
 }
 
 // CollectUsage gathers the workflow runs together with the billable time GitHub charges
@@ -147,10 +147,33 @@ func (m *MetricsFlags) CollectUsage(cmd *cobra.Command) (*metrics.Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.collect(cmd, window, true)
+	return m.collect(cmd, window, collectUsage)
 }
 
-func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage bool) (*metrics.Data, error) {
+// CollectRuns gathers only the workflow runs, skipping the per run job listing. The run
+// listing works from the runs alone, so this keeps the command at one request per run
+// and avoids failing on a job-list error it does not need.
+func (m *MetricsFlags) CollectRuns(cmd *cobra.Command) (*metrics.Data, error) {
+	window, err := m.Window()
+	if err != nil {
+		return nil, err
+	}
+	return m.collect(cmd, window, collectRunsOnly)
+}
+
+// collectMode selects which per run data a collection fetches on top of the runs.
+type collectMode int
+
+const (
+	// collectFull fetches the per run jobs the timeline and other reports need.
+	collectFull collectMode = iota
+	// collectUsage skips the jobs and fetches the billable usage instead.
+	collectUsage
+	// collectRunsOnly fetches neither, because the run listing needs only the runs.
+	collectRunsOnly
+)
+
+func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode collectMode) (*metrics.Data, error) {
 	ctx := cmd.Context()
 
 	repo, err := parser.Repository(
@@ -179,7 +202,7 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 	}
 
 	var jobs metrics.JobFetcher
-	if !usage {
+	if mode == collectFull {
 		jobs = m.jobFetcher(client)
 	}
 
@@ -192,10 +215,10 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, usage 
 		Event:       m.Event,
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
-		SkipJobs:    usage,
+		SkipJobs:    mode != collectFull,
 	}, jobs)
 
-	if usage {
+	if mode == collectUsage {
 		collector.SetUsageFetcher(m.usageFetcher(client))
 	}
 
