@@ -13,6 +13,9 @@ type WorkflowRow struct {
 	WorkflowPath string
 	Runs         int
 	Jobs         int
+	Failed       int
+	Decided      int
+	Retried      int
 	FailureRate  float64
 	RetryRate    float64
 	WaitP50      time.Duration
@@ -107,6 +110,8 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 			WorkflowPath: sample.WorkflowPath,
 			Runs:         len(runIDs[key]),
 			Jobs:         s.count,
+			Failed:       s.failed,
+			Decided:      s.decided,
 			FailureRate:  s.failureRate(),
 			WaitP50:      Percentile(s.waits, 50),
 			WaitP95:      Percentile(s.waits, 95),
@@ -124,6 +129,7 @@ func BuildWorkflowStats(data *Data, selfHostedOnly bool) []WorkflowRow {
 				retried++
 			}
 		}
+		row.Retried = retried
 		if row.Runs > 0 {
 			row.RetryRate = float64(retried) / float64(row.Runs)
 		}
