@@ -210,7 +210,7 @@ func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) erro
 		return r.RenderExportedData(rows)
 	}
 
-	t := r.NewTableWriter([]string{"REPOSITORY", "WORKFLOW", "PATH", "RUNS", "JOBS", "FAIL", "RETRY", "WAIT P50", "WAIT P95", "DUR P50", "DUR P95", "BUSY", "LAST JOB"})
+	t := r.NewTableWriter([]string{"REPOSITORY", "WORKFLOW", "PATH", "RUNS", "JOBS", "DECIDED", "FAILED", "FAIL", "RETRIED", "RETRY", "WAIT P50", "WAIT P95", "DUR P50", "DUR P95", "BUSY", "LAST JOB"})
 	for _, row := range rows {
 		t.Append([]string{
 			FormatOptional(row.Repository),
@@ -218,7 +218,10 @@ func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) erro
 			FormatOptional(row.WorkflowPath),
 			strconv.Itoa(row.Runs),
 			strconv.Itoa(row.Jobs),
+			strconv.Itoa(row.Decided),
+			strconv.Itoa(row.Failed),
 			FormatPercent(row.FailureRate),
+			strconv.Itoa(row.Retried),
 			FormatPercent(row.RetryRate),
 			FormatDurationStat(row.WaitP50, row.Jobs),
 			FormatDurationStat(row.WaitP95, row.Jobs),

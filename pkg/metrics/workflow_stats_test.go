@@ -54,8 +54,17 @@ func TestBuildWorkflowStats(t *testing.T) {
 	if got, want := ci.RetryRate, 0.5; got != want {
 		t.Fatalf("RetryRate = %v, want %v (one of the two runs was restarted)", got, want)
 	}
+	if got, want := ci.Retried, 1; got != want {
+		t.Fatalf("Retried = %d, want %d (one of the two runs was restarted)", got, want)
+	}
 	if got, want := ci.FailureRate, 1.0/3.0; got != want {
 		t.Fatalf("FailureRate = %v, want %v", got, want)
+	}
+	if got, want := ci.Failed, 1; got != want {
+		t.Fatalf("Failed = %d, want %d (one of three decided jobs failed)", got, want)
+	}
+	if got, want := ci.Decided, 3; got != want {
+		t.Fatalf("Decided = %d, want %d (three jobs reached a verdict)", got, want)
 	}
 	if got, want := ci.WaitP50, 5*time.Minute; got != want {
 		t.Fatalf("WaitP50 = %v, want %v", got, want)
