@@ -26,10 +26,11 @@ func NewRunsCmd() *cobra.Command {
 		Short: "List the workflow runs behind the metrics, one row each",
 		Long: `List every workflow run returned by the collection, one row each.
 
-The listing uses the same run collection and cache as the other metrics commands. It
-does not calculate a duration from UPDATED, because GitHub may update that timestamp
-after the run finished. Use CREATED and STARTED as timestamps and calculate a duration
-according to the consumer's needs. --format ndjson writes one row at a time.
+The listing uses the same run collection as the other metrics commands. It does not fetch
+per-run jobs or usage, so the cache flags do not apply here. It does not calculate a
+duration from UPDATED, because GitHub may update that timestamp after the run finished. Use
+CREATED and STARTED as timestamps and calculate a duration according to the consumer's
+needs. --format ndjson writes one row at a time.
 
 Under --all-repos, --max-runs applies independently to each repository. The table footer
 reports how many repositories were truncated; metrics export also publishes per-repository
@@ -66,7 +67,7 @@ coverage.`,
 		},
 	}
 
-	flags.Add(cmd)
+	flags.Add(cmd, kitutil.WithoutCacheFlags())
 	cobra.CheckErr(cmdflags.SetupFormatFlagWithNonJSONFormats(cmd, &flags.Exporter, &format, runsFormatJSON, []string{runsFormatNDJSON, runsFormatTable}))
 	return cmd
 }

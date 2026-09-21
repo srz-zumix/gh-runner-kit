@@ -36,8 +36,26 @@ type MetricsFlags struct {
 	Exporter    cmdutil.Exporter
 }
 
+// AddOption configures which shared metrics flags Add registers.
+type AddOption func(*addOptions)
+
+type addOptions struct {
+	cacheFlags bool
+}
+
+// WithoutCacheFlags omits the --no-cache/--refresh flags for commands that never read or
+// write cached per-run metrics data, so the command does not advertise flags it ignores.
+func WithoutCacheFlags() AddOption {
+	return func(o *addOptions) { o.cacheFlags = false }
+}
+
 // Add registers the shared metrics flags on cmd.
-func (m *MetricsFlags) Add(cmd *cobra.Command) {
+func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
+	options := addOptions{cacheFlags: true}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	f := cmd.Flags()
 	f.StringVarP(&m.Repo, "repo", "R", "", "Select a repository using the [HOST/]OWNER/REPO format")
 	f.StringVar(&m.Owner, "owner", "", "Select an organization by owner name")
@@ -50,8 +68,10 @@ func (m *MetricsFlags) Add(cmd *cobra.Command) {
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")
 	f.StringVar(&m.Workflow, "workflow", "", "Keep only the runs of this workflow file, such as ci.yml")
 	f.BoolVar(&m.AllRepos, "all-repos", false, "Collect the workflow runs of every repository in the organization")
-	f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
-	f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
+	if options.cacheFlags {
+		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
+		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
+	}
 	cmdutil.AddFormatFlags(cmd, &m.Exporter)
 
 	cmd.MarkFlagsMutuallyExclusive("days", "since")
@@ -216,6 +236,7 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode c
 		Workflow:    m.Workflow,
 		AllRepos:    m.AllRepos,
 		SkipJobs:    mode != collectFull,
+		SkipRunners: mode == collectRunsOnly,
 	}, jobs)
 
 	if mode == collectUsage {

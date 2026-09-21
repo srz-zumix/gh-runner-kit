@@ -585,14 +585,15 @@ Options:
 ### List workflow runs behind the metrics
 
 ```sh
-gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every workflow run returned by the collection, one row each. The command uses
-the same run collection and cache as the other metrics commands. It exposes `CREATED`
-and `STARTED`; it does not treat `UPDATED` as an authoritative completion time because
-GitHub may update it after the run finished. Use `--format ndjson` to consume rows one
-at a time. Under `--all-repos`, `--max-runs` applies independently to each repository.
+the same run collection as the other metrics commands. It does not fetch per-run jobs
+or usage, so the cache flags do not apply here. It exposes `CREATED` and `STARTED`; it
+does not treat `UPDATED` as an authoritative completion time because GitHub may update
+it after the run finished. Use `--format ndjson` to consume rows one at a time. Under
+`--all-repos`, `--max-runs` applies independently to each repository.
 
 Options:
 
@@ -606,9 +607,7 @@ Options:
 | `--format` | `json` | Output format: `{json\|ndjson\|table}` |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |

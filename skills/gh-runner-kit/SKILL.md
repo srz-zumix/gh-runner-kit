@@ -704,8 +704,9 @@ gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type or
   [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
 ```
 
-The listing uses the same run collection and cache as the other metrics commands.
-It exposes `CREATED` and `STARTED`, but does not treat `UPDATED` as an authoritative
+The listing uses the same run collection as the other metrics commands. It does not
+fetch per-run jobs or usage, so the cache flags do not apply here. It exposes `CREATED`
+and `STARTED`, but does not treat `UPDATED` as an authoritative
 completion time because GitHub may update it after the run finished. Use
 `--format ndjson` for row-by-row consumption. Under `--all-repos`, `--max-runs`
 applies independently to each repository.
