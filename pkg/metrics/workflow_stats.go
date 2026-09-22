@@ -87,6 +87,19 @@ func BuildRepositoryStats(data *Data) []RepositoryRow {
 	jobs := FleetJobs(NewJobs(data))
 	stats := map[string]*jobStats{}
 	runAttempts := map[string]map[int64]bool{}
+	// Seed a row for every collected repository so a quiet repository, or one whose runs
+	// only used GitHub-hosted runners, stays visible under --all-repos instead of vanishing
+	// when it contributes no self-hosted jobs. The job loop then fills in any totals.
+	for _, coverage := range data.Repos {
+		repo := coverage.FullName()
+		if repo == "" {
+			continue
+		}
+		if _, ok := stats[repo]; !ok {
+			stats[repo] = &jobStats{}
+			runAttempts[repo] = map[int64]bool{}
+		}
+	}
 	for _, job := range jobs {
 		repo := job.Repository
 		if repo == "" {

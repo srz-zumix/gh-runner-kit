@@ -126,6 +126,35 @@ func TestBuildRepositoryStats(t *testing.T) {
 	}
 }
 
+// TestBuildRepositoryStatsKeepsQuietRepositories ensures a collected repository that
+// contributed no self-hosted jobs still appears as a zero row, so a quiet repository
+// stays visible next to an active one under --all-repos.
+func TestBuildRepositoryStatsKeepsQuietRepositories(t *testing.T) {
+	data := testWorkflowData()
+	data.RunRepositories = map[int64]string{1: "octo/demo", 2: "octo/demo", 3: "octo/demo"}
+	data.Repos = append(data.Repos, RepoCoverage{Repository: repository.Repository{Host: "github.com", Owner: "octo", Name: "quiet"}, Runs: 0})
+
+	rows := BuildRepositoryStats(data)
+
+	if len(rows) != 2 {
+		t.Fatalf("len(BuildRepositoryStats()) = %d, want 2 (the quiet repository must stay visible)", len(rows))
+	}
+	// The active repository sorts first (more jobs), the quiet one keeps zero counters.
+	if got, want := rows[0].Repository, "octo/demo"; got != want {
+		t.Fatalf("rows[0].Repository = %q, want %q (more jobs sorts first)", got, want)
+	}
+	quiet := rows[1]
+	if got, want := quiet.Repository, "octo/quiet"; got != want {
+		t.Fatalf("rows[1].Repository = %q, want %q", got, want)
+	}
+	if quiet.Runs != 0 || quiet.Jobs != 0 || quiet.Decided != 0 || quiet.Failed != 0 || quiet.Retried != 0 {
+		t.Fatalf("quiet row = %+v, want all counters zero", quiet)
+	}
+	if quiet.FailureRate != 0 || quiet.RetryRate != 0 {
+		t.Fatalf("quiet row rates = %v/%v, want 0/0", quiet.FailureRate, quiet.RetryRate)
+	}
+}
+
 // TestBuildWorkflowStatsSeparatesSameNameDifferentFile ensures two distinct workflow
 // files that happen to share a display name are not merged into a single row.
 func TestBuildWorkflowStatsSeparatesSameNameDifferentFile(t *testing.T) {
