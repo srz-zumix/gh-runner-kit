@@ -108,6 +108,18 @@ func TestFilterRepositories(t *testing.T) {
 	}
 }
 
+func TestValidateRepositoryPatterns(t *testing.T) {
+	if err := (Options{IncludeRepos: []string{"octo/*"}, ExcludeRepos: []string{"octo/web"}}).ValidateRepositoryPatterns(); err != nil {
+		t.Fatalf("ValidateRepositoryPatterns() error = %v, want nil", err)
+	}
+	if err := (Options{IncludeRepos: []string{"octo/["}}).ValidateRepositoryPatterns(); err == nil {
+		t.Fatal("ValidateRepositoryPatterns() error = nil, want an error for the malformed --include-repo pattern")
+	}
+	if err := (Options{ExcludeRepos: []string{"octo/["}}).ValidateRepositoryPatterns(); err == nil {
+		t.Fatal("ValidateRepositoryPatterns() error = nil, want an error for the malformed --exclude-repo pattern")
+	}
+}
+
 func TestIsSkippableRunRequestError(t *testing.T) {
 	tests := []struct {
 		name string

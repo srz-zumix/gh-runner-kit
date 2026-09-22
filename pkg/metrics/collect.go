@@ -49,7 +49,7 @@ type Options struct {
 	// of only the repositories listed in Repos.
 	AllRepos bool
 	// IncludeRepos is a list of repository pattern strings such as "octo/*" or
-	// "OWNER/REPO". A repository that does not match all patterns is skipped before
+	// "OWNER/REPO". A repository that matches none of the patterns is skipped before
 	// any workflow run request is sent.
 	IncludeRepos []string
 	// ExcludeRepos drops repositories that match any of these patterns.
@@ -216,6 +216,10 @@ func (c *Collector) SetUsageFetcher(usage UsageFetcher) {
 // Repositories the token cannot read are recorded in Data.Warnings and skipped rather
 // than aborting the whole command.
 func (c *Collector) Collect(ctx context.Context) (*Data, error) {
+	if err := c.opts.ValidateRepositoryPatterns(); err != nil {
+		return nil, err
+	}
+
 	data := &Data{
 		Window:          c.opts.Window,
 		RunRepositories: map[int64]string{},
@@ -329,6 +333,27 @@ func filterRepositories(repos []repository.Repository, include, exclude []string
 		return nil, fmt.Errorf("no repositories matched include filter %v", include)
 	}
 	return filtered, nil
+}
+
+// ValidateRepositoryPatterns rejects the include/exclude patterns path.Match cannot
+// parse, so a malformed --include-repo or --exclude-repo is reported before any API
+// request rather than silently matching nothing.
+func (o Options) ValidateRepositoryPatterns() error {
+	if err := validateRepositoryPatterns("--include-repo", o.IncludeRepos); err != nil {
+		return err
+	}
+	return validateRepositoryPatterns("--exclude-repo", o.ExcludeRepos)
+}
+
+// validateRepositoryPatterns reports the first pattern path.Match cannot parse, naming
+// the flag it came from.
+func validateRepositoryPatterns(flag string, patterns []string) error {
+	for _, pattern := range patterns {
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("invalid %s pattern %q: %w", flag, pattern, err)
+		}
+	}
+	return nil
 }
 
 func matchesRepositoryPatternSet(patterns []string, repo repository.Repository) bool {
