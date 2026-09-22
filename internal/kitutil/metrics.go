@@ -31,6 +31,8 @@ type MetricsFlags struct {
 	Event       string
 	Workflow    string
 	AllRepos    bool
+	IncludeRepos []string
+	ExcludeRepos []string
 	NoCache     bool
 	Refresh     bool
 	Exporter    cmdutil.Exporter
@@ -68,6 +70,8 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")
 	f.StringVar(&m.Workflow, "workflow", "", "Keep only the runs of this workflow file, such as ci.yml")
 	f.BoolVar(&m.AllRepos, "all-repos", false, "Collect the workflow runs of every repository in the organization")
+	f.StringArrayVar(&m.IncludeRepos, "include-repo", nil, "Keep only the repositories matching this pattern, such as octo/*, owner/repo or [HOST/]OWNER/REPO (repeatable)")
+	f.StringArrayVar(&m.ExcludeRepos, "exclude-repo", nil, "Drop the repositories matching this pattern, such as octo/* or [HOST/]OWNER/REPO (repeatable)")
 	if options.cacheFlags {
 		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
 		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
@@ -230,13 +234,15 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode c
 		Repos:       repos,
 		Window:      window,
 		MaxRuns:     m.MaxRuns,
-		Concurrency: m.Concurrency,
-		Branch:      m.Branch,
-		Event:       m.Event,
-		Workflow:    m.Workflow,
-		AllRepos:    m.AllRepos,
-		SkipJobs:    mode != collectFull,
-		SkipRunners: mode == collectRunsOnly,
+		Concurrency:  m.Concurrency,
+		Branch:       m.Branch,
+		Event:        m.Event,
+		Workflow:     m.Workflow,
+		AllRepos:     m.AllRepos,
+		IncludeRepos: m.IncludeRepos,
+		ExcludeRepos: m.ExcludeRepos,
+		SkipJobs:     mode != collectFull,
+		SkipRunners:  mode == collectRunsOnly,
 	}, jobs)
 
 	if mode == collectUsage {

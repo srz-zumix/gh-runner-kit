@@ -288,7 +288,7 @@ Options:
 ### Recommend how many runners each runs-on label set needs
 
 ```sh
-gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Size every `runs-on` label set against a target queue time.
@@ -308,7 +308,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -325,7 +327,7 @@ Options:
 ### Show how many jobs ran at the same time over the window
 
 ```sh
-gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Reconstruct the number of jobs that occupied a runner at the same time from their start and completion timestamps, one time bucket at a time.
@@ -344,7 +346,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
@@ -360,7 +364,7 @@ Options:
 ### Report the billable time GitHub-hosted runners consumed
 
 ```sh
-gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Report the billable time of the collected workflow runs, broken down by operating system.
@@ -380,7 +384,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -396,7 +402,7 @@ Options:
 ### Publish the fleet metrics for monitoring
 
 ```sh
-gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--summary] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format prometheus|json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--summary] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format prometheus|json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Publish the fleet overview, the queue time of every `runs-on` label set and the demand for every label in a form a monitoring system can ingest, which is what a scheduled workflow needs.
@@ -418,7 +424,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | `prometheus` | Output format: `{json\|prometheus}` |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires `--format json` |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -434,7 +442,7 @@ Options:
 ### List the jobs behind the metrics
 
 ```sh
-gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every job the metrics were aggregated from, one row each, so a downstream tool can group them on an axis this extension does not report, such as the busy timeline of a single runner.
@@ -462,8 +470,10 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--exclude-runner` | - | Drop the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and it wins over `--runner` |
 | `--format` | `json` | Output format: `{json\|ndjson\|table}` |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires an explicit `--format json` |
 | `--kind` | `all` | Keep only the jobs of this runner kind: `{all\|self-hosted\|github-hosted}` |
 | `--label` | all label sets | Keep only the jobs requesting this label. Repeatable, and a job must carry every one of them |
@@ -482,7 +492,7 @@ Options:
 ### Compare the demand for each label against the runners that carry it
 
 ```sh
-gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--include-unused] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--include-unused] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Match the labels the jobs requested against the labels the registered runners carry, one label at a time.
@@ -502,7 +512,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--include-unused` | `false` | List the labels no job requested in the window |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
@@ -518,7 +530,7 @@ Options:
 ### Show how long each runs-on label set waited
 
 ```sh
-gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Group the jobs by the `runs-on` label set they requested and report how long each set waited for a runner.
@@ -536,7 +548,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -551,7 +565,7 @@ Options:
 ### Show per runner activity
 
 ```sh
-gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--group-by name|label|group] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--group-by name|label|group] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Break the fleet activity down per runner, per `runs-on` label set or per runner group.
@@ -569,8 +583,10 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `--group-by` | `name` | Aggregate the jobs by this key: `{name\|label\|group}` |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -585,7 +601,7 @@ Options:
 ### List workflow runs behind the metrics
 
 ```sh
-gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every workflow run returned by the collection, one row each. The command uses
@@ -604,7 +620,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | `json` | Output format: `{json\|ndjson\|table}` |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--owner` | current repository owner | Select an organization by owner name |
@@ -617,7 +635,7 @@ Options:
 ### Show a self-hosted runner fleet overview
 
 ```sh
-gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Summarize how the self-hosted runner fleet behaved over a time window.
@@ -639,7 +657,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -654,7 +674,7 @@ Options:
 ### Show the failure rate and the duration of each workflow
 
 ```sh
-gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--self-hosted-only] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--self-hosted-only] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Break the collected jobs down per workflow.
@@ -674,7 +694,9 @@ Options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
@@ -682,6 +704,39 @@ Options:
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+### Show the per-repository workflow summary
+
+```sh
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Aggregate the collected workflow activity by repository.
+
+The row groups every workflow in a repository into a single summary. `RUNS` counts the workflow runs used for the repository, `JOBS` counts the self-hosted jobs in that scope, `DECIDED` counts pass/fail verdicts, `FAILED` counts the jobs that failed or timed out, `RETRIED` counts runs restarted at least once, and `FAIL` / `RETRY` are the corresponding rates. Under `--all-repos` this is what makes a quiet repository visible next to one whose collection `--max-runs` cut short.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |

@@ -204,6 +204,30 @@ func RenderMetricsConcurrency(r *render.Renderer, rows []metrics.ConcurrencyRow)
 	return t.Render()
 }
 
+// RenderMetricsRepositories prints one line per repository.
+func RenderMetricsRepositories(r *render.Renderer, rows []metrics.RepositoryRow) error {
+	if r.HasExporter() {
+		return r.RenderExportedData(rows)
+	}
+
+	t := r.NewTableWriter([]string{"REPOSITORY", "RUNS", "JOBS", "DECIDED", "FAILED", "FAIL", "RETRIED", "RETRY", "BUSY", "LAST JOB"})
+	for _, row := range rows {
+		t.Append([]string{
+			FormatOptional(row.Repository),
+			strconv.Itoa(row.Runs),
+			strconv.Itoa(row.Jobs),
+			strconv.Itoa(row.Decided),
+			strconv.Itoa(row.Failed),
+			FormatPercent(row.FailureRate),
+			strconv.Itoa(row.Retried),
+			FormatPercent(row.RetryRate),
+			FormatDurationStat(row.BusyTime, row.Jobs),
+			FormatTime(row.LastJobAt),
+		})
+	}
+	return t.Render()
+}
+
 // RenderMetricsWorkflows prints one line per workflow.
 func RenderMetricsWorkflows(r *render.Renderer, rows []metrics.WorkflowRow) error {
 	if r.HasExporter() {

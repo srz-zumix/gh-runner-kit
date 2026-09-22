@@ -409,8 +409,10 @@ Shared options:
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
 | `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | - | Drop the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--include-repo` | - | Keep only the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
@@ -754,6 +756,26 @@ or timed out, and `RETRIED` is how many runs were restarted at least once.
 discloses retry at the run level: a job list covers a run's last attempt only,
 so a job retried inside one attempt is indistinguishable from a job that ran
 once.
+
+### repository
+
+Aggregates the collected workflow activity by repository.
+
+```bash
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] \
+  [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] \
+  [--format json]
+```
+
+Table columns: `REPOSITORY`, `RUNS`, `JOBS`, `DECIDED`, `FAILED`, `FAIL`,
+`RETRIED`, `RETRY`, `BUSY`, `LAST JOB`.
+
+The row groups every workflow in a repository into one summary so an
+organization-wide collection can show which repositories are quiet and which ones
+were cut off by `--max-runs`. `FAIL` and `RETRY` are derived from the same raw
+counts that back the per-workflow report, which keeps the aggregation consistent
+across repository and workflow views.
 
 ### run
 
