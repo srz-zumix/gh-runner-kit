@@ -10,6 +10,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
+	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 )
 
 type stubJobFetcher struct {
@@ -84,6 +85,26 @@ func TestDataTruncatedRepos(t *testing.T) {
 	}
 	if got := data.Repos[1].FullName(); got != "o/b" {
 		t.Errorf("FullName() = %q, want %q", got, "o/b")
+	}
+}
+
+func TestFilterRepositories(t *testing.T) {
+	repos := []repository.Repository{
+		{Host: "github.com", Owner: "octo", Name: "api"},
+		{Host: "github.com", Owner: "octo", Name: "web"},
+		{Host: "github.com", Owner: "other", Name: "docs"},
+	}
+
+	got, err := filterRepositories(repos, []string{"octo/*"}, []string{"octo/web"})
+	if err != nil {
+		t.Fatalf("filterRepositories() error = %v", err)
+	}
+	if len(got) != 1 || parser.GetRepositoryFullName(got[0]) != "octo/api" {
+		t.Fatalf("filterRepositories() = %#v, want only octo/api", got)
+	}
+
+	if _, err := filterRepositories(repos, []string{"infra/*"}, nil); err == nil {
+		t.Fatal("filterRepositories() error = nil, want a no-match error")
 	}
 }
 

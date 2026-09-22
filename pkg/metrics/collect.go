@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"sync"
 	"time"
 
@@ -47,6 +48,12 @@ type Options struct {
 	// AllRepos collects the runs of every repository owned by the organization instead
 	// of only the repositories listed in Repos.
 	AllRepos bool
+	// IncludeRepos is a list of repository pattern strings such as "octo/*" or
+	// "OWNER/REPO". A repository that does not match all patterns is skipped before
+	// any workflow run request is sent.
+	IncludeRepos []string
+	// ExcludeRepos drops repositories that match any of these patterns.
+	ExcludeRepos []string
 	// SkipJobs leaves the per run job listing out of the collection. Reports that work
 	// from the runs alone save one API request per run with it.
 	SkipJobs bool
@@ -282,7 +289,7 @@ func (c *Collector) targetRepositories(ctx context.Context) ([]repository.Reposi
 		if len(c.opts.Repos) == 0 {
 			return nil, errors.New("collecting workflow runs requires a repository: pass --repo or --all-repos")
 		}
-		return c.opts.Repos, nil
+		return filterRepositories(c.opts.Repos, c.opts.IncludeRepos, c.opts.ExcludeRepos)
 	}
 
 	owned, err := gh.ListOwnerRepositories(ctx, c.client, c.repo)
@@ -298,8 +305,63 @@ func (c *Collector) targetRepositories(ctx context.Context) ([]repository.Reposi
 		repos = append(repos, repository.Repository{Host: c.repo.Host, Owner: c.repo.Owner, Name: r.GetName()})
 	}
 
+	repos, err = filterRepositories(repos, c.opts.IncludeRepos, c.opts.ExcludeRepos)
+	if err != nil {
+		return nil, err
+	}
+
 	logger.Warn("metrics: collecting workflow runs across repositories, this issues many API requests", "repositories", len(repos), "max_runs_per_repository", c.opts.MaxRuns)
 	return repos, nil
+}
+
+func filterRepositories(repos []repository.Repository, include, exclude []string) ([]repository.Repository, error) {
+	filtered := make([]repository.Repository, 0, len(repos))
+	for _, repo := range repos {
+		if len(include) > 0 && !matchesRepositoryPatternSet(include, repo) {
+			continue
+		}
+		if matchesRepositoryPatternSet(exclude, repo) {
+			continue
+		}
+		filtered = append(filtered, repo)
+	}
+	if len(include) > 0 && len(filtered) == 0 {
+		return nil, fmt.Errorf("no repositories matched include filter %v", include)
+	}
+	return filtered, nil
+}
+
+func matchesRepositoryPatternSet(patterns []string, repo repository.Repository) bool {
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		if matchesRepositoryPattern(pattern, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesRepositoryPattern(pattern string, repo repository.Repository) bool {
+	name := repo.Owner + "/" + repo.Name
+	fullName := parser.GetRepositoryFullName(repo)
+	if pattern == name || pattern == fullName {
+		return true
+	}
+	if repo.Host != "" {
+		fullHost := repo.Host + "/" + name
+		if pattern == fullHost {
+			return true
+		}
+		if ok, err := path.Match(pattern, fullHost); err == nil && ok {
+			return true
+		}
+	}
+	if ok, err := path.Match(pattern, name); err == nil && ok {
+		return true
+	}
+	return false
 }
 
 // collectRuns lists the workflow runs of repo that started inside the window, reporting

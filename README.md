@@ -661,7 +661,7 @@ Break the collected jobs down per workflow.
 
 Workflows are grouped by their repository and workflow file, so two workflows that share a display name, whether they live in different repositories (common under `--all-repos`) or are different files in the same repository, are reported on separate rows. The `REPOSITORY` and `PATH` columns identify each row (a dash is shown when that metadata is unavailable).
 
-The table exposes the raw counts behind the rates: `DECIDED` is the number of jobs that produced a pass or fail verdict, `FAILED` is how many of those failed or timed out, and `RETRIED` is how many runs were restarted at least once. `FAIL` is `FAILED / DECIDED`, and `RETRY` is `RETRIED / RUNS`. The API only exposes retry at the run level: a job list only ever covers a run's last attempt, so a job retried inside one attempt cannot be distinguished from one that ran once.
+ｓThe table exposes the raw counts behind the rates: `DECIDED` is the number of jobs that produced a pass or fail verdict, `FAILED` is how many of those failed or timed out, and `RETRIED` is how many runs were restarted at least once. `FAIL` is `FAILED / DECIDED`, and `RETRY` is `RETRIED / RUNS`. The API only exposes retry at the run level: a job list only ever covers a run's last attempt, so a job retried inside one attempt cannot be distinguished from one that ran once.
 
 Unlike the other metrics reports this one includes the jobs that ran on GitHub-hosted runners, so that a workflow can be judged as a whole. Pass `--self-hosted-only` to narrow it down to the fleet, and `--workflow` to collect a single workflow file to begin with.
 
@@ -682,6 +682,37 @@ Options:
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+### Show the per-repository workflow summary
+
+```sh
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Aggregate the collected workflow activity by repository.
+
+The row groups every workflow in a repository into a single summary. `RUNS` counts the workflow runs used for the repository, `JOBS` counts the self-hosted jobs in that scope, `DECIDED` counts pass/fail verdicts, `FAILED` counts the jobs that failed or timed out, `RETRIED` counts runs restarted at least once, and `FAIL` / `RETRY` are the corresponding rates. Under `--all-repos` this is what makes a quiet repository visible next to one whose collection `--max-runs` cut short.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |

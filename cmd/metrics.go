@@ -18,6 +18,7 @@ func NewMetricsCmd() *cobra.Command {
 	cmd.AddCommand(metrics.NewJobsCmd())
 	cmd.AddCommand(metrics.NewLabelCmd())
 	cmd.AddCommand(metrics.NewQueueCmd())
+	cmd.AddCommand(metrics.NewRepositoryCmd())
 	cmd.AddCommand(metrics.NewRunnerCmd())
 	cmd.AddCommand(metrics.NewRunsCmd())
 	cmd.AddCommand(metrics.NewSummaryCmd())

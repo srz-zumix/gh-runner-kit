@@ -93,6 +93,39 @@ func TestBuildWorkflowStatsSelfHostedOnly(t *testing.T) {
 	}
 }
 
+func TestBuildRepositoryStats(t *testing.T) {
+	rows := BuildRepositoryStats(testWorkflowData())
+
+	if len(rows) != 1 {
+		t.Fatalf("len(BuildRepositoryStats()) = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if got, want := row.Repository, "octo/demo"; got != want {
+		t.Fatalf("Repository = %q, want %q", got, want)
+	}
+	if got, want := row.Runs, 2; got != want {
+		t.Fatalf("Runs = %d, want %d (hosted workflow is dropped from the self-hosted fleet view)", got, want)
+	}
+	if got, want := row.Jobs, 3; got != want {
+		t.Fatalf("Jobs = %d, want %d", got, want)
+	}
+	if got, want := row.Decided, 3; got != want {
+		t.Fatalf("Decided = %d, want %d", got, want)
+	}
+	if got, want := row.Failed, 1; got != want {
+		t.Fatalf("Failed = %d, want %d", got, want)
+	}
+	if got, want := row.Retried, 1; got != want {
+		t.Fatalf("Retried = %d, want %d", got, want)
+	}
+	if got, want := row.FailureRate, 1.0/3.0; got != want {
+		t.Fatalf("FailureRate = %v, want %v", got, want)
+	}
+	if got, want := row.RetryRate, 0.5; got != want {
+		t.Fatalf("RetryRate = %v, want %v", got, want)
+	}
+}
+
 // TestBuildWorkflowStatsSeparatesSameNameDifferentFile ensures two distinct workflow
 // files that happen to share a display name are not merged into a single row.
 func TestBuildWorkflowStatsSeparatesSameNameDifferentFile(t *testing.T) {
