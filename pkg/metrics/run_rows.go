@@ -11,8 +11,8 @@ type RunRow struct {
 	Repository   string
 	Workflow     string
 	WorkflowPath string
-	WorkflowID   int64
-	RunID        int64
+	WorkflowID   int64 `json:"WorkflowID,string"`
+	RunID        int64 `json:"RunID,string"`
 	RunNumber    int
 	RunAttempt   int
 	Event        string

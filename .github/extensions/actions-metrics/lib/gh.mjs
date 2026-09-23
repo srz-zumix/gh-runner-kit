@@ -145,7 +145,7 @@ export async function ghApi(path, { host, cwd } = {}) {
  */
 export async function ghApiPaged(
     path,
-    { host, cwd, perPage = 100, maxPages = 10, maxItems = Infinity, extract, onPage } = {},
+    { host, cwd, perPage = 100, maxPages = 10, maxItems = Infinity, extract, onPage, onTruncated } = {},
 ) {
     const items = [];
     for (let page = 1; page <= maxPages; page += 1) {
@@ -160,6 +160,12 @@ export async function ghApiPaged(
         onPage?.(items.length, page);
         if (items.length >= maxItems || pageItems.length < perPage) {
             break;
+        }
+        // A full final page reached exactly on the last allowed page cannot be
+        // told apart from a collection that ends there, so the cap is reported
+        // as a possible - not certain - truncation.
+        if (page === maxPages) {
+            onTruncated?.(items.length);
         }
     }
     return items.length > maxItems ? items.slice(0, maxItems) : items;

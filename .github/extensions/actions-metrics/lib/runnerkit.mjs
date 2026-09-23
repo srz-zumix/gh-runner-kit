@@ -206,6 +206,32 @@ export function repoFilterWarnings(probe, filters, target) {
     return warnings;
 }
 
+/** The runner inventory scope the CLI can collect for a target: an org walks its repos, a repo its own. */
+function runnerTypeScope(target) {
+    return target?.kind === "org" ? "org" : "repo";
+}
+
+/**
+ * Report a runner inventory type the user asked for that the selected target
+ * cannot honour, so a dropped `--type` is never mistaken for a collection that
+ * used it. The CLI rejects `--type repo` without a repository and clears the
+ * repository for `--type org`, so a contradicting choice would strand every
+ * fleet report; it is ignored and the target's own scope is used instead.
+ */
+export function runnerTypeWarnings(filters, target) {
+    const runnerType = filters?.runnerType;
+    if (!runnerType || runnerType === "auto") {
+        return [];
+    }
+    const scope = runnerTypeScope(target);
+    if (runnerType === scope) {
+        return [];
+    }
+    return [
+        `Runner inventory "${runnerType}" does not apply to the selected ${scope === "org" ? "organization" : "repository"} target, so it was ignored and the ${scope} runners were used instead.`,
+    ];
+}
+
 function baseArgs(subcommand, { target, filters, limits, force, probe }, format = "json") {
     const args = [
         "runner-kit",
@@ -217,7 +243,12 @@ function baseArgs(subcommand, { target, filters, limits, force, probe }, format 
         "--format",
         format,
     ];
-    if (filters.runnerType && filters.runnerType !== "auto") {
+    if (filters.runnerType && filters.runnerType !== "auto" && filters.runnerType === runnerTypeScope(target)) {
+        // The CLI's target resolver ties the runner inventory to the target:
+        // `--type repo` needs a repository and `--type org` clears it and then
+        // needs `--all-repos`. A type that contradicts the selected target is
+        // dropped here (and reported by runnerTypeWarnings) rather than sent to
+        // fail collection.
         args.push("--type", filters.runnerType);
     }
     if (filters.event) {

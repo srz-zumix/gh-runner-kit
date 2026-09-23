@@ -118,7 +118,24 @@ export function classifyJob(job, selfHostedNames) {
         os = "UNKNOWN";
     }
 
-    return { selfHosted: Boolean(selfHosted), os, labelSet: labels.slice().sort().join(", ") || "(none)" };
+    const sorted = labels.slice().sort();
+    return {
+        selfHosted: Boolean(selfHosted),
+        os,
+        // The sorted label list, kept so grouping and matching can work off the
+        // structure rather than a display string that a label may contain.
+        labelList: sorted,
+        // A collision-free key: a separator inside a custom label cannot forge
+        // the boundary between two labels, the same way labelSetKey does in the
+        // Go reports. Two distinct label sets never share a key.
+        labelKey: labelSetKey(sorted),
+        labelSet: sorted.join(", ") || "(none)",
+    };
+}
+
+/** Encode a label set so a separator inside one label cannot collide with the boundary between labels. */
+function labelSetKey(labels) {
+    return labels.map((label) => `${label.length}:${label}`).join("");
 }
 
 function billableMinutes(durationMs) {
@@ -360,9 +377,9 @@ function runnerMetrics(runners, jobs) {
     const selfHostedJobs = jobs.filter((job) => job.selfHosted);
     const hostedJobs = jobs.filter((job) => !job.selfHosted);
 
-    const demand = [...groupBy(jobs, (job) => job.labelSet).entries()]
-        .map(([labelSet, group]) => ({
-            labelSet,
+    const demand = [...groupBy(jobs, (job) => job.labelKey).entries()]
+        .map(([, group]) => ({
+            labelSet: group[0].labelSet,
             selfHosted: group.some((job) => job.selfHosted),
             jobs: group.length,
             minutes: group.reduce((sum, job) => sum + job.minutes, 0),
@@ -370,10 +387,7 @@ function runnerMetrics(runners, jobs) {
             p95QueueMs: percentile(group.map((job) => job.queueMs).filter(Number.isFinite), 95),
             matchingRunners: registered.filter((runner) => {
                 const runnerLabels = new Set(runner.labels.map((label) => label.toLowerCase()));
-                return labelSet
-                    .split(", ")
-                    .filter((label) => label && label !== "(none)")
-                    .every((label) => runnerLabels.has(label));
+                return group[0].labelList.filter(Boolean).every((label) => runnerLabels.has(label));
             }).length,
         }))
         .sort((a, b) => b.jobs - a.jobs);

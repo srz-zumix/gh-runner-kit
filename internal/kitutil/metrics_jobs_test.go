@@ -54,3 +54,24 @@ func TestWriteMetricsJobsNDJSON(t *testing.T) {
 		}
 	}
 }
+
+// A GitHub job or run id can exceed 2^53, where a JSON number would be rounded
+// by a consumer that parses it as a float. The ids must therefore be quoted so
+// two distinct jobs never collapse onto one value.
+func TestWriteMetricsJobsNDJSONQuotesLargeIDs(t *testing.T) {
+	const jobID int64 = 9007199254740993 // 2^53 + 1, not representable as a float64
+	b := &strings.Builder{}
+	if err := WriteMetricsJobsNDJSON(b, []metrics.JobRow{{JobID: jobID, RunID: jobID, RunnerID: jobID}}); err != nil {
+		t.Fatalf("WriteMetricsJobsNDJSON() error = %v", err)
+	}
+	got := b.String()
+	for _, want := range []string{
+		`"JobID":"9007199254740993"`,
+		`"RunID":"9007199254740993"`,
+		`"RunnerID":"9007199254740993"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("WriteMetricsJobsNDJSON() = %q, want it to contain %q", got, want)
+		}
+	}
+}

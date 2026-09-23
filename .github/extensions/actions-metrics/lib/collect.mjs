@@ -5,7 +5,7 @@
 // permissions (org owner, billing read) the operator may not have.
 
 import { GhError, ghApi, ghApiPaged, mapLimit } from "./gh.mjs";
-import { collectFleet, collectRuns, probeRunnerKit, repoFilterWarnings } from "./runnerkit.mjs";
+import { collectFleet, collectRuns, probeRunnerKit, repoFilterWarnings, runnerTypeWarnings } from "./runnerkit.mjs";
 
 export const DEFAULTS = {
     days: 30,
@@ -44,6 +44,7 @@ async function fetchJobs({ repo, runs, limits, cwd, onProgress, warnings }) {
         );
     }
     let done = 0;
+    let jobsTruncated = false;
     const perRun = await mapLimit(targets, limits.jobConcurrency, async (run) => {
         try {
             const jobs = await ghApiPaged(`/repos/${repo.nwo}/actions/runs/${run.id}/jobs?filter=latest`, {
@@ -51,6 +52,9 @@ async function fetchJobs({ repo, runs, limits, cwd, onProgress, warnings }) {
                 cwd,
                 maxPages: 3,
                 extract: (payload) => payload?.jobs ?? [],
+                onTruncated: () => {
+                    jobsTruncated = true;
+                },
             });
             return jobs.map((job) => ({ ...job, __run: run }));
         } catch (error) {
@@ -63,6 +67,11 @@ async function fetchJobs({ repo, runs, limits, cwd, onProgress, warnings }) {
             }
         }
     });
+    if (jobsTruncated) {
+        warnings.push(
+            "At least one run has more jobs than were read (the per-run job listing stops after 300 jobs), so the queue-time, runner-usage, duration and cost cards may undercount that run.",
+        );
+    }
     return perRun.flat();
 }
 
@@ -74,6 +83,10 @@ async function fetchRunners({ target, cwd, onProgress, warnings }) {
             cwd,
             maxPages: 5,
             extract: (payload) => payload?.runners ?? [],
+            onTruncated: () =>
+                warnings.push(
+                    "This organization has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
+                ),
         }),
     );
     const repoRunners =
@@ -84,6 +97,10 @@ async function fetchRunners({ target, cwd, onProgress, warnings }) {
                       cwd,
                       maxPages: 5,
                       extract: (payload) => payload?.runners ?? [],
+                      onTruncated: () =>
+                          warnings.push(
+                              "This repository has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
+                          ),
                   }),
               )
             : null;
@@ -154,6 +171,7 @@ export async function collectSnapshot({ target, filters, limits = {}, cwd, force
 
     onProgress?.("Fetching workflow runs");
     warnings.push(...repoFilterWarnings(await probeRunnerKit(cwd), filters, target));
+    warnings.push(...runnerTypeWarnings(filters, target));
     const runsResult = await collectRuns({ target, filters, limits: effective, cwd, onProgress, warnings });
     const runs = runsResult.rows;
     const jobs =

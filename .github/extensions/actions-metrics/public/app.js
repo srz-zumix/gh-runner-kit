@@ -348,10 +348,14 @@ function orgWideNotice(orgWide) {
         : null;
 }
 
-function runnerTypeControl(fleet) {
+function runnerTypeControl(fleet, orgWide) {
+    // The CLI ties the runner inventory to the target: an organization can only
+    // walk its repositories and a repository only itself, so the type that
+    // contradicts the target is not offered rather than accepted and ignored.
+    const options = [{ value: "auto", label: "auto" }, orgWide ? "org" : "repo"];
     return selectControl(
         "Runner inventory",
-        [{ value: "auto", label: "auto" }, "org", "repo"],
+        options,
         fleet?.runnerType ?? "auto",
         (value) => applyFilters({ runnerType: value }),
     );
@@ -1682,7 +1686,7 @@ function renderRunners(metrics) {
             summary.total === 0
                 ? "No self-hosted runner is visible with the current token permissions."
                 : "Read from the runner API, which reports the fleet as it is right now because it keeps no history.",
-            fleet?.available ? runnerTypeControl(fleet) : null,
+            fleet?.available ? runnerTypeControl(fleet, orgWide) : null,
         ),
         card(
             "Runner activity",
