@@ -32,18 +32,32 @@ function sendJson(res, status, body) {
     res.end(payload);
 }
 
+// Errors carrying an `httpStatus` are treated as client faults by the request
+// handler so a bad request never surfaces as an internal server error.
+function httpError(status, message) {
+    const error = new Error(message);
+    error.httpStatus = status;
+    return error;
+}
+
 async function readBody(req) {
     const chunks = [];
+    let total = 0;
     for await (const chunk of req) {
-        chunks.push(chunk);
-        if (chunks.reduce((sum, part) => sum + part.length, 0) > 1024 * 1024) {
-            throw new Error("Request body too large");
+        total += chunk.length;
+        if (total > 1024 * 1024) {
+            throw httpError(413, "Request body too large");
         }
+        chunks.push(chunk);
     }
     if (chunks.length === 0) {
         return {};
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    try {
+        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+        throw httpError(400, "Invalid JSON body");
+    }
 }
 
 async function serveStatic(res, pathname) {
@@ -87,7 +101,7 @@ export async function startInstanceServer(instance) {
     const server = createServer((req, res) => {
         const url = new URL(req.url, "http://127.0.0.1");
         void handle(req, res, url, instance).catch((error) => {
-            sendJson(res, 500, { error: error?.message ?? String(error) });
+            sendJson(res, error?.httpStatus ?? 500, { error: error?.message ?? String(error) });
         });
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

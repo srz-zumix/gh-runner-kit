@@ -37,6 +37,11 @@ gh runner-kit                # Root command
 ├── available                # List runners a repository can use
 ├── cordon                   # Stop runners from receiving new jobs
 ├── extension                # Manage bundled Copilot CLI canvas extensions
+│   ├── install               # Install bundled extensions
+│   ├── list                  # List extensions bundled with this tool
+│   ├── status                # Show installation status of extensions
+│   ├── uninstall             # Uninstall extensions
+│   └── update                # Update installed extensions
 ├── group                    # Organization runner groups
 │   ├── create                # Create a runner group
 │   ├── delete                # Delete a runner group
