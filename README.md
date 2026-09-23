@@ -20,6 +20,12 @@ gh runner-kit completion <shell>
 
 Run `gh runner-kit completion --help` for details on how to load the script for your shell.
 
+## Dashboard
+
+This repository ships a Copilot CLI canvas extension that renders the `metrics` reports as an interactive dashboard, covering one repository or a whole organization. It is discovered automatically when you work in a clone of this repository.
+
+See [.github/extensions/actions-metrics/README.md](.github/extensions/actions-metrics/README.md).
+
 ## Usage
 
 ### List self-hosted runners available to a repository

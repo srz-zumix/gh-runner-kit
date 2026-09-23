@@ -1,0 +1,1425 @@
+:root {
+    --surface: var(--background-color-default, #ffffff);
+    --surface-muted: color-mix(in srgb, var(--text-color-default, #1f2328) 4%, transparent);
+    --border: var(--border-color-default, #d1d9e0);
+    --text: var(--text-color-default, #1f2328);
+    --muted: var(--text-color-muted, #59636e);
+    --success: var(--true-color-green, #1a7f37);
+    --danger: var(--true-color-red, #d1242f);
+    --warning: var(--true-color-yellow, #9a6700);
+    --accent: var(--true-color-blue, #0969da);
+    --accent-muted: var(--true-color-blue-muted, #ddf4ff);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: var(--text-body-medium, 14px);
+    line-height: var(--leading-body-medium, 20px);
+}
+
+.toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px 8px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.toolbar-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.target-picker {
+    position: relative;
+    flex: 0 1 auto;
+}
+
+.target-button {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 420px;
+}
+
+.target-button__label {
+    color: var(--muted);
+    font-weight: normal;
+}
+
+.target-button__value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.target-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 320px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.target-popover form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.target-popover .field {
+    min-width: 0;
+}
+
+.target-hint,
+.target-error {
+    margin: 0;
+    font-size: var(--text-body-small, 12px);
+    line-height: 1.4;
+}
+
+.target-hint {
+    color: var(--muted);
+}
+
+.target-error {
+    color: var(--true-color-red, #cf222e);
+}
+
+.target-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.query-toggle__count {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--color-white, #ffffff);
+    font-size: var(--text-body-small, 12px);
+}
+
+.query-editor {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.query-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.query-group > h3 {
+    margin: 0 0 2px;
+    font-size: var(--text-body-small, 12px);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.query-group__note {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    line-height: 1.4;
+}
+
+.query-group__effect {
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-weight: normal;
+}
+
+.field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+}
+
+.field-grid .field {
+    min-width: 0;
+}
+
+.query-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.field-grid .field--dirty > span {
+    color: var(--accent);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.field-grid .field--checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.field-hint {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    line-height: 1.35;
+}
+
+.query-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.query-effect {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    line-height: 1.4;
+}
+
+.query-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 92px;
+}
+
+.field--grow {
+    flex: 1 1 220px;
+}
+
+.field > span {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+input,
+select {
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-body-small, 12px);
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--color-focus-outline, var(--accent));
+    outline-offset: 1px;
+}
+
+.button {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-body-small, 12px);
+    font-weight: var(--font-weight-semibold, 600);
+    cursor: pointer;
+}
+
+.button--primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--color-white, #ffffff);
+}
+
+.button[disabled] {
+    opacity: 0.55;
+    cursor: progress;
+}
+
+.status {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    min-height: 16px;
+}
+
+.banner {
+    margin: 8px 16px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--warning);
+    border-radius: 6px;
+    background: var(--surface-muted);
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.banner--error {
+    border-left-color: var(--danger);
+    color: var(--danger);
+}
+
+.banner ul {
+    margin: 4px 0 0;
+    padding-left: 18px;
+}
+
+.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 16px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.tab {
+    padding: 6px 10px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-body-small, 12px);
+    font-weight: var(--font-weight-semibold, 600);
+    cursor: pointer;
+}
+
+.tab[aria-selected="true"] {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+}
+
+.content {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.empty {
+    color: var(--muted);
+}
+
+.kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+}
+
+.kpi {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-muted);
+}
+
+.kpi__label {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.kpi__value {
+    font-size: var(--text-title-medium, 20px);
+    font-weight: var(--font-weight-semibold, 600);
+    line-height: var(--leading-title-medium, 26px);
+}
+
+.kpi__hint {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-muted);
+}
+
+.card__title {
+    margin: 0;
+    font-size: var(--text-body-small, 12px);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.inline-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.inline-field select {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background-color-default, #fff);
+    color: var(--text-color-default, inherit);
+    font: inherit;
+}
+
+.inline-field input[type="search"] {
+    width: 160px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background-color-default, #fff);
+    color: var(--text-color-default, inherit);
+    font: inherit;
+}
+
+.inline-field input[type="number"] {
+    width: 96px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background-color-default, #fff);
+    color: var(--text-color-default, inherit);
+    font: inherit;
+}
+
+/* Settings fold away: they are read rarely and would otherwise push the
+   numbers the tab exists for below the fold. */
+.card--settings > .card__header--summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.card--settings > .card__header--summary::-webkit-details-marker {
+    display: none;
+}
+
+.card--settings > .card__header--summary::before {
+    content: "▸";
+    margin-right: 6px;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.card--settings[open] > .card__header--summary::before {
+    content: "▾";
+}
+
+.card--settings:not([open]) > .card__header--summary {
+    border-bottom: none;
+}
+
+/* One row per runner: name, bar, busy time, utilization. */
+.hbars {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.hbar {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.4fr) 3fr 72px 56px;
+    align-items: center;
+    gap: 10px;
+}
+
+.hbar__label {
+    overflow: hidden;
+    font-size: var(--text-body-small, 12px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hbar__value,
+.hbar__hint {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.inline-field--check {
+    cursor: pointer;
+    user-select: none;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.inline-field--check input {
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.chart-wrap {
+    position: relative;
+}
+
+/* Runner inventory drawn across the concurrency timeline. */
+.chart__capacity {
+    position: absolute;
+    right: 0;
+    left: 0;
+    border-top: 1px dashed var(--danger);
+    pointer-events: none;
+}
+
+.chart__capacity-label {
+    position: absolute;
+    top: -8px;
+    right: 0;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--surface-muted);
+    color: var(--danger);
+    font-size: var(--text-body-small, 12px);
+    line-height: 16px;
+}
+
+.notice {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-muted);
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.card__body {
+    padding: 12px;
+    overflow-x: auto;
+}
+
+.card__note {
+    padding: 0 12px 10px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-body-small, 12px);
+}
+
+th,
+td {
+    padding: 5px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+th {
+    color: var(--muted);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.th--sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.th--sortable:hover {
+    color: var(--text-color-default, inherit);
+}
+
+.th--sorted {
+    color: var(--text-color-default, inherit);
+}
+
+/* Reserved so the heading does not shift when the arrow appears. */
+.th__arrow {
+    display: inline-block;
+    width: 12px;
+    font-size: 9px;
+}
+
+th.num .th__arrow {
+    text-align: left;
+}
+
+tbody tr:last-child td {
+    border-bottom: none;
+}
+
+td.num,
+th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+td.wrap {
+    white-space: normal;
+    max-width: 380px;
+}
+
+code,
+.mono {
+    font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+    font-size: var(--text-code-inline, 12px);
+}
+
+.chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 132px;
+}
+
+.chart__col {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column-reverse;
+    min-width: 3px;
+    height: 100%;
+    justify-content: flex-start;
+}
+
+.chart__seg {
+    width: 100%;
+}
+
+.chart__seg--success {
+    background: var(--success);
+}
+
+.chart__seg--failure {
+    background: var(--danger);
+}
+
+.chart__seg--cancelled {
+    background: var(--muted);
+}
+
+.chart__seg--other {
+    background: var(--accent-muted);
+}
+
+.chart__axis {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.legend__swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 4px;
+    border-radius: 2px;
+    vertical-align: baseline;
+}
+
+.bar {
+    position: relative;
+    min-width: 90px;
+    height: 14px;
+    background: var(--surface-muted);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.bar__fill {
+    height: 100%;
+    background: var(--accent);
+}
+
+.bar__fill--danger {
+    background: var(--danger);
+}
+
+.pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    font-size: var(--text-body-small, 12px);
+}
+
+.pill--ok {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.pill--bad {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.pill--warn {
+    color: var(--warning);
+    border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+
+a {
+    color: var(--accent);
+}
+
+/* Warned variant of the notice: the numbers next to it are a lower bound. */
+.notice--warn {
+    border-color: var(--warning);
+    color: var(--text);
+}
+
+.control-note {
+    align-self: center;
+    color: var(--warning);
+    font-size: var(--text-body-small, 12px);
+}
+
+/* Busy state of one runner per row, one bucket per column. */
+.heat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.heat__row {
+    display: grid;
+    grid-template-columns: minmax(110px, 1.4fr) 4fr 64px 60px;
+    align-items: center;
+    gap: 10px;
+}
+
+.heat__label {
+    overflow: hidden;
+    font-size: var(--text-body-small, 12px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.heat__cells {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 1px;
+    height: 14px;
+}
+
+.heat__cell {
+    border-radius: 1px;
+    background: var(--surface-muted);
+}
+
+.heat__cell--1 {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.heat__cell--2 {
+    background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.heat__cell--3 {
+    background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.heat__cell--4 {
+    background: var(--accent);
+}
+
+.heat__value,
+.heat__hint {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.heat__legend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.heat__legend .heat__cell {
+    width: 16px;
+    height: 12px;
+}
+
+/* Small multiples: one busy-ratio chart per runner, all on the same scale. */
+.spark {
+    display: grid;
+    /* 168 buckets over a narrow card alias into noise, so the column count
+       follows the panel width rather than being fixed. */
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+
+.spark__cell {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-muted);
+    gap: 4px;
+}
+
+.spark__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.spark__name {
+    overflow: hidden;
+    font-size: var(--text-body-small, 12px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.spark__total {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.spark__svg {
+    display: block;
+    width: 100%;
+    height: 46px;
+    border-bottom: 1px solid var(--border);
+}
+
+.spark__area {
+    fill: color-mix(in srgb, var(--accent) 24%, transparent);
+    stroke: none;
+}
+
+.spark__line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5px;
+    stroke-linejoin: round;
+}
+
+.spark__marker {
+    stroke: var(--text);
+    stroke-width: 1px;
+    vector-effect: non-scaling-stroke;
+}
+
+.spark__read {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+    min-height: 16px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Job explorer                                                        */
+/*                                                                     */
+/* Everything below belongs to the tab that filters in the browser.    */
+/* Scoped under `.explore` wherever it reuses a class the server-side  */
+/* tabs also draw, so the two cannot restyle each other.               */
+/* ------------------------------------------------------------------ */
+
+.explore {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.explore__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.explore__actions > .card {
+    flex: 1 1 320px;
+}
+
+/* What the CLI was asked for. Permanent, because every filter narrows it. */
+.scope {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+.scope__line {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 8px;
+}
+
+.scope__title {
+    color: var(--muted);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.scope__body {
+    color: var(--text-color-default, inherit);
+}
+
+.scope__warn {
+    margin: 4px 0 0;
+    padding: 8px 10px;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    color: var(--text-color-default, inherit);
+}
+
+/* Free-text search sits above the facets and counts what it matched. */
+.explore-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.explore-search__input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: inherit;
+    font: inherit;
+}
+
+.explore-search__count {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+}
+
+.facets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px;
+}
+
+.facet {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+}
+
+.facet--on {
+    border-color: var(--accent);
+}
+
+.facet__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    font-size: var(--text-body-small, 12px);
+    user-select: none;
+}
+
+.facet__badge {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.facet--on .facet__badge {
+    color: var(--accent);
+}
+
+.facet__search {
+    width: calc(100% - 16px);
+    margin: 0 8px 6px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface-muted);
+    color: inherit;
+    font: inherit;
+    font-size: var(--text-body-small, 12px);
+}
+
+/* Capped so a facet with thousands of runners cannot push the page off screen. */
+.facet__list {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 0 8px 8px;
+}
+
+.facet__option {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    cursor: pointer;
+    font-size: var(--text-body-small, 12px);
+}
+
+.facet__option input {
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.facet__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.facet__count {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.facet__more {
+    margin: 0;
+    padding: 0 8px 8px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+}
+
+/* One chip per active filter, so what is narrowing the page is always visible. */
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.chip {
+    padding: 3px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-body-small, 12px);
+}
+
+.chip:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.chip--clear {
+    border-color: var(--border);
+    background: var(--surface-muted);
+    color: var(--muted);
+}
+
+.subhead {
+    margin: 14px 0 6px;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.subhead:first-child {
+    margin-top: 0;
+}
+
+/* ---- charts ---- */
+
+.chart {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.chart-empty {
+    margin: 0;
+    padding: 18px 0;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    text-align: center;
+}
+
+.chart__grid {
+    stroke: var(--border);
+    stroke-width: 1;
+}
+
+.chart__label {
+    fill: var(--muted);
+    font-size: 10px;
+}
+
+.chart__bar {
+    fill: var(--accent);
+}
+
+.chart__bar--on {
+    fill: var(--danger);
+}
+
+.chart__area {
+    fill: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.chart__line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+}
+
+.chart__hit {
+    fill: transparent;
+}
+
+/* Drag-to-select over a bucket axis. */
+.brush__surface {
+    fill: transparent;
+    cursor: crosshair;
+}
+
+.brush__range {
+    fill: color-mix(in srgb, var(--accent) 16%, transparent);
+    stroke: var(--accent);
+    stroke-dasharray: 3 2;
+    stroke-width: 1;
+    pointer-events: none;
+}
+
+/* ---- ranked lists ---- */
+
+.ranked {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ranked__item {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.6fr) 3fr 68px;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--text-body-small, 12px);
+}
+
+.ranked__label {
+    overflow: hidden;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.ranked__label:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.ranked__item--on .ranked__label {
+    color: var(--accent);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.ranked__track {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--surface-muted);
+}
+
+.ranked__fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent);
+}
+
+.ranked__value {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* Second line under a ranked row, spanning the bar and the value. */
+.ranked__note {
+    grid-column: 2 / -1;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+/* ---- share bars ---- */
+
+.share {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.share__bar {
+    display: flex;
+    height: 16px;
+    overflow: hidden;
+    border-radius: 4px;
+}
+
+.share__segment {
+    min-width: 2px;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+.share__segment--on {
+    outline: 2px solid var(--text-color-default, #000);
+    outline-offset: -2px;
+}
+
+.share__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+    padding: 0;
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    list-style: none;
+}
+
+.share__legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.share__swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
+/* ---- heatmap ---- */
+
+/* Three columns here, unlike the activity tab's four: this heatmap reports
+   occupancy only, and the runner name doubles as a filter control. */
+.explore .heat__row {
+    grid-template-columns: minmax(120px, 1.3fr) 4fr 76px;
+}
+
+.explore .heat__row--head {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.heat__name {
+    overflow: hidden;
+    font-size: var(--text-body-small, 12px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.heat__name--pick {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+button.heat__name--pick:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.heat__name--on {
+    color: var(--accent);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.heat__total {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.heat__tick {
+    overflow: visible;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.explore .heat__cell {
+    background: var(--surface-muted);
+}
+
+/* ---- table ---- */
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+.sort {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.sort:hover {
+    color: var(--accent);
+}
+
+.sort--asc::after {
+    content: " ▲";
+    font-size: 9px;
+}
+
+.sort--desc::after {
+    content: " ▼";
+    font-size: 9px;
+}
+
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.pager__label {
+    color: var(--muted);
+    font-size: var(--text-body-small, 12px);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- controls ---- */
+
+.control {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: var(--text-body-small, 12px);
+}
+
+.control__label {
+    color: var(--muted);
+}
+
+.control__input {
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: inherit;
+    font: inherit;
+}
+
+.control__hint {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.explore .table__link {
+    color: var(--true-color-blue, #0969da);
+    text-decoration: none;
+}
+
+.explore .table__link:hover,
+.explore .table__link:focus-visible {
+    text-decoration: underline;
+}
+
+/*
+ * Last on purpose, and !important on purpose. The browser hides [hidden] with
+ * a plain `display: none`, which loses to any class that sets a display of its
+ * own - .target-popover asks for `display: flex`, so the box stayed on screen
+ * however often the script set the attribute. Everything this dashboard shows
+ * and hides goes through [hidden], so it is settled here once. Keep this rule
+ * at the foot of the file: !important already wins in a browser, and the order
+ * makes it win in jsdom too, where the stylesheet test can then see it.
+ */
+[hidden] {
+    display: none !important;
+}
