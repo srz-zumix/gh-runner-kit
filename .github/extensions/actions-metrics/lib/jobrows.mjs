@@ -10,7 +10,7 @@
 // reader who picks "GitHub-hosted" from a facet would be shown an empty chart
 // with no way to tell that the rows had never been fetched.
 
-import { jobRowsCommand, probeRunnerKit } from "./runnerkit.mjs";
+import { jobRowsCommand, localRepoFilter, probeRunnerKit, unsupportedRepoFilters } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 
 // Declared in shared/fields.mjs so the toolbar bounds match the normalizer.
@@ -36,11 +36,12 @@ export { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET };
 export async function collectJobRows({ target, filters, limits, cwd, signal, onProgress } = {}) {
     const budget = filters?.rowBudget ?? DEFAULT_ROW_BUDGET;
     const cap = Math.max(MIN_ROW_BUDGET, Math.min(MAX_ROW_BUDGET, budget));
+    const probe = await probeRunnerKit(cwd);
     const { args, env } = jobRowsCommand({
         target,
         filters,
         limits,
-        probe: await probeRunnerKit(cwd),
+        probe,
         // Everything, so that every explorer filter has something to narrow.
         kind: "all",
         // No `--runner` or `--exclude-runner`: runner selection is a filter the
@@ -49,6 +50,12 @@ export async function collectJobRows({ target, filters, limits, cwd, signal, onP
         exclusions: [],
         limit: cap + 1,
     });
+
+    // The repository filters are applied before collection by a current CLI, but
+    // an older one drops them, which would silently load every repository of an
+    // organization for a filtered query. Narrow those rows here instead so the
+    // explorer never shows repositories the query excluded.
+    const repoAllowed = localRepoFilter(unsupportedRepoFilters(probe, filters, target));
 
     const rows = [];
     let malformed = 0;
@@ -66,11 +73,19 @@ export async function collectJobRows({ target, filters, limits, cwd, signal, onP
                 // needed and reading on would only cost time.
                 return false;
             }
+            let parsed;
             try {
-                rows.push(JSON.parse(line));
+                parsed = JSON.parse(line);
             } catch {
                 malformed += 1;
+                return true;
             }
+            // A row from a repository the query excluded is dropped rather than
+            // counted against the budget: it is not a row the reader asked for.
+            if (repoAllowed && !repoAllowed(parsed?.Repo)) {
+                return true;
+            }
+            rows.push(parsed);
             if (read % 5000 === 0) {
                 onProgress?.(`Read ${read} job rows`);
             }

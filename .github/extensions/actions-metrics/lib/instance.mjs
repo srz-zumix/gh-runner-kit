@@ -190,6 +190,12 @@ export class DashboardInstance {
         return {
             instanceId: this.instanceId,
             key: this.key,
+            // The scope-aware identity of this panel's target. Distinct from
+            // `key`, which is only the display selector: a repository and an
+            // organization can share one display selector, so consumers that
+            // decide whether the target changed must compare this rather than
+            // `key` or they will not reset when switching between the two.
+            identity: this.identity,
             target: targetOf(this.effectiveQuery),
             scope: scopeOf(this.effectiveQuery),
             query: this.effectiveQuery,

@@ -1,6 +1,13 @@
 // Pure aggregation layer: turns the raw payloads from collect.mjs into the
 // numbers the dashboard renders and the agent analyses. No I/O here.
 
+import { FAILURE_CONCLUSIONS } from "../shared/rows.mjs";
+
+/** Whether a run or job conclusion counts as a failure, matching the explorer. */
+function isFailureConclusion(conclusion) {
+    return FAILURE_CONCLUSIONS.has(conclusion);
+}
+
 /** Per-minute list price for GitHub-hosted standard runners (USD). */
 export const COST_RATES = { UBUNTU: 0.008, WINDOWS: 0.016, MACOS: 0.08 };
 
@@ -98,14 +105,49 @@ function dayKey(value) {
     return time === null ? null : new Date(time).toISOString().slice(0, 10);
 }
 
+/** The runner group GitHub reports for its own hosted runners. */
+const HOSTED_RUNNER_GROUP = "github actions";
+/** Label prefixes of GitHub-hosted runner images, matching the Go classifier. */
+const HOSTED_LABEL_PREFIXES = ["ubuntu-", "windows-", "macos-"];
+
+function hasHostedLabel(labels) {
+    return labels.some((label) => HOSTED_LABEL_PREFIXES.some((prefix) => label.startsWith(prefix)));
+}
+
+/**
+ * The runner kind of a job, mirroring the Go `ClassifyJob`: a job that names a
+ * registered runner or carries the self-hosted label is self-hosted; the hosted
+ * runner group or a hosted image label makes it GitHub-hosted; anything else is
+ * unknown. The unknown kind is kept explicit so the fleet aggregates can treat
+ * it as activity - the same way the CLI's self-hosted filter retains it -
+ * rather than silently counting it as GitHub-hosted.
+ */
+function classifyKind(runnerName, selfHostedNames, labels, group) {
+    if (runnerName && selfHostedNames.has(runnerName)) {
+        return "self-hosted";
+    }
+    if (group.toLowerCase() === HOSTED_RUNNER_GROUP) {
+        return "github-hosted";
+    }
+    if (labels.includes("self-hosted")) {
+        return "self-hosted";
+    }
+    if (hasHostedLabel(labels)) {
+        return "github-hosted";
+    }
+    return "unknown";
+}
+
 /** Infer the runner class of a job from its requested labels and runner group. */
 export function classifyJob(job, selfHostedNames) {
     const labels = (job.labels ?? []).map((label) => String(label).toLowerCase());
     const group = String(job.runner_group_name ?? "");
-    const selfHosted =
-        labels.includes("self-hosted") ||
-        (job.runner_name && selfHostedNames.has(job.runner_name)) ||
-        (group !== "" && group !== "GitHub Actions");
+    const kind = classifyKind(job.runner_name, selfHostedNames, labels, group);
+    // Fleet activity is everything the CLI's self-hosted filter keeps: the
+    // self-hosted jobs and the jobs whose runner could not be identified. Only
+    // the jobs positively identified as GitHub-hosted are excluded, so an
+    // unknown job is counted as fleet demand rather than as GitHub-hosted.
+    const selfHosted = kind !== "github-hosted";
 
     let os = "UBUNTU";
     if (labels.some((label) => label.startsWith("windows"))) {
@@ -120,7 +162,8 @@ export function classifyJob(job, selfHostedNames) {
 
     const sorted = labels.slice().sort();
     return {
-        selfHosted: Boolean(selfHosted),
+        kind,
+        selfHosted,
         os,
         // The sorted label list, kept so grouping and matching can work off the
         // structure rather than a display string that a label may contain.
@@ -235,17 +278,18 @@ function overviewMetrics(runs, jobs) {
     const daily = [...groupBy(runs, (run) => dayKey(run.created_at)).entries()]
         .map(([date, dayRuns]) => {
             const dayConclusions = countBy(dayRuns, (run) => run.conclusion ?? "running");
+            const success = dayConclusions.get("success") ?? 0;
+            const cancelled = dayConclusions.get("cancelled") ?? 0;
+            // timed_out and startup_failure are failures too, the same way the
+            // explorer's FAILURE_CONCLUSIONS counts them.
+            const failure = dayRuns.filter((run) => isFailureConclusion(run.conclusion)).length;
             return {
                 date,
                 total: dayRuns.length,
-                success: dayConclusions.get("success") ?? 0,
-                failure: dayConclusions.get("failure") ?? 0,
-                cancelled: dayConclusions.get("cancelled") ?? 0,
-                other:
-                    dayRuns.length -
-                    (dayConclusions.get("success") ?? 0) -
-                    (dayConclusions.get("failure") ?? 0) -
-                    (dayConclusions.get("cancelled") ?? 0),
+                success,
+                failure,
+                cancelled,
+                other: dayRuns.length - success - failure - cancelled,
                 p50DurationMs: percentile(dayRuns.map(runDuration).filter(Number.isFinite), 50),
             };
         })
@@ -254,7 +298,7 @@ function overviewMetrics(runs, jobs) {
     const byWorkflow = [...groupBy(runs, workflowKey).entries()]
         .map(([, workflowRuns]) => {
             const done = workflowRuns.filter((run) => run.status === "completed");
-            const failures = done.filter((run) => run.conclusion === "failure").length;
+            const failures = done.filter((run) => isFailureConclusion(run.conclusion)).length;
             const workflowDurations = workflowRuns.map(runDuration).filter(Number.isFinite);
             return {
                 name: workflowRuns[0].name ?? "(unnamed)",
@@ -273,7 +317,7 @@ function overviewMetrics(runs, jobs) {
     const byJob = [...groupBy(jobs, (job) => `${job.raw?.__run?.repository ?? ""}\u0000${job.workflow} / ${job.name}`).entries()]
         .map(([, jobGroup]) => {
             const done = jobGroup.filter((job) => job.conclusion && job.conclusion !== "skipped");
-            const failures = done.filter((job) => job.conclusion === "failure").length;
+            const failures = done.filter((job) => isFailureConclusion(job.conclusion)).length;
             return {
                 name: `${jobGroup[0].workflow} / ${jobGroup[0].name}`,
                 repository: jobGroup[0].raw?.__run?.repository ?? "",

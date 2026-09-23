@@ -180,6 +180,48 @@ function repoFilterSupport(probe) {
 }
 
 /**
+ * The local equivalent of the CLI's repository filter, for the paths that must
+ * narrow the rows in JavaScript because the installed CLI predates
+ * `--include-repo`/`--exclude-repo`. Only the patterns the CLI could not apply
+ * are passed in, so a current CLI leaves this a no-op and the modern path is
+ * never re-filtered against a matcher that could drift from `path.Match`.
+ *
+ * Returns a predicate over the row's `owner/repo` name, or null when there is
+ * nothing to narrow. `runnerPatternMatcher` mirrors `path.Match`: `*` stops at
+ * the `/` separator, so `octo/*` matches a repository of `octo` but not one of
+ * another owner.
+ */
+export function localRepoFilter({ include = [], exclude = [] } = {}) {
+    if (include.length === 0 && exclude.length === 0) {
+        return null;
+    }
+    const includeMatchers = include.filter(Boolean).map(runnerPatternMatcher);
+    const excludeMatchers = exclude.filter(Boolean).map(runnerPatternMatcher);
+    return (name) => {
+        const repo = String(name ?? "");
+        if (includeMatchers.length > 0 && !includeMatchers.some((matcher) => matcher.test(repo))) {
+            return false;
+        }
+        return !excludeMatchers.some((matcher) => matcher.test(repo));
+    };
+}
+
+/**
+ * The repository filter patterns the installed CLI cannot honour for a query,
+ * so the caller can apply them locally instead of loading every repository.
+ */
+export function unsupportedRepoFilters(probe, filters, target) {
+    if (target?.kind !== "org") {
+        return { include: [], exclude: [] };
+    }
+    const support = repoFilterSupport(probe);
+    return {
+        include: support.include ? [] : (filters?.includeRepos ?? []),
+        exclude: support.exclude ? [] : (filters?.excludeRepos ?? []),
+    };
+}
+
+/**
  * Report a repository filter the user asked for that cannot be honoured, so a
  * silently widened collection is never mistaken for a filtered one. An
  * organization-wide walk the user meant to narrow is both wrong and expensive.

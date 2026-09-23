@@ -2891,7 +2891,11 @@ function connect() {
         // A different target is a different question, so the explorer drops the
         // rows it holds rather than redrawing them under a new heading, and a
         // draft written against the old target stops applying to this one.
-        if (state && next.key !== state.key) {
+        // Compared on the scope-aware identity, not the display key: a
+        // repository and an organization can share one display selector, and
+        // comparing `key` alone would leave the previous target's rows on
+        // screen when switching between the two.
+        if (state && next.identity !== state.identity) {
             resetExplorer();
             if (queryDraft.edited.size > 0) {
                 resetQueryDraft();

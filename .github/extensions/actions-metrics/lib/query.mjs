@@ -478,8 +478,11 @@ export function applyQueryPatch(query, patch = {}) {
     // collection and exits with "no repositories matched include filter",
     // leaving the panel empty for a reason no part of it points at. Moving
     // between a repository and its own owner keeps them, because there the
-    // patterns still describe the repositories on offer.
-    const switchingOwner = (naming.repo || naming.owner) && ownerKeyOf(merged) !== ownerKeyOf(current);
+    // patterns still describe the repositories on offer. The comparison is over
+    // the owner/host key alone rather than gated on a named repo or owner: the
+    // host is a field a patch can change on its own, and carrying the patterns
+    // onto another host would collect the wrong set or nothing at all.
+    const switchingOwner = ownerKeyOf(merged) !== ownerKeyOf(current);
     for (const name of ["includeRepos", "excludeRepos"]) {
         if (switchingOwner && patch[name] === undefined) {
             merged[name] = [];

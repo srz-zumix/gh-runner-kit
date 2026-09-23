@@ -75,35 +75,43 @@ async function fetchJobs({ repo, runs, limits, cwd, onProgress, warnings }) {
     return perRun.flat();
 }
 
-async function fetchRunners({ target, cwd, onProgress, warnings }) {
+async function fetchRunners({ target, runnerType, cwd, onProgress, warnings }) {
     onProgress?.("Fetching self-hosted runners");
-    const orgRunners = await optional(warnings, "Organization runners", () =>
-        ghApiPaged(`/orgs/${target.owner}/actions/runners`, {
-            host: target.host,
-            cwd,
-            maxPages: 5,
-            extract: (payload) => payload?.runners ?? [],
-            onTruncated: () =>
-                warnings.push(
-                    "This organization has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
-                ),
-        }),
-    );
-    const repoRunners =
-        target.kind === "repo"
-            ? await optional(warnings, "Repository runners", () =>
-                  ghApiPaged(`/repos/${target.nwo}/actions/runners`, {
-                      host: target.host,
-                      cwd,
-                      maxPages: 5,
-                      extract: (payload) => payload?.runners ?? [],
-                      onTruncated: () =>
-                          warnings.push(
-                              "This repository has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
-                          ),
-                  }),
-              )
-            : null;
+    // Match the CLI's `--type` semantics: a repository target reads its own
+    // runners by default (auto/repo) and the shared organization runners only
+    // when `--type org` is asked for, while an organization target always reads
+    // the organization runners. Fetching both for a repository target would mix
+    // out-of-scope organization runners into its inventory, labels and totals.
+    const wantsOrg = target.kind === "org" || runnerType === "org";
+    const wantsRepo = target.kind === "repo" && runnerType !== "org";
+    const orgRunners = wantsOrg
+        ? await optional(warnings, "Organization runners", () =>
+              ghApiPaged(`/orgs/${target.owner}/actions/runners`, {
+                  host: target.host,
+                  cwd,
+                  maxPages: 5,
+                  extract: (payload) => payload?.runners ?? [],
+                  onTruncated: () =>
+                      warnings.push(
+                          "This organization has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
+                      ),
+              }),
+          )
+        : null;
+    const repoRunners = wantsRepo
+        ? await optional(warnings, "Repository runners", () =>
+              ghApiPaged(`/repos/${target.nwo}/actions/runners`, {
+                  host: target.host,
+                  cwd,
+                  maxPages: 5,
+                  extract: (payload) => payload?.runners ?? [],
+                  onTruncated: () =>
+                      warnings.push(
+                          "This repository has more registered runners than were read (the runner listing stops after 500), so the fleet inventory, utilization, label supply and matching-runner counts may be incomplete.",
+                      ),
+              }),
+          )
+        : null;
     return [
         ...(repoRunners ?? []).map((runner) => ({ ...runner, scope: "repository" })),
         ...(orgRunners ?? []).map((runner) => ({ ...runner, scope: "organization" })),
@@ -176,7 +184,8 @@ export async function collectSnapshot({ target, filters, limits = {}, cwd, force
     const runs = runsResult.rows;
     const jobs =
         !orgWide && runs.length > 0 ? await fetchJobs({ repo: target, runs, limits: effective, cwd, onProgress, warnings }) : [];
-    const runners = await fetchRunners({ target, cwd, onProgress, warnings });    const { workflows, timings } = orgWide
+    const runners = await fetchRunners({ target, runnerType: filters?.runnerType, cwd, onProgress, warnings });
+    const { workflows, timings } = orgWide
         ? { workflows: [], timings: [] }
         : await fetchTiming({ repo: target, limits: effective, cwd, onProgress, warnings });
     const fleet = await collectFleet({ target, filters, limits: effective, cwd, force, onProgress, warnings });
