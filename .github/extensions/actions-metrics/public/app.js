@@ -349,10 +349,13 @@ function orgWideNotice(orgWide) {
 }
 
 function runnerTypeControl(fleet, orgWide) {
-    // The CLI ties the runner inventory to the target: an organization can only
-    // walk its repositories and a repository only itself, so the type that
-    // contradicts the target is not offered rather than accepted and ignored.
-    const options = [{ value: "auto", label: "auto" }, orgWide ? "org" : "repo"];
+    // The CLI reads the organization runners for `--type org` on any target, and
+    // the repository runners for `--type repo`, which needs a repository. So an
+    // organization target offers only its own inventory, while a repository
+    // target can also read the shared organization runners it runs on.
+    const options = orgWide
+        ? [{ value: "auto", label: "auto" }, "org"]
+        : [{ value: "auto", label: "auto" }, "repo", "org"];
     return selectControl(
         "Runner inventory",
         options,

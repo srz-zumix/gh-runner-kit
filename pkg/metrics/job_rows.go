@@ -25,9 +25,9 @@ var JobKindFilters = []string{JobKindFilterAll, JobKindFilterSelfHosted, JobKind
 // group the jobs on an axis the aggregated reports do not offer.
 type JobRow struct {
 	Repo         string
-	RunID        int64 `json:"RunID,string"`
+	RunID        int64
 	RunAttempt   int64
-	JobID        int64 `json:"JobID,string"`
+	JobID        int64
 	Workflow     string
 	WorkflowPath string
 	JobName      string
@@ -35,7 +35,7 @@ type JobRow struct {
 	Branch       string
 	Labels       []string
 	Kind         JobKind
-	RunnerID     int64 `json:"RunnerID,string"`
+	RunnerID     int64
 	RunnerName   string
 	RunnerGroup  string
 	Status       string

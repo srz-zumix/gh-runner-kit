@@ -206,29 +206,38 @@ export function repoFilterWarnings(probe, filters, target) {
     return warnings;
 }
 
-/** The runner inventory scope the CLI can collect for a target: an org walks its repos, a repo its own. */
-function runnerTypeScope(target) {
-    return target?.kind === "org" ? "org" : "repo";
+/**
+ * Whether a chosen runner inventory type can be honoured for the selected target.
+ *
+ * The CLI's `ApplyRunnerType` accepts `--type org` for any target - it clears the
+ * repository and reads the organization runners while the workflow runs still come from
+ * the selected repository - so the "repository on shared organization runners" case works
+ * without `--all-repos`. Only `--type repo` needs a repository, so it cannot apply to an
+ * organization target.
+ */
+function runnerTypeApplies(runnerType, target) {
+    if (!runnerType || runnerType === "auto") {
+        return false;
+    }
+    if (runnerType === "org") {
+        return true;
+    }
+    return target?.kind === "repo";
 }
 
 /**
- * Report a runner inventory type the user asked for that the selected target
- * cannot honour, so a dropped `--type` is never mistaken for a collection that
- * used it. The CLI rejects `--type repo` without a repository and clears the
- * repository for `--type org`, so a contradicting choice would strand every
- * fleet report; it is ignored and the target's own scope is used instead.
+ * Report a runner inventory type the user asked for that the selected target cannot
+ * honour, so a dropped `--type` is never mistaken for a collection that used it. Only
+ * `--type repo` on an organization target is impossible: the CLI rejects it because it has
+ * no repository to read, so it is ignored and the organization runners are used instead.
  */
 export function runnerTypeWarnings(filters, target) {
     const runnerType = filters?.runnerType;
-    if (!runnerType || runnerType === "auto") {
-        return [];
-    }
-    const scope = runnerTypeScope(target);
-    if (runnerType === scope) {
+    if (!runnerType || runnerType === "auto" || runnerTypeApplies(runnerType, target)) {
         return [];
     }
     return [
-        `Runner inventory "${runnerType}" does not apply to the selected ${scope === "org" ? "organization" : "repository"} target, so it was ignored and the ${scope} runners were used instead.`,
+        `Runner inventory "${runnerType}" does not apply to the selected organization target, so it was ignored and the organization runners were used instead.`,
     ];
 }
 
@@ -243,12 +252,13 @@ function baseArgs(subcommand, { target, filters, limits, force, probe }, format 
         "--format",
         format,
     ];
-    if (filters.runnerType && filters.runnerType !== "auto" && filters.runnerType === runnerTypeScope(target)) {
+    if (runnerTypeApplies(filters.runnerType, target)) {
         // The CLI's target resolver ties the runner inventory to the target:
-        // `--type repo` needs a repository and `--type org` clears it and then
-        // needs `--all-repos`. A type that contradicts the selected target is
-        // dropped here (and reported by runnerTypeWarnings) rather than sent to
-        // fail collection.
+        // `--type repo` needs a repository, while `--type org` reads the
+        // organization runners and works for a repository target too (the runs
+        // still come from the repository). Only `--type repo` on an org target
+        // is dropped here (and reported by runnerTypeWarnings) rather than sent
+        // to fail collection.
         args.push("--type", filters.runnerType);
     }
     if (filters.event) {

@@ -667,13 +667,26 @@ export function limitsOf(query) {
     return { ...DEFAULTS, maxRuns: query?.maxRuns ?? DEFAULTS.maxRuns, jobConcurrency: query?.jobConcurrency ?? DEFAULTS.jobConcurrency };
 }
 
-/** The selector form the UI displays and the store keys entries by. */
+/** The selector form the UI displays. */
 export function formatQuery(query) {
     const scope = scopeOf(query);
     const host = queryHost(query);
     const selector = scope === "org" ? text(query?.owner) : text(query?.repo);
     const path = splitHost(selector, scope === "org" ? 1 : 2).path;
     return host === DEFAULT_HOST ? path : `${host}/${path}`;
+}
+
+/**
+ * The identity the store keys an entry by, and the instance compares to detect a
+ * target change. It carries the scope because `formatQuery` alone cannot: a
+ * repository `owner/repo` on the default host and an organization `owner` on a
+ * host named `owner` both render to the same two-segment selector, yet they are
+ * two distinct targets that must not share or overwrite one collection. The
+ * display selector is kept separate so nothing user-facing shows the scope
+ * prefix.
+ */
+export function targetKey(query) {
+    return `${scopeOf(query)}:${formatQuery(query)}`;
 }
 
 /**

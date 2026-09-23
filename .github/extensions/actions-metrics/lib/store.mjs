@@ -21,6 +21,7 @@ import {
     normalizeQuery,
     persistedFields,
     scopeOf,
+    targetKey,
     targetOf,
 } from "./query.mjs";
 
@@ -38,11 +39,15 @@ export class DashboardStore {
 
     entry(query) {
         const canonical = normalizeQuery(query);
-        const key = formatQuery(canonical);
+        // Keyed by the scope-aware identity, not the display selector: two
+        // distinct targets can share one selector, and they must not share one
+        // entry. The selector is kept alongside for logs and persistence.
+        const key = targetKey(canonical);
         let entry = this.entries.get(key);
         if (!entry) {
             entry = {
                 key,
+                selector: formatQuery(canonical),
                 // The query is the entry's own state; the parsed target and the
                 // flat filters below are derived from it on the way out.
                 query: canonical,
@@ -65,6 +70,7 @@ export class DashboardStore {
         }
         return {
             key: entry.key,
+            selector: entry.selector,
             query: entry.query,
             target: targetOf(entry.query),
             filters: filtersOf(entry.query),
@@ -119,7 +125,7 @@ export class DashboardStore {
             // A settings-only change never reaches the collection below, so it
             // is persisted here instead; otherwise it would not survive a
             // reload.
-            void rememberFilters(entry.key, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
+            void rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
         }
 
         if (entry.inflight && !filtersChanged && !force) {
@@ -170,7 +176,7 @@ export class DashboardStore {
                 entry.status = "ready";
                 entry.progress = "";
                 entry.updatedAt = snapshot.collectedAt;
-                await rememberFilters(entry.key, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
+                await rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
             } catch (error) {
                 if (generation !== entry.generation) {
                     return this.snapshot(entry.key);
@@ -178,7 +184,7 @@ export class DashboardStore {
                 entry.status = "error";
                 entry.progress = "";
                 entry.error = error?.message ?? String(error);
-                this.log(`actions-metrics: refresh failed for ${entry.key}: ${entry.error}`);
+                this.log(`actions-metrics: refresh failed for ${entry.selector}: ${entry.error}`);
             } finally {
                 if (generation === entry.generation) {
                     entry.inflight = null;

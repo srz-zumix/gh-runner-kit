@@ -20,6 +20,7 @@ import {
     normalizeQuery,
     querySchema,
     scopeOf,
+    targetKey,
     validateQuery,
 } from "./lib/query.mjs";
 import { DashboardInstance } from "./lib/instance.mjs";
@@ -96,7 +97,11 @@ async function resolveQuery(input, base = null) {
     // are actually remembered, and applied under the input, so a stored value
     // can neither resurrect a target nor override an explicit one.
     const prefs = await loadPrefs();
-    const remembered = prefs.filtersByTarget?.[formatQuery(canonical)] ?? {};
+    // Keyed by the scope-aware identity so a repository and a like-named
+    // organization keep their own remembered filters; the legacy display-key
+    // entry is still honoured for preferences written before the split.
+    const remembered =
+        prefs.filtersByTarget?.[targetKey(canonical)] ?? prefs.filtersByTarget?.[formatQuery(canonical)] ?? {};
     const stateless = Object.fromEntries(
         PERSISTED_FIELDS.filter((key) => remembered[key] !== undefined && input?.[key] === undefined).map((key) => [key, remembered[key]]),
     );
@@ -134,7 +139,7 @@ function panelFor(instanceId) {
 
 /** Wait until the current collection for this panel settles, then return its state. */
 async function settled(instance) {
-    const entry = instance.store.entries.get(instance.key);
+    const entry = instance.store.entries.get(instance.identity);
     if (entry?.inflight) {
         await entry.inflight;
     }

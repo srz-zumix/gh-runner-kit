@@ -25,6 +25,7 @@ func TestWriteMetricsJobsJSON(t *testing.T) {
 
 	for _, want := range []string{
 		`"JobName": "build"`,
+		`"JobID": 1`,
 		`"StartedAt": "2024-01-01T00:01:00Z"`,
 		`"Wait": 60000000000`,
 		`"StartedAt": null`,

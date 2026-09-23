@@ -62,12 +62,19 @@ export async function savePrefs(update) {
     return cache;
 }
 
-export async function rememberFilters(targetKey, scope, filters) {
+/**
+ * Remember a target's filters keyed by its scope-aware identity, while storing the
+ * plain display selector as `lastTarget` so `materializeTarget` can still parse it back
+ * into a target. Keying the filters by the identity keeps two targets that share one
+ * display selector (a repository and a like-named organization on a matching host) from
+ * overwriting each other's saved filters.
+ */
+export async function rememberFilters(identity, selector, scope, filters) {
     const current = await loadPrefs();
     return savePrefs({
-        lastTarget: targetKey,
+        lastTarget: selector,
         lastScope: scope,
-        filtersByTarget: { ...current.filtersByTarget, [targetKey]: filters },
+        filtersByTarget: { ...current.filtersByTarget, [identity]: filters },
     });
 }
 

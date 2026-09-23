@@ -20,6 +20,7 @@ import {
     // drawn with.
     projectionId as projectionKey,
     scopeOf,
+    targetKey,
     targetOf,
 } from "./query.mjs";
 import { exportFleet, hasExcludeRunner, hasJobRows } from "./runnerkit.mjs";
@@ -63,9 +64,18 @@ export class DashboardInstance {
         this.rowUnsubscribe = null;
         this.attach();
     }
-
+    /** The display selector for this panel's target, shown in the UI and responses. */
     get key() {
         return formatQuery(this.query);
+    }
+
+    /**
+     * The scope-aware identity the store keys this panel's entry by. Distinct from
+     * `key`: two targets can share one display selector but never one identity, so the
+     * store, its listeners and target-change detection are all keyed by this.
+     */
+    get identity() {
+        return targetKey(this.query);
     }
 
     attach() {
@@ -77,7 +87,7 @@ export class DashboardInstance {
         this.rowUnsubscribe = null;
         this.rowSignature = null;
         this.store.entry(this.query);
-        this.unsubscribe = this.store.subscribe(this.key, () => {
+        this.unsubscribe = this.store.subscribe(this.identity, () => {
             this.broadcast();
             this.reproject();
         });
@@ -90,7 +100,7 @@ export class DashboardInstance {
      * only told over the store.
      */
     get effectiveQuery() {
-        return this.store.snapshot(this.key)?.query ?? this.query;
+        return this.store.snapshot(this.identity)?.query ?? this.query;
     }
 
     /** The flat settings the collection layer reads, for the query in force. */
@@ -137,7 +147,7 @@ export class DashboardInstance {
      * same collection is read, and re-runs the projection instead of ending it.
      */
     baseKey(stored) {
-        return `${this.key}|${stored?.updatedAt ?? ""}|${collectionId(stored?.query ?? this.query)}`;
+        return `${this.identity}|${stored?.updatedAt ?? ""}|${collectionId(stored?.query ?? this.query)}`;
     }
 
     dropTimeline() {
@@ -173,7 +183,7 @@ export class DashboardInstance {
     }
 
     state() {
-        const stored = this.store.snapshot(this.key);
+        const stored = this.store.snapshot(this.identity);
         if (this.timelineBase !== null && this.timelineBase !== this.baseKey(stored)) {
             this.dropTimeline();
         }
@@ -331,7 +341,7 @@ export class DashboardInstance {
             return this.state();
         }
 
-        const stored = this.store.snapshot(this.key);
+        const stored = this.store.snapshot(this.identity);
         const buckets = stored?.metrics?.fleet?.concurrency ?? [];
         if (stored?.status !== "ready" || buckets.length === 0) {
             this.rejectTimeline("The concurrency timeline has to be collected before a runner can be projected onto it.");
@@ -519,7 +529,7 @@ export class DashboardInstance {
         const next = patch
             ? canonicalizeQuery(assertQuery(applyQueryPatch(this.effectiveQuery, patch)))
             : normalizeQuery(this.effectiveQuery);
-        const targetChanged = formatQuery(next) !== this.key;
+        const targetChanged = targetKey(next) !== this.identity;
         this.query = next;
         if (targetChanged) {
             this.attach();
