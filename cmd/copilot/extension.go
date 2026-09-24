@@ -1,4 +1,4 @@
-package cmd
+package copilot
 
 import (
 	"github.com/spf13/cobra"
@@ -20,8 +20,4 @@ func NewExtensionCmd() *cobra.Command {
 			},
 		},
 	})
-}
-
-func init() {
-	rootCmd.AddCommand(NewExtensionCmd())
 }

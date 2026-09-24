@@ -172,7 +172,7 @@ the `CORDONED` column and what `uncordon --all` selects on.
 
 Runners that are already cordoned are skipped with a message on stderr.
 
-### extension install
+### copilot extension install
 
 Installs bundled Copilot CLI canvas extensions. With no name, installs every
 bundled extension; pass `actions-metrics` to install the Actions metrics
@@ -181,7 +181,7 @@ dashboard. The default user scope installs under
 unset.
 
 ```bash
-gh runner-kit extension install [actions-metrics] [--dry-run] [--force] \
+gh runner-kit copilot extension install [actions-metrics] [--dry-run] [--force] \
   [--prefix PATH] [--ref REF] [--scope user|repo]
 ```
 
@@ -193,7 +193,7 @@ gh runner-kit extension install [actions-metrics] [--dry-run] [--force] \
 | `--ref` | `main` | Git ref to install, overriding the bundled source ref |
 | `--scope` | `user` | Installation scope: `user` or `repo` |
 
-Use `gh runner-kit extension status`, `update`, and `uninstall` to inspect,
+Use `gh runner-kit copilot extension status`, `update`, and `uninstall` to inspect,
 refresh, and remove installed extensions.
 
 ### group create
