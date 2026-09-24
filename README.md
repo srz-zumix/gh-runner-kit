@@ -25,19 +25,19 @@ Run `gh runner-kit completion --help` for details on how to load the script for 
 Install the Copilot CLI canvas extension to render the `metrics` reports as an interactive dashboard for one repository or a whole organization:
 
 ```sh
-gh runner-kit extension install actions-metrics
+gh runner-kit copilot extension install actions-metrics
 ```
 
 The command installs the extension to `~/.copilot/extensions/actions-metrics/` by default. Use `--scope repo` to install into the current repository, `--ref REF` to select a source revision, or `--prefix PATH` to choose another installation directory.
 
-The extension is discovered automatically when you work in a clone of this repository. Use `gh runner-kit extension status`, `update`, or `uninstall` to manage an installed copy.
+The extension is discovered automatically when you work in a clone of this repository. Use `gh runner-kit copilot extension status`, `update`, or `uninstall` to manage an installed copy.
 
 See [.github/extensions/actions-metrics/README.md](.github/extensions/actions-metrics/README.md).
 
 ### Install the Actions metrics dashboard
 
 ```sh
-gh runner-kit extension install [actions-metrics] [--dry-run] [--force] [--prefix PATH] [--ref REF] [--scope user|repo]
+gh runner-kit copilot extension install [actions-metrics] [--dry-run] [--force] [--prefix PATH] [--ref REF] [--scope user|repo]
 ```
 
 Install the bundled Actions metrics dashboard. The extension name is optional because it is the only bundled extension. The default user scope installs to `$COPILOT_HOME/extensions/actions-metrics/`, or `~/.copilot/extensions/actions-metrics/` when `COPILOT_HOME` is unset.
