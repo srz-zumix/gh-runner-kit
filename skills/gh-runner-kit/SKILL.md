@@ -36,6 +36,12 @@ require organization owner permission.
 gh runner-kit                # Root command
 ├── available                # List runners a repository can use
 ├── cordon                   # Stop runners from receiving new jobs
+├── extension                # Manage bundled Copilot CLI canvas extensions
+│   ├── install               # Install bundled extensions
+│   ├── list                  # List extensions bundled with this tool
+│   ├── status                # Show installation status of extensions
+│   ├── uninstall             # Uninstall extensions
+│   └── update                # Update installed extensions
 ├── group                    # Organization runner groups
 │   ├── create                # Create a runner group
 │   ├── delete                # Delete a runner group
@@ -165,6 +171,30 @@ Both strategies add a `cordoned` marker label, which is what `list` reports in
 the `CORDONED` column and what `uncordon --all` selects on.
 
 Runners that are already cordoned are skipped with a message on stderr.
+
+### extension install
+
+Installs bundled Copilot CLI canvas extensions. With no name, installs every
+bundled extension; pass `actions-metrics` to install the Actions metrics
+dashboard. The default user scope installs under
+`$COPILOT_HOME/extensions/` or `~/.copilot/extensions/` when `COPILOT_HOME` is
+unset.
+
+```bash
+gh runner-kit extension install [actions-metrics] [--dry-run] [--force] \
+  [--prefix PATH] [--ref REF] [--scope user|repo]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--dry-run` | `false` | Resolve and show the installation without writing files |
+| `--force` | `false` | Overwrite an existing unmanaged extension directory |
+| `--prefix` | - | Installation directory, overriding `--scope` |
+| `--ref` | `main` | Git ref to install, overriding the bundled source ref |
+| `--scope` | `user` | Installation scope: `user` or `repo` |
+
+Use `gh runner-kit extension status`, `update`, and `uninstall` to inspect,
+refresh, and remove installed extensions.
 
 ### group create
 

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>GitHub Actions metrics</title>
+        <link rel="stylesheet" href="./styles.css" />
+    </head>
+    <body>
+        <header class="toolbar">
+            <div class="toolbar-row">
+                <div class="target-picker">
+                    <button
+                        type="button"
+                        id="target-toggle"
+                        class="button target-button"
+                        aria-expanded="false"
+                        aria-haspopup="dialog"
+                        aria-controls="target-popover"
+                    >
+                        <span class="target-button__label">Target</span>
+                        <span class="target-button__value" id="target-current">…</span>
+                    </button>
+                    <div class="target-popover" id="target-popover" role="dialog" aria-label="Change target" hidden>
+                        <form id="target-form">
+                            <label class="field">
+                                <span>Scope</span>
+                                <select id="scope" name="scope">
+                                    <option value="repo">Repository</option>
+                                    <option value="org">Organization</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span id="target-label">Repository</span>
+                                <input
+                                    id="target"
+                                    name="target"
+                                    type="text"
+                                    placeholder="[HOST/]OWNER/REPO"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                />
+                            </label>
+                            <p class="target-hint" id="target-hint"></p>
+                            <p class="target-error" id="target-error" role="alert" hidden></p>
+                            <div class="target-actions">
+                                <button type="button" class="button" id="target-cancel">Cancel</button>
+                                <button type="submit" class="button button--primary">Switch</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <button type="button" id="query-toggle" class="button" aria-expanded="false" aria-controls="query-editor">
+                    Query<span class="query-toggle__count" id="query-dirty-count" hidden></span>
+                </button>
+                <button type="button" id="refresh" class="button button--primary">Refresh</button>
+                <label class="field">
+                    <span>Export</span>
+                    <select id="export">
+                        <option value="">Download…</option>
+                        <option value="prometheus">Prometheus</option>
+                        <option value="json">JSON</option>
+                    </select>
+                </label>
+            </div>
+            <div class="status" id="status"></div>
+        </header>
+
+        <section class="query-editor" id="query-editor" aria-label="Query" hidden>
+            <form id="query-form">
+                <div class="query-groups" id="query-groups"></div>
+                <div class="query-footer">
+                    <p class="query-effect" id="query-effect"></p>
+                    <div class="query-actions">
+                        <button type="button" class="button" id="query-reset">Reset</button>
+                        <button type="submit" class="button button--primary" id="query-apply">Apply</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <div id="banner" class="banner" hidden></div>
+
+        <nav class="tabs" role="tablist">
+            <button class="tab" data-tab="overview" role="tab" aria-selected="true">Workflow runs</button>
+            <button class="tab" data-tab="runners" role="tab" aria-selected="false">Self-hosted runners</button>
+            <button class="tab" data-tab="queue" role="tab" aria-selected="false">Queue &amp; capacity</button>
+            <button class="tab" data-tab="activity" role="tab" aria-selected="false">Runner activity</button>
+            <button class="tab" data-tab="explore" role="tab" aria-selected="false">Job explorer</button>
+            <button class="tab" data-tab="usage" role="tab" aria-selected="false">Usage &amp; cost</button>
+        </nav>
+
+        <main id="content" class="content">
+            <p class="empty">Loading metrics…</p>
+        </main>
+
+        <script type="module" src="./app.js"></script>
+    </body>
+</html>
