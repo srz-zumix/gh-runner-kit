@@ -537,8 +537,20 @@ export async function collectRuns({ target, filters, limits, cwd, onProgress, wa
     try {
         // `runs` reads no jobs and no usage, so it neither fills nor consults
         // the job cache the other subcommands share; `force` has nothing to do.
-        const rows = normalizeRunRows(await runMetrics("runs", { target, filters, limits, cwd, force: false, probe }));
-        return { available: true, rows, reason: null };
+        //
+        // The NDJSON form is consumed rather than the single-array `--format
+        // json`: NDJSON quotes WorkflowID/RunID as strings, so a run id past
+        // 2^53 survives `JSON.parse` intact where the numeric json form would
+        // let a float64 round two distinct ids onto one value. That id flows
+        // into `/actions/runs/<id>/jobs`, so a rounded id would fetch the jobs
+        // of the wrong run.
+        const args = baseArgs("runs", { target, filters, limits, force: false, probe }, "ndjson");
+        const stdout = await ghRaw(args, { cwd, env: hostEnv(target) });
+        const raw = stdout
+            .split(/\r?\n/)
+            .filter((line) => line.trim())
+            .map((line) => JSON.parse(line));
+        return { available: true, rows: normalizeRunRows(raw), reason: null };
     } catch (error) {
         const reason = explain(describe(error), target);
         warnings.push(`gh runner-kit workflow runs: ${reason}`);

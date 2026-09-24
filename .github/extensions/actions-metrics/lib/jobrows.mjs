@@ -37,6 +37,13 @@ export async function collectJobRows({ target, filters, limits, cwd, signal, onP
     const budget = filters?.rowBudget ?? DEFAULT_ROW_BUDGET;
     const cap = Math.max(MIN_ROW_BUDGET, Math.min(MAX_ROW_BUDGET, budget));
     const probe = await probeRunnerKit(cwd);
+
+    // The repository filters are applied before collection by a current CLI, but
+    // an older one drops them, which would silently load every repository of an
+    // organization for a filtered query. Narrow those rows here instead so the
+    // explorer never shows repositories the query excluded.
+    const repoAllowed = localRepoFilter(unsupportedRepoFilters(probe, filters, target));
+
     const { args, env } = jobRowsCommand({
         target,
         filters,
@@ -48,14 +55,14 @@ export async function collectJobRows({ target, filters, limits, cwd, signal, onP
         // browser answers, and a CLI-side exclusion would silently empty it.
         pattern: "",
         exclusions: [],
-        limit: cap + 1,
+        // When the CLI honours the repository filters itself, cap the stream at
+        // `cap + 1` server-side. In the fallback path the rows are narrowed
+        // locally below, so a CLI-side `--limit` would cut the stream before
+        // that filter runs: excluded repositories could consume the whole limit
+        // and leave the allowed rows short while `truncated` stayed false. Read
+        // without a CLI limit there and stop after `cap + 1` allowed rows.
+        limit: repoAllowed ? 0 : cap + 1,
     });
-
-    // The repository filters are applied before collection by a current CLI, but
-    // an older one drops them, which would silently load every repository of an
-    // organization for a filtered query. Narrow those rows here instead so the
-    // explorer never shows repositories the query excluded.
-    const repoAllowed = localRepoFilter(unsupportedRepoFilters(probe, filters, target));
 
     const rows = [];
     let malformed = 0;
