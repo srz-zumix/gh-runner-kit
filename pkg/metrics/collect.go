@@ -166,9 +166,10 @@ func NewCachedJobFetcher(inner JobFetcher, cache *Cache, refresh bool) *CachedJo
 func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, error) {
 	cacheable := run.GetStatus() == "completed"
 	runID := run.GetID()
+	attempt := run.GetRunAttempt()
 
 	if cacheable && !f.refresh {
-		if jobs, ok := f.cache.LoadJobs(repo, runID); ok {
+		if jobs, ok := f.cache.LoadJobs(repo, runID, attempt); ok {
 			logger.Debug("metrics: job cache hit", "run_id", runID)
 			return jobs, nil
 		}
@@ -180,7 +181,7 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	}
 
 	if cacheable {
-		if err := f.cache.SaveJobs(repo, runID, jobs); err != nil {
+		if err := f.cache.SaveJobs(repo, runID, attempt, jobs); err != nil {
 			logger.Debug("metrics: failed to cache jobs", "run_id", runID, "error", err)
 		}
 	}
@@ -540,6 +541,14 @@ func withRetry(ctx context.Context, fn func() error) error {
 			return err
 		}
 
+		// Waiting only pays off when a retry is left to spend it on and the limit resets
+		// before the retries left run out; otherwise it merely delays the same failure,
+		// which for an exhausted primary limit would hold the command for minutes.
+		retriesLeft := maxRetries - 1 - attempt
+		if retriesLeft == 0 || resetsAfter(err, time.Duration(retriesLeft)*maxRetryWait) {
+			return err
+		}
+
 		logger.Debug("metrics: rate limited, waiting before retrying", "attempt", attempt+1, "wait", wait)
 		timer := time.NewTimer(wait)
 		select {
@@ -569,6 +578,13 @@ func retryWait(err error) (time.Duration, bool) {
 	}
 
 	return 0, false
+}
+
+// resetsAfter reports whether err is a primary rate limit that resets later than budget
+// from now. A secondary limit carries no reset time and is never reported.
+func resetsAfter(err error, budget time.Duration) bool {
+	var rateErr *github.RateLimitError
+	return errors.As(err, &rateErr) && time.Until(rateErr.Rate.Reset.Time) > budget
 }
 
 func clampRetryWait(d time.Duration) time.Duration {
