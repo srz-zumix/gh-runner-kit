@@ -173,6 +173,15 @@ export async function runLines(args, env, cwd, onLine, signal, { host } = {}) {
 
 function streamLines(args, env, cwd, onLine, signal) {
     return new Promise((resolve, reject) => {
+        // The signal can already be aborted here: an await between the caller
+        // and this point (the rate budget check) lets the collection be
+        // superseded before the listener below is registered, and an
+        // already-fired abort never re-fires. Bail out before spawning so a
+        // dead stream does not spend API budget.
+        if (signal?.aborted) {
+            reject(new Error("The runner timeline was superseded."));
+            return;
+        }
         const child = spawn("gh", args, {
             cwd,
             env: env ? { ...process.env, ...env } : process.env,
