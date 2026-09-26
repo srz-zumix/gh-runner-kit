@@ -53,7 +53,14 @@
                 <button type="button" id="query-toggle" class="button" aria-expanded="false" aria-controls="query-editor">
                     Query<span class="query-toggle__count" id="query-dirty-count" hidden></span>
                 </button>
-                <button type="button" id="refresh" class="button button--primary">Refresh</button>
+                <button
+                    type="button"
+                    id="refresh"
+                    class="button button--primary"
+                    title="Collect again, reusing the job lists already fetched. Shift+click discards the cache and fetches every run again."
+                >
+                    Refresh
+                </button>
                 <label class="field">
                     <span>Export</span>
                     <select id="export">

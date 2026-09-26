@@ -44,7 +44,7 @@ focuses and reloads the existing panel rather than making a second one.
 | --- | --- |
 | `set_filters` | Change the target, the window, the filters or the limits, and re-collect. Every field is optional; an omitted field keeps its value. |
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
-| `refresh` | Re-collect the current window, bypassing the cache. Use when the user asks for fresh data, not to fix an empty result. |
+| `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 

@@ -9,7 +9,7 @@
 // degrades into a warning and the JavaScript pipeline keeps rendering the rest
 // of the dashboard.
 
-import { ghRaw, GhError, formatTarget } from "./gh.mjs";
+import { ghRaw, GhError, formatTarget, rateLimitCooldown } from "./gh.mjs";
 
 const NS_PER_MS = 1e6;
 
@@ -349,6 +349,8 @@ async function runMetrics(subcommand, options, extraArgs = []) {
     const stdout = await ghRaw([...baseArgs(subcommand, options), ...extraArgs], {
         cwd: options.cwd,
         env: hostEnv(options.target),
+        host: options.target.host ?? null,
+        signal: options.signal,
     });
     return stdout.trim() ? JSON.parse(stdout) : null;
 }
@@ -522,7 +524,7 @@ function normalizeRepositoryRows(raw) {
  * with no runs at all, because fanning out over every repository it owns is
  * exactly the work the CLI already does.
  */
-export async function collectRuns({ target, filters, limits, cwd, onProgress, warnings = [] } = {}) {
+export async function collectRuns({ target, filters, limits, cwd, signal, onProgress, warnings = [] } = {}) {
     const probe = await probeRunnerKit(cwd);
     const empty = { available: false, rows: [], reason: null };
     if (!probe.available) {
@@ -545,7 +547,7 @@ export async function collectRuns({ target, filters, limits, cwd, onProgress, wa
         // into `/actions/runs/<id>/jobs`, so a rounded id would fetch the jobs
         // of the wrong run.
         const args = baseArgs("runs", { target, filters, limits, force: false, probe }, "ndjson");
-        const stdout = await ghRaw(args, { cwd, env: hostEnv(target) });
+        const stdout = await ghRaw(args, { cwd, env: hostEnv(target), host: target.host ?? null, signal });
         const raw = stdout
             .split(/\r?\n/)
             .filter((line) => line.trim())
@@ -595,7 +597,7 @@ function normalizeCostRows(raw) {
  * The subcommands run sequentially on purpose: they share a local job cache, so
  * the first call pays for the API traffic and the other two read from the cache.
  */
-export async function collectFleet({ target, filters, limits, cwd, force = false, onProgress, warnings = [] } = {}) {
+export async function collectFleet({ target, filters, limits, cwd, force = false, signal, onProgress, warnings = [] } = {}) {
     const probe = await probeRunnerKit(cwd);
     const shape = {
         scope: target.kind,
@@ -625,7 +627,7 @@ export async function collectFleet({ target, filters, limits, cwd, force = false
         return { available: false, reason: probe.reason, version: null, ...shape };
     }
 
-    const options = { target, filters, limits, cwd, force, probe };
+    const options = { target, filters, limits, cwd, force, probe, signal };
     const result = { available: true, reason: null, version: probe.version, ...shape };
 
     const steps = [
@@ -717,6 +719,13 @@ export async function collectFleet({ target, filters, limits, cwd, force = false
     ];
 
     for (const step of steps) {
+        // Every report re-reads the window, so once the host is rate limited
+        // the rest would each be refused in turn - or, while `gh runner-kit`
+        // is still backing off, sit out its retries first. The caller reports
+        // the cooldown as the snapshot's error.
+        if (rateLimitCooldown(target.host) || signal?.aborted) {
+            break;
+        }
         if (step.skip) {
             continue;
         }
@@ -761,7 +770,7 @@ export async function exportFleet({ target, filters, limits, cwd, format = "prom
     // baseArgs always requests JSON, so the format flag is replaced rather than appended.
     const args = baseArgs("export", { target, filters, limits, force: false, probe });
     args[args.indexOf("--format") + 1] = wanted;
-    const body = await ghRaw(args, { cwd, env: hostEnv(target) });
+    const body = await ghRaw(args, { cwd, env: hostEnv(target), host: target.host ?? null });
     return {
         format: wanted,
         contentType: wanted === "json" ? "application/json; charset=utf-8" : "text/plain; version=0.0.4; charset=utf-8",

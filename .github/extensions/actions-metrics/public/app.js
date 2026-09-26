@@ -2497,8 +2497,15 @@ function renderBanner() {
     }
     dom.banner.hidden = false;
     dom.banner.className = `banner${state?.error ? " banner--error" : ""}`;
+    const heading = !state?.error
+        ? "Partial data"
+        : state.errorCode === "rate_limited"
+          ? state.metrics
+              ? `Rate limited - showing the data collected ${state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "earlier"}`
+              : "Rate limited"
+          : "Collection failed";
     dom.banner.replaceChildren(
-        el("strong", { text: state?.error ? "Collection failed" : "Partial data" }),
+        el("strong", { text: heading }),
         el(
             "ul",
             {},
@@ -2809,14 +2816,16 @@ function renderContent() {
  * own copy of every default - a second source of truth that had already
  * drifted from the model and would silently reset any field added to it.
  *
- * `/api/refresh` additionally discards the job cache `gh runner-kit` keeps, so
- * only the Refresh button uses it; changing a setting reuses the cache.
+ * `/api/refresh` collects again even when nothing changed, so only the Refresh
+ * button uses it. It reuses the cached job lists unless `bypassCache` is set -
+ * Shift+click - which is what lets a refresh after a rate limit resume from the
+ * runs already fetched instead of running into the limit again.
  */
-async function postQuery(payload, { bypassCache = false } = {}) {
-    const response = await fetch(bypassCache ? "./api/refresh" : "./api/filters", {
+async function postQuery(payload, { refresh = false, bypassCache = false } = {}) {
+    const response = await fetch(refresh ? "./api/refresh" : "./api/filters", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(refresh ? { ...payload, bypassCache } : payload),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2832,8 +2841,8 @@ async function postQuery(payload, { bypassCache = false } = {}) {
 }
 
 /** Change settings without touching the target. Used by the tab cards too. */
-async function applyFilters(patch = {}, { bypassCache = false } = {}) {
-    return postQuery({ filters: patch }, { bypassCache });
+async function applyFilters(patch = {}) {
+    return postQuery({ filters: patch });
 }
 
 /** Move the dashboard to another repository or organization. */
@@ -2841,9 +2850,9 @@ async function switchTarget({ scope, target }) {
     return postQuery({ scope, target, filters: {} });
 }
 
-/** Collect the committed query again, ignoring the CLI's job cache. */
-async function refreshCurrentQuery() {
-    return postQuery({ filters: {} }, { bypassCache: true });
+/** Collect the committed query again; `bypassCache` also discards the cached job lists. */
+async function refreshCurrentQuery({ bypassCache = false } = {}) {
+    return postQuery({ filters: {} }, { refresh: true, bypassCache });
 }
 
 /**
@@ -3041,7 +3050,7 @@ document.addEventListener("pointerdown", (event) => {
     }
 });
 
-dom.refresh.addEventListener("click", () => void refreshCurrentQuery().catch(() => {}));
+dom.refresh.addEventListener("click", (event) => void refreshCurrentQuery({ bypassCache: event.shiftKey }).catch(() => {}));
 dom.export.addEventListener("change", (event) => void exportMetrics(event.target.value));
 for (const tab of dom.tabs) {
     tab.addEventListener("click", () => {

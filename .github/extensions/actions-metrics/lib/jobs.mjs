@@ -12,6 +12,7 @@
 // leave this module.
 
 import { spawn } from "node:child_process";
+import { assertRateBudget, isRateLimitError, noteRateLimit } from "./gh.mjs";
 import { jobRowsCommand, probeRunnerKit, runnerPattern, runnerPatternMatcher } from "./runnerkit.mjs";
 // One definition of the interval arithmetic, shared with the browser-side
 // explorer so the two tabs cannot report different concurrency for one window.
@@ -146,8 +147,41 @@ function distribute(cells, buckets, from, to) {
 }
 
 
-export function runLines(args, env, cwd, onLine, signal) {
+/**
+ * Stream the NDJSON lines of one `gh` invocation into `onLine`.
+ *
+ * When `host` is given - null names the default host - the call is not started
+ * while that host cools down from a rate limit or has no budget left, and a
+ * rate limit refusal starts that cooldown, like the calls that go through
+ * `gh.mjs`. One stream can cost thousands of requests, so the budget is checked
+ * up front rather than discovered after the first refusal.
+ */
+export async function runLines(args, env, cwd, onLine, signal, { host } = {}) {
+    const gated = host !== undefined;
+    if (gated) {
+        await assertRateBudget(host, { cwd });
+    }
+    try {
+        return await streamLines(args, env, cwd, onLine, signal);
+    } catch (error) {
+        if (gated && isRateLimitError(error)) {
+            throw await noteRateLimit(host, error, { cwd });
+        }
+        throw error;
+    }
+}
+
+function streamLines(args, env, cwd, onLine, signal) {
     return new Promise((resolve, reject) => {
+        // The signal can already be aborted here: an await between the caller
+        // and this point (the rate budget check) lets the collection be
+        // superseded before the listener below is registered, and an
+        // already-fired abort never re-fires. Bail out before spawning so a
+        // dead stream does not spend API budget.
+        if (signal?.aborted) {
+            reject(new Error("The runner timeline was superseded."));
+            return;
+        }
         const child = spawn("gh", args, {
             cwd,
             env: env ? { ...process.env, ...env } : process.env,
@@ -218,7 +252,11 @@ export function runLines(args, env, cwd, onLine, signal) {
                 return;
             }
             const message = stderr.split("\n").map((line) => line.trim()).find((line) => line.startsWith("Error:"));
-            reject(new Error(message ? message.replace(/^Error:\s*/, "") : `gh runner-kit metrics jobs exited with ${code}`));
+            const error = new Error(message ? message.replace(/^Error:\s*/, "") : `gh runner-kit metrics jobs exited with ${code}`);
+            // Kept so a rate limit is recognized even when the log tail, not
+            // the "Error:" line, is what names it.
+            error.stderr = stderr;
+            reject(error);
         });
     });
 }
@@ -404,7 +442,7 @@ export async function collectRunnerTimeline({
             onProgress?.(`Projected ${matched} jobs onto the timeline`);
         }
         return true;
-    }, signal);
+    }, signal, { host: target?.host ?? null });
 
     const peaks = peakPerBucket(axis, jobStarts, jobEnds);
     // Union-merged occupancy for every runner, not just the ranked ones: the

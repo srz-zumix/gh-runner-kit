@@ -46,29 +46,30 @@ func NewCache() (*Cache, error) {
 	return &Cache{base: base}, nil
 }
 
-// LoadJobs returns the cached job list of repo's runID, reporting whether it was present.
-func (c *Cache) LoadJobs(repo repository.Repository, runID int64) ([]*github.WorkflowJob, bool) {
-	return load[[]*github.WorkflowJob](c, repo, jobsKind, runID)
+// LoadJobs returns the cached job list of attempt of repo's runID, reporting whether it
+// was present.
+func (c *Cache) LoadJobs(repo repository.Repository, runID int64, attempt int) ([]*github.WorkflowJob, bool) {
+	return load[[]*github.WorkflowJob](c, repo, jobsKind, runID, attempt)
 }
 
-// SaveJobs writes the job list of repo's runID.
-func (c *Cache) SaveJobs(repo repository.Repository, runID int64, jobs []*github.WorkflowJob) error {
-	return c.save(repo, jobsKind, runID, jobs)
+// SaveJobs writes the job list of attempt of repo's runID.
+func (c *Cache) SaveJobs(repo repository.Repository, runID int64, attempt int, jobs []*github.WorkflowJob) error {
+	return c.save(repo, jobsKind, runID, attempt, jobs)
 }
 
-// LoadUsage returns the cached billable usage of repo's runID, reporting whether it was
-// present.
-func (c *Cache) LoadUsage(repo repository.Repository, runID int64) (*github.WorkflowRunUsage, bool) {
-	usage, ok := load[*github.WorkflowRunUsage](c, repo, usageKind, runID)
+// LoadUsage returns the cached billable usage of attempt of repo's runID, reporting
+// whether it was present.
+func (c *Cache) LoadUsage(repo repository.Repository, runID int64, attempt int) (*github.WorkflowRunUsage, bool) {
+	usage, ok := load[*github.WorkflowRunUsage](c, repo, usageKind, runID, attempt)
 	if !ok || usage == nil {
 		return nil, false
 	}
 	return usage, true
 }
 
-// SaveUsage writes the billable usage of repo's runID.
-func (c *Cache) SaveUsage(repo repository.Repository, runID int64, usage *github.WorkflowRunUsage) error {
-	return c.save(repo, usageKind, runID, usage)
+// SaveUsage writes the billable usage of attempt of repo's runID.
+func (c *Cache) SaveUsage(repo repository.Repository, runID int64, attempt int, usage *github.WorkflowRunUsage) error {
+	return c.save(repo, usageKind, runID, attempt, usage)
 }
 
 // dir returns the per-repository directory that holds the cached entries of one kind.
@@ -82,18 +83,25 @@ func (c *Cache) dir(repo repository.Repository, kind string) string {
 	)
 }
 
-// path builds the entry path from the numeric run ID, so no caller-supplied string ever
-// reaches the file name.
-func (c *Cache) path(repo repository.Repository, kind string, runID int64) string {
-	return filepath.Join(c.dir(repo, kind), strconv.FormatInt(runID, 10)+".json")
+// path builds the entry path from the numeric run ID and attempt, so no caller-supplied
+// string ever reaches the file name. A re-run keeps its run ID but replaces the jobs and
+// the usage the API reports, so every attempt after the first has an entry of its own.
+// The first attempt keeps the plain run ID name, which leaves the entries written
+// before attempts were told apart valid.
+func (c *Cache) path(repo repository.Repository, kind string, runID int64, attempt int) string {
+	name := strconv.FormatInt(runID, 10)
+	if attempt > 1 {
+		name += "-" + strconv.Itoa(attempt)
+	}
+	return filepath.Join(c.dir(repo, kind), name+".json")
 }
 
-// load decodes the entry of repo's runID, reporting whether a usable one was present.
-// A missing, unreadable or partially written entry is reported as a miss.
-func load[T any](c *Cache, repo repository.Repository, kind string, runID int64) (T, bool) {
+// load decodes the entry of attempt of repo's runID, reporting whether a usable one was
+// present. A missing, unreadable or partially written entry is reported as a miss.
+func load[T any](c *Cache, repo repository.Repository, kind string, runID int64, attempt int) (T, bool) {
 	var value T
 
-	data, err := os.ReadFile(c.path(repo, kind, runID))
+	data, err := os.ReadFile(c.path(repo, kind, runID, attempt))
 	if err != nil {
 		return value, false
 	}
@@ -104,10 +112,10 @@ func load[T any](c *Cache, repo repository.Repository, kind string, runID int64)
 	return value, true
 }
 
-// save writes the entry of repo's runID. It writes to a temporary file and renames it into
+// save writes the entry of attempt of repo's runID. It writes to a temporary file and renames it into
 // place, which is atomic on Unix, so an interrupted write never leaves a truncated entry
 // behind. A partial entry would in any case be treated as a cache miss on load.
-func (c *Cache) save(repo repository.Repository, kind string, runID int64, value any) error {
+func (c *Cache) save(repo repository.Repository, kind string, runID int64, attempt int, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("failed to encode the %s of workflow run %d: %w", kind, runID, err)
@@ -135,7 +143,7 @@ func (c *Cache) save(repo repository.Repository, kind string, runID int64, value
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("failed to close the cache entry for workflow run %d: %w", runID, err)
 	}
-	if err := os.Rename(tmp.Name(), c.path(repo, kind, runID)); err != nil {
+	if err := os.Rename(tmp.Name(), c.path(repo, kind, runID, attempt)); err != nil {
 		return fmt.Errorf("failed to store the cache entry for workflow run %d: %w", runID, err)
 	}
 	return nil

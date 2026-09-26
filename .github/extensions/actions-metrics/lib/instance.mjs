@@ -203,6 +203,8 @@ export class DashboardInstance {
             status: stored?.status ?? "idle",
             progress: this.timelineProgress || (stored?.progress ?? ""),
             error: stored?.error ?? null,
+            errorCode: stored?.errorCode ?? null,
+            retryAt: stored?.retryAt ?? null,
             metrics: stored?.metrics ?? null,
             updatedAt: stored?.updatedAt ?? null,
             timeline: this.timeline,
@@ -519,8 +521,9 @@ export class DashboardInstance {
      * and `owner` the patch names is what selects the scope, because `A/B` is a
      * repository on the default host and an organization on host `A` alike. The
      * returned promise resolves when collection finishes; progress arrives over
-     * SSE. `bypassCache` additionally discards the job cache `gh runner-kit`
-     * keeps.
+     * SSE. `bypassCache` additionally discards the job lists cached by
+     * `gh runner-kit` and by this extension; without it a refresh reuses them,
+     * so one cut short by a rate limit resumes rather than starts over.
      *
      * `force` defaults to off so that a settings change costs what it is worth:
      * the store collects again when the filters ask for different data, and

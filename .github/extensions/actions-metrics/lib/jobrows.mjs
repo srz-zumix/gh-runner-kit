@@ -99,6 +99,7 @@ export async function collectJobRows({ target, filters, limits, cwd, signal, onP
             return true;
         },
         signal,
+        { host: target?.host ?? null },
     );
 
     // Only a row beyond the budget proves there were more. A malformed line is
