@@ -638,6 +638,14 @@ async function collectFleetReport(result, options, warnings) {
         result.repositories = target.kind === "org" ? normalizeRepositoryRows(payload?.repository ?? []) : null;
         result.capacity = normalizeCapacityRows(payload?.capacity ?? []);
         result.cost = result.billable ? normalizeCostRows(payload?.cost ?? []) : [];
+        // BuildMetricsReport records cost-specific warnings (partial usage or a
+        // missing per-minute rate) in the top-level warnings field rather than
+        // in the summary, so fold the ones the summary does not already carry
+        // back in; otherwise the report path drops them while the per-section
+        // path keeps them.
+        if (result.summary) {
+            result.summary.warnings = [...new Set([...(result.summary.warnings ?? []), ...(payload?.warnings ?? [])])];
+        }
     } catch (error) {
         warnings.push(`gh runner-kit fleet report: ${explain(describe(error), target)}`);
     }
