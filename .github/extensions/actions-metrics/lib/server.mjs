@@ -123,9 +123,11 @@ async function handle(req, res, url, instance) {
         const body = await readBody(req);
         try {
             // Fire and forget: the SSE stream carries progress and the result.
-            // Only an explicit refresh discards the `gh runner-kit` job cache
-            // and insists on collecting again; a filter change collects only
-            // when it asks for different data.
+            // Only an explicit refresh insists on collecting again; a filter
+            // change collects only when it asks for different data. Cached job
+            // lists are discarded only when the refresh asks for it with
+            // `bypassCache` (Shift+click), so a refresh that follows a rate
+            // limit resumes from what was already fetched.
             // The toolbar posts a selector plus the whole settings form, which
             // is folded into one query patch here. An empty selector is left
             // out rather than sent as a cleared target: it means the field was
@@ -139,7 +141,7 @@ async function handle(req, res, url, instance) {
                 .apply({
                     patch,
                     force: url.pathname === "/api/refresh",
-                    bypassCache: url.pathname === "/api/refresh",
+                    bypassCache: url.pathname === "/api/refresh" && body.bypassCache === true,
                 })
                 .catch(() => {});
         } catch (error) {

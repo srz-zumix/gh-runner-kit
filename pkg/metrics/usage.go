@@ -54,9 +54,10 @@ func NewCachedUsageFetcher(inner UsageFetcher, cache *Cache, refresh bool) *Cach
 func (f *CachedUsageFetcher) Usage(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, error) {
 	cacheable := run.GetStatus() == "completed"
 	runID := run.GetID()
+	attempt := run.GetRunAttempt()
 
 	if cacheable && !f.refresh {
-		if usage, ok := f.cache.LoadUsage(repo, runID); ok {
+		if usage, ok := f.cache.LoadUsage(repo, runID, attempt); ok {
 			logger.Debug("metrics: usage cache hit", "run_id", runID)
 			return usage, nil
 		}
@@ -68,7 +69,7 @@ func (f *CachedUsageFetcher) Usage(ctx context.Context, repo repository.Reposito
 	}
 
 	if cacheable {
-		if err := f.cache.SaveUsage(repo, runID, usage); err != nil {
+		if err := f.cache.SaveUsage(repo, runID, attempt, usage); err != nil {
 			logger.Debug("metrics: failed to cache usage", "run_id", runID, "error", err)
 		}
 	}

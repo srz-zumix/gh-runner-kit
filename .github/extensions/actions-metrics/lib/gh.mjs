@@ -29,9 +29,191 @@ function statusFromStderr(stderr) {
     return match ? Number(match[1]) : null;
 }
 
-function run(args, { cwd, env } = {}) {
+// A secondary rate limit reports no reset time. GitHub asks clients to wait at
+// least a minute before retrying, so that is how long every call is held back.
+const SECONDARY_COOLDOWN_MS = 60_000;
+
+const RATE_LIMIT_PATTERN = /\brate limit|abuse detection/i;
+
+/**
+ * Raised when GitHub refused a request for exceeding a rate limit, or when a
+ * request was not sent at all because the host is still cooling down from one.
+ */
+export class RateLimitError extends GhError {
+    constructor(message, { status, stderr, resetAt, host } = {}) {
+        super(message, { status, stderr });
+        this.name = "RateLimitError";
+        this.code = "rate_limited";
+        this.rateLimited = true;
+        this.resetAt = resetAt ?? null;
+        this.host = host ?? null;
+    }
+}
+
+/** Whether an error, from `gh api` or from `gh runner-kit`, is a rate limit refusal. */
+export function isRateLimitError(error) {
+    if (!error) {
+        return false;
+    }
+    if (error.rateLimited === true || error.status === 429) {
+        return true;
+    }
+    return RATE_LIMIT_PATTERN.test(`${error.message ?? ""}\n${error.stderr ?? ""}`);
+}
+
+/**
+ * Read the reset delay go-github appends to a rate limit error, such as
+ * `[rate reset in 12m05s]`, as milliseconds. Null when the text carries none.
+ */
+export function parseRateReset(text) {
+    const match = /\[rate reset in (?:(\d+)m)?(\d+)s\]/.exec(String(text ?? ""));
+    if (!match) {
+        return null;
+    }
+    return (Number(match[1] ?? 0) * 60 + Number(match[2])) * 1000;
+}
+
+/** Normalize a host so that the default host has one spelling. */
+export function hostKey(host) {
+    const value = String(host ?? "").trim().toLowerCase();
+    return value === "" ? "github.com" : value;
+}
+
+// Rate limits belong to the token, so one cooldown per host holds back every
+// target, every panel and every superseded collection that shares it.
+const cooldowns = new Map();
+const cooldownProbes = new Map();
+
+/** The active cooldown of a host, or null once it has expired. */
+export function rateLimitCooldown(host, now = Date.now()) {
+    const key = hostKey(host);
+    const entry = cooldowns.get(key);
+    if (!entry) {
+        return null;
+    }
+    if (entry.until <= now) {
+        cooldowns.delete(key);
+        return null;
+    }
+    return entry;
+}
+
+/** Hold back every request to a host until `until` (epoch milliseconds). */
+export function setRateLimitCooldown(host, until, reason = "primary") {
+    const key = hostKey(host);
+    const current = cooldowns.get(key);
+    if (!current || current.until < until) {
+        cooldowns.set(key, { host: key, until, reason });
+    }
+    return cooldowns.get(key);
+}
+
+/** Forget a host's cooldown. Only tests need this. */
+export function clearRateLimitCooldown(host) {
+    cooldowns.delete(hostKey(host));
+}
+
+function cooldownError(entry, detail) {
+    const when = new Date(entry.until).toLocaleTimeString();
+    const kind = entry.reason === "secondary" ? "secondary rate limit" : "API rate limit";
+    const message = `GitHub ${kind} reached on ${entry.host}; requests are paused until ${when}. Data fetched before the limit is cached, so the next Refresh resumes from there instead of starting over.`;
+    return new RateLimitError(message, {
+        status: detail?.status ?? null,
+        stderr: detail?.stderr ?? "",
+        resetAt: new Date(entry.until).toISOString(),
+        host: entry.host,
+    });
+}
+
+function coreLimit(payload) {
+    const core = payload?.resources?.core ?? payload?.rate ?? null;
+    if (!core || !Number.isFinite(core.remaining)) {
+        return null;
+    }
+    return {
+        limit: core.limit ?? null,
+        remaining: core.remaining,
+        resetAt: Number.isFinite(core.reset) ? core.reset * 1000 : null,
+    };
+}
+
+/**
+ * Read the REST budget of a host. `GET /rate_limit` does not count against the
+ * limit, so it is always sent, cooldown or not. Null when the host does not
+ * report one - GitHub Enterprise Server with rate limiting disabled answers 404.
+ */
+export async function fetchRateLimit({ host, cwd } = {}) {
+    const args = ["api", "rate_limit", "-H", "Accept: application/vnd.github+json"];
+    if (host) {
+        args.push("--hostname", host);
+    }
+    try {
+        const stdout = await exec(args, { cwd });
+        return coreLimit(stdout.trim() ? JSON.parse(stdout) : null);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Record a rate limit refusal as a cooldown for its host and return the error
+ * to raise. Concurrent refusals share one `/rate_limit` probe.
+ */
+export async function noteRateLimit(host, error, { cwd } = {}) {
+    const key = hostKey(host);
+    let probe = cooldownProbes.get(key);
+    if (!probe) {
+        probe = (async () => {
+            const now = Date.now();
+            const budget = await fetchRateLimit({ host, cwd });
+            if (budget && budget.remaining === 0 && budget.resetAt > now) {
+                return setRateLimitCooldown(key, budget.resetAt, "primary");
+            }
+            const parsed = parseRateReset(`${error?.message ?? ""}\n${error?.stderr ?? ""}`);
+            if (parsed !== null && !(budget && budget.remaining > 0)) {
+                return setRateLimitCooldown(key, now + Math.max(parsed, 1000), "primary");
+            }
+            return setRateLimitCooldown(key, now + SECONDARY_COOLDOWN_MS, "secondary");
+        })().finally(() => cooldownProbes.delete(key));
+        cooldownProbes.set(key, probe);
+    }
+    return cooldownError(await probe, error);
+}
+
+/**
+ * Refuse to start a collection against a host whose budget is spent. A cooldown
+ * left by an earlier refusal answers without any request; otherwise the free
+ * `/rate_limit` endpoint is asked, so an exhausted primary limit fails at once
+ * instead of after the first expensive request.
+ */
+export async function assertRateBudget(host, { cwd } = {}) {
+    const active = rateLimitCooldown(host);
+    if (active) {
+        throw cooldownError(active);
+    }
+    const budget = await fetchRateLimit({ host, cwd });
+    if (budget && budget.remaining === 0 && budget.resetAt > Date.now()) {
+        throw cooldownError(setRateLimitCooldown(host, budget.resetAt, "primary"));
+    }
+    return budget;
+}
+
+/** Throw the cooldown of a host as an error when one is active. */
+export function throwIfRateLimited(host) {
+    const active = rateLimitCooldown(host);
+    if (active) {
+        throw cooldownError(active);
+    }
+}
+
+function exec(args, { cwd, env, signal } = {}) {
     return new Promise((resolve, reject) => {
-        const options = { cwd, maxBuffer: MAX_BUFFER, ...(env ? { env: { ...process.env, ...env } } : {}) };
+        const options = {
+            cwd,
+            maxBuffer: MAX_BUFFER,
+            ...(env ? { env: { ...process.env, ...env } } : {}),
+            ...(signal ? { signal } : {}),
+        };
         execFile("gh", args, options, (error, stdout, stderr) => {
             if (!error) {
                 resolve(stdout);
@@ -39,6 +221,10 @@ function run(args, { cwd, env } = {}) {
             }
             if (error.code === "ENOENT") {
                 reject(new GhError("GitHub CLI (gh) was not found on PATH"));
+                return;
+            }
+            if (error.name === "AbortError") {
+                reject(new GhError("The request was superseded"));
                 return;
             }
             reject(
@@ -51,9 +237,35 @@ function run(args, { cwd, env } = {}) {
     });
 }
 
-/** Invoke `gh` with arbitrary arguments and return raw stdout. */
-export function ghRaw(args, { cwd, env } = {}) {
-    return run(args, { cwd, env });
+/**
+ * Run `gh`, holding the call back while its host cools down from a rate limit
+ * and turning a fresh refusal into a cooldown, so that one refusal stops every
+ * other request to the host instead of each of them being refused in turn.
+ */
+async function run(args, { cwd, env, host, signal, gate = true } = {}) {
+    if (gate) {
+        throwIfRateLimited(host);
+    }
+    try {
+        return await exec(args, { cwd, env, signal });
+    } catch (error) {
+        if (gate && error instanceof GhError && isRateLimitError(error)) {
+            throw await noteRateLimit(host, error, { cwd });
+        }
+        throw error;
+    }
+}
+
+/**
+ * Invoke `gh` with arbitrary arguments and return raw stdout.
+ *
+ * Only a call that names the GitHub `host` it talks to - even as null for the
+ * default host - is held back by, and feeds, that host's rate limit cooldown.
+ * A local call such as `gh runner-kit --help` names none, so a cooldown can
+ * never make it fail and have its result memoized as a missing extension.
+ */
+export function ghRaw(args, { cwd, env, host, signal } = {}) {
+    return run(args, { cwd, env, host, signal, gate: host !== undefined });
 }
 
 /** Split a selector into its path segments, tolerating URLs and `.git` suffixes. */
@@ -124,18 +336,20 @@ export function findGitRoot(startDir) {
 
 /** Resolve the repository of the current workspace via `gh repo view`. */
 export async function detectCurrentRepo(cwd) {
-    const stdout = await run(["repo", "view", "--json", "nameWithOwner,url"], { cwd });
+    // Not gated: the host is not known until this answers, and `gh repo view`
+    // spends the GraphQL budget rather than the REST one the cooldown tracks.
+    const stdout = await run(["repo", "view", "--json", "nameWithOwner,url"], { cwd, gate: false });
     const parsed = JSON.parse(stdout);
     return parseRepo(parsed.url || parsed.nameWithOwner);
 }
 
 /** Call a REST endpoint and return the decoded JSON body. */
-export async function ghApi(path, { host, cwd } = {}) {
+export async function ghApi(path, { host, cwd, signal } = {}) {
     const args = ["api", path, "-H", "Accept: application/vnd.github+json"];
     if (host) {
         args.push("--hostname", host);
     }
-    const stdout = await run(args, { cwd });
+    const stdout = await run(args, { cwd, host, signal });
     return stdout.trim() ? JSON.parse(stdout) : null;
 }
 
@@ -145,13 +359,13 @@ export async function ghApi(path, { host, cwd } = {}) {
  */
 export async function ghApiPaged(
     path,
-    { host, cwd, perPage = 100, maxPages = 10, maxItems = Infinity, extract, onPage, onTruncated } = {},
+    { host, cwd, signal, perPage = 100, maxPages = 10, maxItems = Infinity, extract, onPage, onTruncated } = {},
 ) {
     const items = [];
     for (let page = 1; page <= maxPages; page += 1) {
         const separator = path.includes("?") ? "&" : "?";
         const pagePath = `${path}${separator}per_page=${perPage}&page=${page}`;
-        const payload = await ghApi(pagePath, { host, cwd });
+        const payload = await ghApi(pagePath, { host, cwd, signal });
         const pageItems = extract ? extract(payload) : payload;
         if (!Array.isArray(pageItems) || pageItems.length === 0) {
             break;

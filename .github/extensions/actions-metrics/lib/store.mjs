@@ -54,6 +54,8 @@ export class DashboardStore {
                 status: "idle",
                 progress: "",
                 error: null,
+                errorCode: null,
+                retryAt: null,
                 metrics: null,
                 updatedAt: null,
                 inflight: null,
@@ -77,6 +79,10 @@ export class DashboardStore {
             status: entry.status,
             progress: entry.progress,
             error: entry.error,
+            // `rate_limited` when the last collection stopped at a rate limit;
+            // `retryAt` is when the host accepts requests again.
+            errorCode: entry.errorCode,
+            retryAt: entry.retryAt,
             metrics: entry.metrics,
             updatedAt: entry.updatedAt,
         };
@@ -107,7 +113,15 @@ export class DashboardStore {
 
     /**
      * Refresh a target's metrics. Concurrent calls share one in-flight
-     * collection unless `force` is set with different filters.
+     * collection unless the filters changed or `bypassCache` asks for a hard
+     * refresh; a plain `force` joins the collection already running rather
+     * than starting a second one against the same rate limit budget. A
+     * collection that is superseded is aborted, so it stops spending budget on
+     * rows that could no longer be committed.
+     *
+     * `bypassCache` is the only path that discards cached job lists. A plain
+     * Refresh reuses them, which is what lets a collection cut short by a rate
+     * limit resume where it stopped rather than run into the limit again.
      *
      * Only a change to the collection signature collects again: the projection
      * settings and the request concurrency describe how the data already in
@@ -128,7 +142,7 @@ export class DashboardStore {
             void rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
         }
 
-        if (entry.inflight && !filtersChanged && !force) {
+        if (entry.inflight && !filtersChanged && !bypassCache) {
             if (settingsChanged) {
                 this.emit(entry.key);
             }
@@ -144,6 +158,8 @@ export class DashboardStore {
         entry.status = "loading";
         entry.progress = "Starting";
         entry.error = null;
+        entry.errorCode = null;
+        entry.retryAt = null;
         this.emit(entry.key);
 
         // Claimed before the first await so a collection that was superseded -
@@ -152,6 +168,9 @@ export class DashboardStore {
         // behalf.
         const generation = (entry.generation = (entry.generation ?? 0) + 1);
         const limits = limitsOf(entry.query);
+        entry.abort?.abort();
+        const abort = new AbortController();
+        entry.abort = abort;
 
         entry.inflight = (async () => {
             try {
@@ -161,6 +180,7 @@ export class DashboardStore {
                     limits,
                     cwd: this.cwd,
                     force: bypassCache,
+                    signal: abort.signal,
                     onProgress: (message) => {
                         if (generation !== entry.generation) {
                             return;
@@ -181,13 +201,18 @@ export class DashboardStore {
                 if (generation !== entry.generation) {
                     return this.snapshot(entry.key);
                 }
+                // The metrics already in hand are kept: the panel goes on
+                // showing the last complete snapshot beside the error.
                 entry.status = "error";
                 entry.progress = "";
                 entry.error = error?.message ?? String(error);
+                entry.errorCode = error?.code === "rate_limited" ? "rate_limited" : null;
+                entry.retryAt = error?.resetAt ?? null;
                 this.log(`actions-metrics: refresh failed for ${entry.selector}: ${entry.error}`);
             } finally {
                 if (generation === entry.generation) {
                     entry.inflight = null;
+                    entry.abort = null;
                     this.emit(entry.key);
                 }
             }

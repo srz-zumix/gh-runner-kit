@@ -147,6 +147,9 @@ async function settled(instance) {
 }
 
 function requireMetrics(state) {
+    if (state.status === "error" && state.errorCode === "rate_limited") {
+        throw new CanvasError("rate_limited", state.error ?? "GitHub API rate limit reached");
+    }
     if (state.status === "error") {
         throw new CanvasError("collection_failed", state.error ?? "Metric collection failed");
     }
@@ -522,11 +525,22 @@ const canvas = createCanvas({
     actions: [
         {
             name: "refresh",
-            description: "Re-collect the metrics shown in the dashboard and return a summary of the refreshed data.",
-            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            description:
+                "Re-collect the metrics shown in the dashboard and return a summary of the refreshed data. Job lists of completed runs that were already fetched are reused, so a collection cut short by a GitHub API rate limit resumes where it stopped; while the rate limit is still in effect the action fails fast with code `rate_limited` instead of sending requests.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    bypassCache: {
+                        type: "boolean",
+                        description:
+                            "Discard the cached job lists and fetch every run again (`gh runner-kit metrics --refresh`). Much more expensive against the rate limit; only use it when cached data is suspected to be wrong. Defaults to false.",
+                    },
+                },
+                additionalProperties: false,
+            },
             handler: async (ctx) => {
                 const { instance } = panelFor(ctx.instanceId);
-                await instance.apply({ force: true, bypassCache: true });
+                await instance.apply({ force: true, bypassCache: Boolean(ctx.input?.bypassCache) });
                 return summarize(requireMetrics(await settled(instance)));
             },
         },

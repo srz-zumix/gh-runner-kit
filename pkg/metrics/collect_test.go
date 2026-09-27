@@ -259,3 +259,59 @@ func TestCollectUsageFailsOnUnexpectedError(t *testing.T) {
 		t.Fatal("collectUsage() error = nil, want an error")
 	}
 }
+
+// TestWithRetryFailsFastWhenResetIsOutOfReach makes sure an exhausted primary limit whose
+// reset lies beyond every retry left fails at once instead of sleeping through retries
+// that cannot succeed.
+func TestWithRetryFailsFastWhenResetIsOutOfReach(t *testing.T) {
+	rateErr := &github.RateLimitError{
+		Rate:     github.Rate{Reset: github.Timestamp{Time: time.Now().Add(time.Hour)}},
+		Response: &http.Response{StatusCode: http.StatusForbidden},
+	}
+	calls := 0
+	started := time.Now()
+	err := withRetry(context.Background(), func() error {
+		calls++
+		return rateErr
+	})
+	if !errors.Is(err, rateErr) {
+		t.Fatalf("withRetry() error = %v, want the rate limit error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("withRetry() called fn %d times, want 1", calls)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("withRetry() took %v, want an immediate failure", elapsed)
+	}
+}
+
+// TestWithRetryReturnsOtherErrorsImmediately confirms that an error which is not a rate
+// limit is never retried.
+func TestWithRetryReturnsOtherErrorsImmediately(t *testing.T) {
+	want := errors.New("boom")
+	calls := 0
+	err := withRetry(context.Background(), func() error {
+		calls++
+		return want
+	})
+	if !errors.Is(err, want) || calls != 1 {
+		t.Fatalf("withRetry() = %v after %d calls, want %v after 1", err, calls, want)
+	}
+}
+
+// TestResetsAfter covers which errors count as a primary limit resetting out of reach.
+func TestResetsAfter(t *testing.T) {
+	soon := &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: time.Now().Add(time.Minute)}}}
+	late := &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: time.Now().Add(time.Hour)}}}
+	secondary := &github.AbuseRateLimitError{}
+
+	if resetsAfter(soon, 8*time.Minute) {
+		t.Error("resetsAfter(soon) = true, want false")
+	}
+	if !resetsAfter(late, 8*time.Minute) {
+		t.Error("resetsAfter(late) = false, want true")
+	}
+	if resetsAfter(secondary, 0) {
+		t.Error("resetsAfter(secondary) = true, want false")
+	}
+}
