@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ func WriteSnapshot(path string, snap *Snapshot) error {
 		return encodeSnapshot(os.Stdout, snap, false)
 	}
 
-	tmp, err := os.CreateTemp(dirOf(path), ".snapshot-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".snapshot-*")
 	if err != nil {
 		return fmt.Errorf("failed to create a temporary file for the snapshot: %w", err)
 	}
@@ -82,15 +83,6 @@ func WriteSnapshot(path string, snap *Snapshot) error {
 		return fmt.Errorf("failed to write the snapshot to %s: %w", path, err)
 	}
 	return nil
-}
-
-func dirOf(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[:i]
-		}
-	}
-	return "."
 }
 
 func encodeSnapshot(w io.Writer, snap *Snapshot, gzipped bool) error {
@@ -141,6 +133,9 @@ func ReadSnapshot(path string) (*Snapshot, error) {
 	}
 	if snap.Version != CurrentSnapshotVersion {
 		return nil, fmt.Errorf("the snapshot %s has version %d, which this build does not understand (expected %d)", path, snap.Version, CurrentSnapshotVersion)
+	}
+	if snap.Data == nil {
+		return nil, fmt.Errorf("the snapshot %s carries no data and cannot be used as an --input", path)
 	}
 	return &snap, nil
 }

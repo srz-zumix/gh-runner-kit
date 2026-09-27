@@ -115,8 +115,8 @@ type Report struct {
 	Cost        []metrics.CostRow        `json:"cost,omitempty"`
 }
 
-// BuildMetricsReport builds every section sections asks for from data, using only the
-// opts fields the requested sections need.
+// BuildMetricsReport builds every requested section from data, using only the opts
+// fields those sections need.
 func BuildMetricsReport(data *metrics.Data, sections []ReportSection, opts ReportOptions) (*Report, error) {
 	report := &Report{
 		Window:         data.Window,

@@ -250,16 +250,18 @@ func (m *MetricsFlags) CollectRuns(cmd *cobra.Command) (*metrics.Data, error) {
 }
 
 // CollectReport gathers what `metrics report` needs: the runner inventory, the
-// workflow runs and their jobs, plus the billable usage of every run when withUsage
-// is set, because only its cost section needs it. --input is honoured like the other
-// Collect* methods, requiring the snapshot to carry usage too when withUsage is set.
-func (m *MetricsFlags) CollectReport(cmd *cobra.Command, withUsage bool) (*metrics.Data, error) {
+// workflow runs, their jobs when needJobs is set, plus the billable usage of every
+// run when withUsage is set. A cost-only report needs neither the jobs nor a job
+// listing request per run, so the caller passes needJobs=false to skip them. --input
+// is honoured like the other Collect* methods, requiring the snapshot to carry jobs
+// and usage only when the corresponding flag is set.
+func (m *MetricsFlags) CollectReport(cmd *cobra.Command, needJobs, withUsage bool) (*metrics.Data, error) {
 	if m.Input != "" {
 		snap, err := m.loadSnapshot()
 		if err != nil {
 			return nil, err
 		}
-		if err := snap.Require(true, withUsage); err != nil {
+		if err := snap.Require(needJobs, withUsage); err != nil {
 			return nil, err
 		}
 		return snap.Data, nil
@@ -269,7 +271,7 @@ func (m *MetricsFlags) CollectReport(cmd *cobra.Command, withUsage bool) (*metri
 	if err != nil {
 		return nil, err
 	}
-	collector, _, err := m.buildCollector(cmd, window, false, false, withUsage)
+	collector, _, err := m.buildCollector(cmd, window, !needJobs, false, withUsage)
 	if err != nil {
 		return nil, err
 	}

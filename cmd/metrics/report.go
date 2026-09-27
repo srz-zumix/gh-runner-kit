@@ -61,13 +61,16 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 			}
 
 			wantUsage := false
+			needJobs := false
 			for _, s := range sections {
 				if s == kitutil.ReportSectionCost {
 					wantUsage = true
+				} else {
+					needJobs = true
 				}
 			}
 
-			data, err := flags.CollectReport(cmd, wantUsage)
+			data, err := flags.CollectReport(cmd, needJobs, wantUsage)
 			if err != nil {
 				return err
 			}
