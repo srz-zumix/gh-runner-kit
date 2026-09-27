@@ -16,6 +16,17 @@ func RenderMetricsSummary(r *render.Renderer, s metrics.Summary) error {
 		return r.RenderExportedData(s)
 	}
 
+	if err := RenderMetricsSummaryTable(r, s); err != nil {
+		return err
+	}
+	WriteMetricsFooter(r, s.Window, s.Runs, s.TruncatedRepos, s.Warnings)
+	return nil
+}
+
+// RenderMetricsSummaryTable prints only the two column table, leaving the footer to
+// the caller. `metrics report` uses this to print the summary section without
+// repeating the footer every other section already shares.
+func RenderMetricsSummaryTable(r *render.Renderer, s metrics.Summary) error {
 	t := r.NewTableWriter([]string{"METRIC", "VALUE"})
 	rows := [][]string{
 		{"RUNNERS", strconv.Itoa(s.Runners)},
@@ -37,12 +48,7 @@ func RenderMetricsSummary(r *render.Renderer, s metrics.Summary) error {
 	for _, row := range rows {
 		t.Append(row)
 	}
-	if err := t.Render(); err != nil {
-		return err
-	}
-
-	WriteMetricsFooter(r, s.Window, s.Runs, s.TruncatedRepos, s.Warnings)
-	return nil
+	return t.Render()
 }
 
 // RenderMetricsRunners prints one line per runner, label set or runner group.

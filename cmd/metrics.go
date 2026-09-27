@@ -12,12 +12,14 @@ func NewMetricsCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(metrics.NewCapacityCmd())
+	cmd.AddCommand(metrics.NewCollectCmd())
 	cmd.AddCommand(metrics.NewConcurrencyCmd())
 	cmd.AddCommand(metrics.NewCostCmd())
 	cmd.AddCommand(metrics.NewExportCmd())
 	cmd.AddCommand(metrics.NewJobsCmd())
 	cmd.AddCommand(metrics.NewLabelCmd())
 	cmd.AddCommand(metrics.NewQueueCmd())
+	cmd.AddCommand(metrics.NewReportCmd())
 	cmd.AddCommand(metrics.NewRepositoryCmd())
 	cmd.AddCommand(metrics.NewRunnerCmd())
 	cmd.AddCommand(metrics.NewRunsCmd())

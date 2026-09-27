@@ -589,45 +589,67 @@ function normalizeCostRows(raw) {
     }));
 }
 
+// Every section `gh runner-kit metrics report` knows, in the order it builds
+// them. cost is opt-in (billable) so it is appended only when asked for,
+// because it costs one extra usage request per run the other sections never need.
+const REPORT_SECTIONS = ["summary", "runner", "queue", "concurrency", "label", "workflow", "repository", "capacity"];
+
+/** Section-specific flags for `metrics report`, matching what each section's own subcommand accepts. */
+function reportExtraArgs(result) {
+    const args = ["--group-by", result.groupBy, "--bucket", result.bucket];
+    for (const label of result.labelFilter) {
+        args.push("--label", label);
+    }
+    if (result.selfHostedOnly) {
+        args.push("--self-hosted-only");
+    }
+    args.push("--target-wait", result.targetWait, "--target-utilization", String(result.targetUtilization));
+    if (result.billable) {
+        // Passing --section at all replaces the CLI's default set, so every
+        // other section has to be listed alongside cost to still get them.
+        for (const section of [...REPORT_SECTIONS, "cost"]) {
+            args.push("--section", section);
+        }
+    }
+    return args;
+}
+
 /**
- * Collect the self-hosted fleet metrics through `gh runner-kit`.
+ * Collect the self-hosted fleet metrics through one `gh runner-kit metrics
+ * report` call, which shares a single collection across every section instead
+ * of the one-collection-per-subcommand cost `collectFleetSteps` pays.
+ */
+async function collectFleetReport(result, options, warnings) {
+    const { target, onProgress } = options;
+    onProgress?.("Running gh runner-kit metrics report");
+    try {
+        const payload = await runMetrics("report", options, reportExtraArgs(result));
+        result.summary = normalizeSummary(payload?.summary ?? null);
+        result.runners = normalizeRunnerRows(payload?.runner ?? []);
+        result.queue = normalizeQueueRows(payload?.queue ?? []);
+        result.concurrency = normalizeConcurrencyRows(payload?.concurrency ?? []);
+        result.labels = normalizeLabelRows(payload?.label ?? []);
+        result.workflows = normalizeWorkflowRows(payload?.workflow ?? []);
+        // Only an organization spans more than one repository, so under a
+        // single-repository target the report would restate the summary; keep
+        // the null sentinel `collectFleetSteps` uses for "did not run".
+        result.repositories = target.kind === "org" ? normalizeRepositoryRows(payload?.repository ?? []) : null;
+        result.capacity = normalizeCapacityRows(payload?.capacity ?? []);
+        result.cost = result.billable ? normalizeCostRows(payload?.cost ?? []) : [];
+    } catch (error) {
+        warnings.push(`gh runner-kit fleet report: ${explain(describe(error), target)}`);
+    }
+}
+
+/**
+ * Collect the self-hosted fleet metrics with one `gh runner-kit metrics`
+ * subcommand per section, for a CLI that predates `metrics report`.
  *
  * The subcommands run sequentially on purpose: they share a local job cache, so
  * the first call pays for the API traffic and the other two read from the cache.
  */
-export async function collectFleet({ target, filters, limits, cwd, force = false, onProgress, warnings = [] } = {}) {
-    const probe = await probeRunnerKit(cwd);
-    const shape = {
-        scope: target.kind,
-        groupBy: GROUP_BY_KEYS.includes(filters.groupBy) ? filters.groupBy : "name",
-        bucket: resolveBucket(filters.days, filters.bucket),
-        runnerType: RUNNER_TYPE_KEYS.includes(filters.runnerType) ? filters.runnerType : "auto",
-        targetWait: TARGET_WAIT_KEYS.includes(filters.targetWait) ? filters.targetWait : DEFAULT_TARGET_WAIT,
-        targetUtilization: filters.targetUtilization ?? DEFAULT_TARGET_UTILIZATION,
-        selfHostedOnly: Boolean(filters.selfHostedOnly),
-        billable: Boolean(filters.billable),
-        labelFilter: Array.isArray(filters.labels) ? filters.labels : [],
-        summary: null,
-        runners: [],
-        queue: [],
-        concurrency: [],
-        labels: [],
-        workflows: [],
-        // null until the report runs: an empty array is a real "no repository
-        // placed a job on a self-hosted runner", which is a different answer
-        // from "the report did not run".
-        repositories: null,
-        capacity: [],
-        cost: [],
-    };
-    if (!probe.available) {
-        warnings.push(`${probe.reason}. Install it with \`gh extension install srz-zumix/gh-runner-kit\` to enable the fleet metrics.`);
-        return { available: false, reason: probe.reason, version: null, ...shape };
-    }
-
-    const options = { target, filters, limits, cwd, force, probe };
-    const result = { available: true, reason: null, version: probe.version, ...shape };
-
+async function collectFleetSteps(result, options, warnings) {
+    const { target, probe, onProgress } = options;
     const steps = [
         {
             name: "summary",
@@ -733,6 +755,54 @@ export async function collectFleet({ target, filters, limits, cwd, force = false
         } catch (error) {
             warnings.push(`gh runner-kit ${step.label}: ${explain(describe(error), target)}`);
         }
+    }
+}
+
+/**
+ * Collect the self-hosted fleet metrics through `gh runner-kit`, in one
+ * `metrics report` call when the installed CLI supports it, or with the
+ * older one-subcommand-per-section fallback otherwise.
+ */
+export async function collectFleet({ target, filters, limits, cwd, force = false, onProgress, warnings = [] } = {}) {
+    const probe = await probeRunnerKit(cwd);
+    const shape = {
+        scope: target.kind,
+        groupBy: GROUP_BY_KEYS.includes(filters.groupBy) ? filters.groupBy : "name",
+        bucket: resolveBucket(filters.days, filters.bucket),
+        runnerType: RUNNER_TYPE_KEYS.includes(filters.runnerType) ? filters.runnerType : "auto",
+        targetWait: TARGET_WAIT_KEYS.includes(filters.targetWait) ? filters.targetWait : DEFAULT_TARGET_WAIT,
+        targetUtilization: filters.targetUtilization ?? DEFAULT_TARGET_UTILIZATION,
+        selfHostedOnly: Boolean(filters.selfHostedOnly),
+        billable: Boolean(filters.billable),
+        labelFilter: Array.isArray(filters.labels) ? filters.labels : [],
+        summary: null,
+        runners: [],
+        queue: [],
+        concurrency: [],
+        labels: [],
+        workflows: [],
+        // null until the report runs: an empty array is a real "no repository
+        // placed a job on a self-hosted runner", which is a different answer
+        // from "the report did not run".
+        repositories: null,
+        capacity: [],
+        cost: [],
+    };
+    if (!probe.available) {
+        warnings.push(`${probe.reason}. Install it with \`gh extension install srz-zumix/gh-runner-kit\` to enable the fleet metrics.`);
+        return { available: false, reason: probe.reason, version: null, ...shape };
+    }
+
+    const options = { target, filters, limits, cwd, force, probe, onProgress };
+    const result = { available: true, reason: null, version: probe.version, ...shape };
+
+    if (probe.subcommands.has("report")) {
+        await collectFleetReport(result, options, warnings);
+    } else {
+        warnings.push(
+            "gh runner-kit metrics report is not available in the installed version, so the fleet metrics were collected with one API round trip per report instead of one shared collection; update the extension with `gh extension upgrade runner-kit` to cut the API usage.",
+        );
+        await collectFleetSteps(result, options, warnings);
     }
 
     // The CLI reports its own permission problems inside the summary payload.

@@ -441,8 +441,9 @@ Shared options:
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | - | Drop the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
-| `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--include-repo` | - | Keep only the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
+| `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
@@ -530,6 +531,30 @@ The model is an M/M/c queue (Erlang C). It assumes jobs arrive independently and
 that any runner of the pool can serve any of its jobs. Scheduled bursts and
 fan-out inside a single workflow break the first assumption, so compare
 `EST WAIT` against the measured `WAIT P95` before acting on `DELTA`.
+
+### metrics collect
+
+Collects the runner inventory, the workflow runs and their jobs once, and writes
+the result to a snapshot file that every other `metrics` command can read back
+with `--input` instead of issuing its own API requests. This is the fix for
+running several `metrics` reports over the same window without hitting rate
+limits; see `metrics report` for printing several of them from a single
+collection in one command.
+
+```bash
+gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--usage] [--days N | --since TIME] [--all-repos] [--output PATH]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--output` | `-` | Write the snapshot to this file instead of stdout, gzip-compressed when the name ends in `.gz` |
+| `--usage` | `false` | Also collect the billable usage of every run, for `metrics cost --input` |
+
+`collect` does not accept `--input`, `--format`, `--jq` or `--template`: it is the
+command that produces the input the other commands consume. `--usage` costs one
+extra API request per run, the same way `metrics cost` does, so leave it off
+unless the snapshot needs to serve `metrics cost` too.
 
 ### metrics concurrency
 
@@ -706,6 +731,52 @@ is the highest number of jobs of that set running at the same time, and
 means the label set needs more runners; a low saturation with a high wait points
 at the workflow definitions instead.
 
+### metrics report
+
+Collects the fleet once and prints several of the other `metrics` reports from
+it, which is cheaper than running each of them on its own when API rate limits
+are a concern.
+
+```bash
+gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--section SECTION]... [--days N | --since TIME] [--all-repos] [--format json]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--section` | every section except `cost` | Print only this section: `capacity`, `concurrency`, `cost`, `label`, `queue`, `repository`, `runner`, `summary` or `workflow`. Repeatable |
+
+Pass `--section` one or more times to pick which reports to print; `cost` is
+opt-in because it needs one extra billable-usage request per run the other
+sections never need. `--group-by`, `--bucket`, `--label`, `--self-hosted-only`,
+`--include-unused`, `--target-wait`, `--target-utilization` and `--rate`
+configure their matching section the same way its own `metrics` command does;
+`--label` only narrows the `concurrency` section. Table output prints one
+`== SECTION ==` block per section followed by the shared footer; JSON output is
+a single object keyed by lowercase section name, so `payload.summary`,
+`payload.runner`, `payload.queue` etc. use the exact same field names as the
+equivalent standalone command's JSON output.
+
+### metrics repository
+
+Aggregates the collected workflow activity by repository.
+
+```bash
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] \
+  [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] \
+  [--format json]
+```
+
+Table columns: `REPOSITORY`, `RUNS`, `JOBS`, `DECIDED`, `FAILED`, `FAIL`,
+`RETRIED`, `RETRY`, `BUSY`, `LAST JOB`.
+
+The row groups every workflow in a repository into one summary so an
+organization-wide collection can show which repositories are quiet and which ones
+were cut off by `--max-runs`. `FAIL` and `RETRY` are derived from the same raw
+counts that back the per-workflow report, which keeps the aggregation consistent
+across repository and workflow views.
+
 ### metrics runner
 
 Breaks the fleet activity down per runner, per label set or per runner group.
@@ -786,26 +857,6 @@ or timed out, and `RETRIED` is how many runs were restarted at least once.
 discloses retry at the run level: a job list covers a run's last attempt only,
 so a job retried inside one attempt is indistinguishable from a job that ran
 once.
-
-### repository
-
-Aggregates the collected workflow activity by repository.
-
-```bash
-gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] \
-  [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] \
-  [--format json]
-```
-
-Table columns: `REPOSITORY`, `RUNS`, `JOBS`, `DECIDED`, `FAILED`, `FAIL`,
-`RETRIED`, `RETRY`, `BUSY`, `LAST JOB`.
-
-The row groups every workflow in a repository into one summary so an
-organization-wide collection can show which repositories are quiet and which ones
-were cut off by `--max-runs`. `FAIL` and `RETRY` are derived from the same raw
-counts that back the per-workflow report, which keeps the aggregation consistent
-across repository and workflow views.
 
 ### run
 
@@ -1103,6 +1154,7 @@ gh runner-kit metrics workflow --owner my-org --days 30 --format json \
 | `metrics` warns `skipped the jobs of workflow run N` | GitHub answered 403, 404 or 5xx for that run. The report is built without it, so the totals are slightly low. Large repositories hit 5xx occasionally; re-run to pick the run up again. |
 | `metrics` is slow the first time | Each run costs one job request. Results are cached per run, so subsequent invocations over the same window are much faster. |
 | `metrics` percentiles look implausibly low | Older caches may still hold the entries that are now excluded. Re-run with `--refresh`. |
+| Calling several `metrics` subcommands over the same window hits rate limits | Each subcommand collects independently. Run `metrics collect --output snapshot.json.gz` once, then pass `--input snapshot.json.gz` to every subcommand, or use `metrics report --section ...` to print several reports from a single collection in one command. |
 | `metrics concurrency` shows `RUNNERS 0` | `--label` matched no registered runner, or the runner inventory could not be read. Check `metrics label` for orphan labels and the warnings on stderr. |
 | `metrics concurrency` returns one row per minute | `--bucket` was set too small for the window. Widen it, for example `--bucket 1h`. |
 | `metrics label` does not list a label a runner carries | No job requested it in the window, so it is hidden by default. Pass `--include-unused`. |
