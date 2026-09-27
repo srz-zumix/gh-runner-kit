@@ -20,29 +20,36 @@ const MetricsStepSummaryEnv = "GITHUB_STEP_SUMMARY"
 
 // MetricsFlags carries the options shared by every metrics subcommand.
 type MetricsFlags struct {
-	Repo        string
-	Owner       string
-	Type        string
-	Days        int
-	Since       string
-	MaxRuns     int
-	Concurrency int
-	Branch      string
-	Event       string
-	Workflow    string
-	AllRepos    bool
+	Repo         string
+	Owner        string
+	Type         string
+	Days         int
+	Since        string
+	MaxRuns      int
+	Concurrency  int
+	Branch       string
+	Event        string
+	Workflow     string
+	AllRepos     bool
 	IncludeRepos []string
 	ExcludeRepos []string
-	NoCache     bool
-	Refresh     bool
-	Exporter    cmdutil.Exporter
+	NoCache      bool
+	Refresh      bool
+	Input        string
+	Exporter     cmdutil.Exporter
+
+	// snapshot memoizes the --input file across the Window and collect calls of a
+	// single command run, so it is decoded from disk only once.
+	snapshot *metrics.Snapshot
 }
 
 // AddOption configures which shared metrics flags Add registers.
 type AddOption func(*addOptions)
 
 type addOptions struct {
-	cacheFlags bool
+	cacheFlags  bool
+	inputFlag   bool
+	formatFlags bool
 }
 
 // WithoutCacheFlags omits the --no-cache/--refresh flags for commands that never read or
@@ -51,9 +58,30 @@ func WithoutCacheFlags() AddOption {
 	return func(o *addOptions) { o.cacheFlags = false }
 }
 
+// WithoutInputFlag omits the --input flag for `metrics collect`, the one command that
+// always collects from the API rather than ever reading a snapshot back.
+func WithoutInputFlag() AddOption {
+	return func(o *addOptions) { o.inputFlag = false }
+}
+
+// WithoutFormatFlags omits --format/--jq/--template for `metrics collect`, which writes
+// a snapshot rather than rendering a report.
+func WithoutFormatFlags() AddOption {
+	return func(o *addOptions) { o.formatFlags = false }
+}
+
+// collectionFlagNames lists every flag that only affects an API collection, so a
+// command that reads --input instead can reject each of them individually without
+// also forbidding combinations, such as --repo together with --owner, that stay legal
+// when collecting from the API.
+var collectionFlagNames = []string{
+	"repo", "owner", "type", "days", "since", "max-runs", "concurrency",
+	"branch", "event", "workflow", "all-repos", "include-repo", "exclude-repo",
+}
+
 // Add registers the shared metrics flags on cmd.
 func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
-	options := addOptions{cacheFlags: true}
+	options := addOptions{cacheFlags: true, inputFlag: true, formatFlags: true}
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -76,16 +104,52 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
 		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
 	}
-	cmdutil.AddFormatFlags(cmd, &m.Exporter)
+	if options.inputFlag {
+		f.StringVar(&m.Input, "input", "", "Read a snapshot metrics collect wrote instead of collecting from the API (- for stdin)")
+	}
+	if options.formatFlags {
+		cmdutil.AddFormatFlags(cmd, &m.Exporter)
+	}
 
 	cmd.MarkFlagsMutuallyExclusive("days", "since")
+	if options.inputFlag {
+		exclusive := collectionFlagNames
+		if options.cacheFlags {
+			exclusive = append(append([]string{}, collectionFlagNames...), "no-cache", "refresh")
+		}
+		for _, name := range exclusive {
+			cmd.MarkFlagsMutuallyExclusive("input", name)
+		}
+	}
 }
 
 // Window resolves the aggregation window from the --days/--since flags. Commands that must
 // validate the window before collecting data can call this first and hand the result to
 // CollectWithWindow, so validation and collection agree on a single window.
+// When --input is set, the window comes from the snapshot instead, so a report run
+// against it always describes the window the snapshot was actually collected over.
 func (m *MetricsFlags) Window() (metrics.Window, error) {
+	if m.Input != "" {
+		snap, err := m.loadSnapshot()
+		if err != nil {
+			return metrics.Window{}, err
+		}
+		return snap.Data.Window, nil
+	}
 	return metrics.ParseWindow(m.Days, m.Since, time.Now())
+}
+
+// loadSnapshot decodes --input once and reuses it for every later call in the same
+// command run, so Window and collect never read the file twice.
+func (m *MetricsFlags) loadSnapshot() (*metrics.Snapshot, error) {
+	if m.snapshot == nil {
+		snap, err := metrics.ReadSnapshot(m.Input)
+		if err != nil {
+			return nil, err
+		}
+		m.snapshot = snap
+	}
+	return m.snapshot, nil
 }
 
 // ResolveConcurrency parses the textual --bucket width, resolves the aggregation window and
@@ -185,6 +249,35 @@ func (m *MetricsFlags) CollectRuns(cmd *cobra.Command) (*metrics.Data, error) {
 	return m.collect(cmd, window, collectRunsOnly)
 }
 
+// CollectReport gathers what `metrics report` needs: the runner inventory, the
+// workflow runs, their jobs when needJobs is set, plus the billable usage of every
+// run when withUsage is set. A cost-only report needs neither the jobs nor a job
+// listing request per run, so the caller passes needJobs=false to skip them. --input
+// is honoured like the other Collect* methods, requiring the snapshot to carry jobs
+// and usage only when the corresponding flag is set.
+func (m *MetricsFlags) CollectReport(cmd *cobra.Command, needJobs, withUsage bool) (*metrics.Data, error) {
+	if m.Input != "" {
+		snap, err := m.loadSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		if err := snap.Require(needJobs, withUsage); err != nil {
+			return nil, err
+		}
+		return snap.Data, nil
+	}
+
+	window, err := m.Window()
+	if err != nil {
+		return nil, err
+	}
+	collector, _, err := m.buildCollector(cmd, window, !needJobs, false, withUsage)
+	if err != nil {
+		return nil, err
+	}
+	return collector.Collect(cmd.Context())
+}
+
 // collectMode selects which per run data a collection fetches on top of the runs.
 type collectMode int
 
@@ -198,21 +291,69 @@ const (
 )
 
 func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode collectMode) (*metrics.Data, error) {
-	ctx := cmd.Context()
+	if m.Input != "" {
+		snap, err := m.loadSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		if err := snap.Require(mode == collectFull, mode == collectUsage); err != nil {
+			return nil, err
+		}
+		return snap.Data, nil
+	}
 
+	collector, _, err := m.buildCollector(cmd, window, mode != collectFull, mode == collectRunsOnly, mode == collectUsage)
+	if err != nil {
+		return nil, err
+	}
+	return collector.Collect(cmd.Context())
+}
+
+// CollectSnapshot gathers the runner inventory, the workflow runs and their jobs, plus
+// the billable usage of every run when withUsage is set, and packages the result as a
+// Snapshot ready for WriteSnapshot. Unlike collect it never reads --input, because
+// `metrics collect` is what produces the file --input reads back.
+func (m *MetricsFlags) CollectSnapshot(cmd *cobra.Command, withUsage bool) (*metrics.Snapshot, error) {
+	window, err := m.Window()
+	if err != nil {
+		return nil, err
+	}
+
+	collector, scope, err := m.buildCollector(cmd, window, false, false, withUsage)
+	if err != nil {
+		return nil, err
+	}
+	data, err := collector.Collect(cmd.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	return &metrics.Snapshot{
+		Version:   metrics.CurrentSnapshotVersion,
+		CreatedAt: time.Now().UTC(),
+		Repo:      scope,
+		Contents:  metrics.SnapshotContents{Jobs: true, Usage: withUsage, Runners: true},
+		Data:      data,
+	}, nil
+}
+
+// buildCollector resolves the target scope and assembles the Collector that fetches
+// it, leaving the API request to the caller. skipJobs and skipRunners mirror the
+// Options fields of the same name; wantUsage additionally attaches a usage fetcher.
+func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window, skipJobs, skipRunners, wantUsage bool) (*metrics.Collector, repository.Repository, error) {
 	repo, err := parser.Repository(
 		parser.RepositoryOwnerWithHost(m.Owner),
 		parser.RepositoryInput(m.Repo),
 	)
 	if err != nil {
-		return nil, err
+		return nil, repository.Repository{}, err
 	}
 
 	// The runner inventory follows --type, while the workflow runs always come from a
 	// repository because the API offers no organization wide run listing.
 	scope, err := ApplyRunnerType(cmd, repo, m.Type)
 	if err != nil {
-		return nil, err
+		return nil, repository.Repository{}, err
 	}
 
 	var repos []repository.Repository
@@ -222,18 +363,18 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode c
 
 	client, err := gh.NewGitHubClientWithRepo(scope)
 	if err != nil {
-		return nil, err
+		return nil, repository.Repository{}, err
 	}
 
 	var jobs metrics.JobFetcher
-	if mode == collectFull {
+	if !skipJobs {
 		jobs = m.jobFetcher(client)
 	}
 
 	collector := metrics.NewCollector(client, scope, metrics.Options{
-		Repos:       repos,
-		Window:      window,
-		MaxRuns:     m.MaxRuns,
+		Repos:        repos,
+		Window:       window,
+		MaxRuns:      m.MaxRuns,
 		Concurrency:  m.Concurrency,
 		Branch:       m.Branch,
 		Event:        m.Event,
@@ -241,15 +382,15 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode c
 		AllRepos:     m.AllRepos,
 		IncludeRepos: m.IncludeRepos,
 		ExcludeRepos: m.ExcludeRepos,
-		SkipJobs:     mode != collectFull,
-		SkipRunners:  mode == collectRunsOnly,
+		SkipJobs:     skipJobs,
+		SkipRunners:  skipRunners,
 	}, jobs)
 
-	if mode == collectUsage {
+	if wantUsage {
 		collector.SetUsageFetcher(m.usageFetcher(client))
 	}
 
-	return collector.Collect(ctx)
+	return collector, scope, nil
 }
 
 // jobFetcher wraps the API fetcher with the on-disk cache unless it is disabled or
