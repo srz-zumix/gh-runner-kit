@@ -114,7 +114,7 @@ func ReadSnapshot(path string) (*Snapshot, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to open the snapshot %s: %w", path, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		r = f
 
 		if strings.HasSuffix(path, ".gz") {
@@ -122,7 +122,7 @@ func ReadSnapshot(path string) (*Snapshot, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to open the gzip stream of %s: %w", path, err)
 			}
-			defer gz.Close()
+			defer func() { _ = gz.Close() }()
 			r = gz
 		}
 	}
