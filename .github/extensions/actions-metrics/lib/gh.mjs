@@ -206,12 +206,21 @@ export function throwIfRateLimited(host) {
     }
 }
 
+export function ghCliEnv(overrides) {
+    const env = { ...process.env, ...overrides };
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    delete env.GH_ENTERPRISE_TOKEN;
+    delete env.GITHUB_ENTERPRISE_TOKEN;
+    return env;
+}
+
 function exec(args, { cwd, env, signal } = {}) {
     return new Promise((resolve, reject) => {
         const options = {
             cwd,
             maxBuffer: MAX_BUFFER,
-            ...(env ? { env: { ...process.env, ...env } } : {}),
+            env: ghCliEnv(env),
             ...(signal ? { signal } : {}),
         };
         execFile("gh", args, options, (error, stdout, stderr) => {
