@@ -83,6 +83,9 @@ export function hostKey(host) {
 // target, every panel and every superseded collection that shares it.
 const cooldowns = new Map();
 const cooldownProbes = new Map();
+// Bumped whenever the active token changes so an in-flight probe started under
+// the previous token can recognise that its result is stale.
+let authGeneration = 0;
 
 /** The active cooldown of a host, or null once it has expired. */
 export function rateLimitCooldown(host, now = Date.now()) {
@@ -164,17 +167,29 @@ export async function noteRateLimit(host, error, { cwd } = {}) {
     let probe = cooldownProbes.get(key);
     if (!probe) {
         probe = (async () => {
+            const generation = authGeneration;
             const now = Date.now();
             const budget = await fetchRateLimit({ host, cwd });
+            // Install the cooldown only when the token is unchanged; a probe
+            // started under a superseded token must not block requests made
+            // with the newly configured one.
+            const commit = (until, reason) =>
+                generation === authGeneration
+                    ? setRateLimitCooldown(key, until, reason)
+                    : { host: key, until, reason };
             if (budget && budget.remaining === 0 && budget.resetAt > now) {
-                return setRateLimitCooldown(key, budget.resetAt, "primary");
+                return commit(budget.resetAt, "primary");
             }
             const parsed = parseRateReset(`${error?.message ?? ""}\n${error?.stderr ?? ""}`);
             if (parsed !== null && !(budget && budget.remaining > 0)) {
-                return setRateLimitCooldown(key, now + Math.max(parsed, 1000), "primary");
+                return commit(now + Math.max(parsed, 1000), "primary");
             }
-            return setRateLimitCooldown(key, now + SECONDARY_COOLDOWN_MS, "secondary");
-        })().finally(() => cooldownProbes.delete(key));
+            return commit(now + SECONDARY_COOLDOWN_MS, "secondary");
+        })().finally(() => {
+            if (cooldownProbes.get(key) === probe) {
+                cooldownProbes.delete(key);
+            }
+        });
         cooldownProbes.set(key, probe);
     }
     return cooldownError(await probe, error);
@@ -210,7 +225,9 @@ let canvasGhToken = null;
 
 export function setCanvasGhToken(token) {
     canvasGhToken = token || null;
+    authGeneration++;
     cooldowns.clear();
+    cooldownProbes.clear();
 }
 
 export function ghTokenSource() {

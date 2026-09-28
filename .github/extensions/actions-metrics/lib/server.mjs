@@ -123,7 +123,7 @@ async function handle(req, res, url, instance) {
                 return;
             }
             const body = await readBody(req);
-            if (typeof body.token !== "string" || body.token.length > 4096) {
+            if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.token !== "string" || body.token.length > 4096) {
                 sendJson(res, 400, { error: "Invalid token" });
                 return;
             }

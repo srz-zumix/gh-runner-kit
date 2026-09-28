@@ -1598,6 +1598,12 @@ function authenticationSettingsCard() {
                 const input = event.target.querySelector('input[type="password"]');
                 input.value = "";
                 input.removeAttribute("value");
+                // Disable the control before the async request so a rapid second
+                // submit cannot send an empty token and clear the one just set.
+                const submit = event.target.querySelector('[type="submit"]');
+                if (submit) {
+                    submit.disabled = true;
+                }
                 void updateCanvasToken(token);
             },
         }, [
