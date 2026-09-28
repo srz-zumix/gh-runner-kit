@@ -17,6 +17,8 @@ The CLI answers one question per invocation and prints a table. This panel runs 
 
 Reading self-hosted runner inventories needs the runner scopes; without them the panel still reports everything derived from workflow runs and jobs, and says which inventory it had to skip.
 
+The extension's `gh` subprocesses ignore `GH_TOKEN` and `GITHUB_TOKEN` inherited from Copilot and use the credentials stored by `gh auth login` by default. In the canvas, open **GitHub authentication** and enter a token to use it as `GH_TOKEN` for the extension's `gh` subprocesses. The token is held in extension-process memory, shared by open dashboards, never returned to the canvas or saved with preferences, and cleared when the extension restarts; **Clear token** returns to the default. You can also set `ACTIONS_METRICS_GH_TOKEN` in the Copilot process environment before launching the extension; the canvas token takes precedence, and clearing it returns to that environment token. These overrides apply to github.com and ghe.com hosts; GitHub Enterprise Server hosts still use stored `gh` credentials. The token needs runner inventory permission for the selected organization. Do not commit tokens to the repository.
+
 ## Installation
 
 The extension lives in this repository at `.github/extensions/actions-metrics/`, so a clone is all that is needed — Copilot CLI discovers it automatically and it loads for anyone working in the repo. Nothing to build and no dependencies to install.
@@ -73,7 +75,7 @@ A section that could not be collected reports why rather than returning zeros, s
 
 ## Stored state
 
-User-global preferences — the last target and the filters of each target — persist under `$COPILOT_HOME/extensions/actions-metrics/artifacts/` (`~/.copilot/...` when `COPILOT_HOME` is unset). Nothing is written into the repository.
+User-global preferences — the last target and the filters of each target — persist under `$COPILOT_HOME/extensions/actions-metrics/artifacts/` (`~/.copilot/...` when `COPILOT_HOME` is unset). Canvas tokens are not saved there. Nothing is written into the repository.
 
 ## Development
 

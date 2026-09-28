@@ -1,7 +1,6 @@
 // Run with `node --test .github/extensions/actions-metrics/test/`.
 //
-// Nothing here reaches GitHub: every request is refused by an active cooldown
-// before `gh` is spawned, which is exactly the behavior under test.
+// Requests here either use the local canvas server or stop before reaching GitHub.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,14 +17,17 @@ const {
     ghApi,
     ghCliEnv,
     ghRaw,
+    ghTokenSource,
     hostKey,
     isRateLimitError,
     parseRateReset,
     rateLimitCooldown,
+    setCanvasGhToken,
     setRateLimitCooldown,
 } = await import("../lib/gh.mjs");
 const { JobCache } = await import("../lib/jobcache.mjs");
 const { DashboardStore } = await import("../lib/store.mjs");
+const { startInstanceServer } = await import("../lib/server.mjs");
 
 test("gh subprocesses use stored credentials while keeping host configuration", () => {
     const overrides = {
@@ -34,13 +36,77 @@ test("gh subprocesses use stored credentials while keeping host configuration", 
         GH_ENTERPRISE_TOKEN: "app-token",
         GITHUB_ENTERPRISE_TOKEN: "app-token",
         GH_HOST: "ghe.example",
+        ACTIONS_METRICS_GH_TOKEN: "",
     };
     const env = ghCliEnv(overrides);
     for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) {
         assert.equal(Object.hasOwn(env, key), false);
     }
     assert.equal(env.GH_HOST, "ghe.example");
+    assert.equal(Object.hasOwn(env, "ACTIONS_METRICS_GH_TOKEN"), false);
     assert.equal(overrides.GH_TOKEN, "app-token");
+});
+
+test("gh subprocesses use the explicitly configured token", () => {
+    const previous = process.env.ACTIONS_METRICS_GH_TOKEN;
+    try {
+        process.env.ACTIONS_METRICS_GH_TOKEN = "dashboard-token";
+        const env = ghCliEnv({ GH_TOKEN: "app-token", GH_HOST: "github.com" });
+        assert.equal(env.GH_TOKEN, "dashboard-token");
+        assert.equal(env.GH_HOST, "github.com");
+        assert.equal(Object.hasOwn(env, "ACTIONS_METRICS_GH_TOKEN"), false);
+    } finally {
+        if (previous === undefined) {
+            delete process.env.ACTIONS_METRICS_GH_TOKEN;
+        } else {
+            process.env.ACTIONS_METRICS_GH_TOKEN = previous;
+        }
+    }
+});
+
+test("canvas token takes precedence and can be cleared without exposing it", () => {
+    const previous = process.env.ACTIONS_METRICS_GH_TOKEN;
+    try {
+        process.env.ACTIONS_METRICS_GH_TOKEN = "environment-token";
+        setCanvasGhToken("canvas-token");
+        assert.equal(ghCliEnv().GH_TOKEN, "canvas-token");
+        setCanvasGhToken(null);
+        assert.equal(ghCliEnv().GH_TOKEN, "environment-token");
+    } finally {
+        setCanvasGhToken(null);
+        if (previous === undefined) {
+            delete process.env.ACTIONS_METRICS_GH_TOKEN;
+        } else {
+            process.env.ACTIONS_METRICS_GH_TOKEN = previous;
+        }
+    }
+});
+
+test("canvas token API never returns or persists the token in dashboard state", async () => {
+    const { server, url } = await startInstanceServer({ state: () => ({ status: "idle" }) });
+    try {
+        const update = await fetch(new URL("api/auth", url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: "secret-token" }),
+        });
+        assert.equal(update.status, 200);
+        assert.deepEqual(await update.json(), { source: "canvas" });
+        assert.equal(ghCliEnv().GH_TOKEN, "secret-token");
+        const status = await fetch(new URL("api/auth", url));
+        assert.deepEqual(await status.json(), { source: "canvas" });
+        const state = await fetch(new URL("api/state", url));
+        assert.equal((await state.text()).includes("secret-token"), false);
+        const clear = await fetch(new URL("api/auth", url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: "" }),
+        });
+        assert.equal((await clear.json()).source, ghTokenSource());
+    } finally {
+        setCanvasGhToken(null);
+        await new Promise((resolve) => server.close(resolve));
+    }
 });
 
 describe("isRateLimitError", () => {

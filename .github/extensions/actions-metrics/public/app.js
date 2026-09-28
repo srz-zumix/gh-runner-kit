@@ -39,6 +39,9 @@ const dom = {
 
 let state = null;
 let activeTab = "overview";
+let authSource = null;
+let authError = null;
+let tokenDraft = "";
 
 /**
  * The query editor edits a draft rather than the live state. Only the fields
@@ -1584,6 +1587,41 @@ function collectionSettingsCard() {
     );
 }
 
+function authenticationSettingsCard() {
+    return settingsCard("settings-auth", "GitHub authentication", [
+        el("form", {
+            class: "controls",
+            onsubmit: (event) => {
+                event.preventDefault();
+                const token = tokenDraft;
+                tokenDraft = "";
+                const input = event.target.querySelector('input[type="password"]');
+                input.value = "";
+                input.removeAttribute("value");
+                void updateCanvasToken(token);
+            },
+        }, [
+            el("label", { class: "inline-field" }, [
+                el("span", { text: "GH_TOKEN" }),
+                el("input", {
+                    id: "setting-gh-token",
+                    type: "password",
+                    autocomplete: "off",
+                    spellcheck: "false",
+                    value: tokenDraft,
+                    oninput: (event) => {
+                        tokenDraft = event.target.value;
+                        event.target.form.querySelector('[type="submit"]').disabled = !tokenDraft;
+                    },
+                }),
+            ]),
+            el("button", { class: "button button--primary", type: "submit", disabled: !tokenDraft || state?.status === "loading", text: "Set token" }),
+            el("button", { class: "button", type: "button", disabled: authSource !== "canvas" || state?.status === "loading", onclick: () => { void updateCanvasToken(""); }, text: "Clear token" }),
+        ]),
+        el("p", { class: "notice", role: "status", text: authError || ({ canvas: "Canvas token active", environment: "Environment token active", stored: "Stored gh authentication active" }[authSource] ?? "") }),
+    ]);
+}
+
 function renderRunners(metrics) {
     const orgWide = metrics.meta.scope === "org";
     const runners = metrics.runners;
@@ -2756,7 +2794,7 @@ function renderContent() {
         // Checked ahead of the metrics gate: the explorer reads its own row
         // collection, so it has something to show even when no fleet metrics
         // have been collected for this target.
-        dom.content.replaceChildren(...renderExplorer(state).filter(Boolean));
+        dom.content.replaceChildren(...renderExplorer(state).filter(Boolean), authenticationSettingsCard());
         return;
     }
 
@@ -2764,6 +2802,7 @@ function renderContent() {
     if (!metrics) {
         dom.content.replaceChildren(
             el("p", { class: "empty", text: state?.status === "loading" ? "Collecting metrics…" : "No metrics yet. Press Refresh." }),
+            authenticationSettingsCard(),
         );
         return;
     }
@@ -2777,7 +2816,29 @@ function renderContent() {
                 : activeTab === "usage"
                   ? renderUsage(metrics)
                   : renderOverview(metrics);
-    dom.content.replaceChildren(...sections.filter(Boolean));
+    dom.content.replaceChildren(...sections.filter(Boolean), authenticationSettingsCard());
+}
+
+async function updateCanvasToken(token) {
+    tokenDraft = "";
+    try {
+        const response = await fetch("./api/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+        });
+        const body = await response.json();
+        if (!response.ok) {
+            throw new Error(body.error ?? "Authentication update failed");
+        }
+        authSource = body.source;
+        authError = null;
+        render();
+        await refreshCurrentQuery();
+    } catch (error) {
+        authError = error.message;
+        render();
+    }
 }
 
 /**
@@ -3058,3 +3119,11 @@ fetch("./api/state")
     })
     .catch(() => render())
     .finally(connect);
+
+fetch("./api/auth")
+    .then((response) => response.json())
+    .then(({ source }) => {
+        authSource = source;
+        render();
+    })
+    .catch(() => {});

@@ -206,12 +206,28 @@ export function throwIfRateLimited(host) {
     }
 }
 
+let canvasGhToken = null;
+
+export function setCanvasGhToken(token) {
+    canvasGhToken = token || null;
+    cooldowns.clear();
+}
+
+export function ghTokenSource() {
+    return canvasGhToken ? "canvas" : process.env.ACTIONS_METRICS_GH_TOKEN ? "environment" : "stored";
+}
+
 export function ghCliEnv(overrides) {
     const env = { ...process.env, ...overrides };
+    const token = canvasGhToken || env.ACTIONS_METRICS_GH_TOKEN;
+    delete env.ACTIONS_METRICS_GH_TOKEN;
     delete env.GH_TOKEN;
     delete env.GITHUB_TOKEN;
     delete env.GH_ENTERPRISE_TOKEN;
     delete env.GITHUB_ENTERPRISE_TOKEN;
+    if (token) {
+        env.GH_TOKEN = token;
+    }
     return env;
 }
 
