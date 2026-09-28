@@ -38,6 +38,15 @@ The open input accepts every query field listed below; `{}` analyses the
 workspace repository over the last 30 days. Opening the same `instanceId` again
 focuses and reloads the existing panel rather than making a second one.
 
+Sortable table headings accept multiple ordered conditions. Click for the
+primary sort (again to reverse it; a third click restores report order in
+dashboard tables). Shift+click adds a tie-breaker, then reverses or removes
+that condition on subsequent Shift+clicks. Arrows and numbers show direction
+and priority. For example, click **Success** twice, then Shift+click **Runs**
+to rank lowest success rate first and most runs first within equal rates.
+Missing values remain last. The runner list and Job explorer sort all matches
+before paging; their single-column sort toggles between two directions.
+
 ## Actions
 
 | Action | Purpose |

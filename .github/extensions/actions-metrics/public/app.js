@@ -8,6 +8,7 @@ import {
     sameFieldValue,
     writeFieldValue,
 } from "/shared/fields.mjs";
+import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 
 const dom = {
     targetToggle: document.getElementById("target-toggle"),
@@ -79,8 +80,7 @@ let traceAllArmed = false;
 // projection observes far more runners than the panel is ever given.
 const RUNNER_PAGE_SIZE = 40;
 let runnerFilterQuery = "";
-let runnerFilterSort = "jobMs";
-let runnerFilterDirection = "desc";
+let runnerFilterSorts = [{ key: "jobMs", direction: "desc" }];
 let runnerFilterOffset = 0;
 let runnerFilterPage = null;
 let runnerFilterProjection = null;
@@ -1154,30 +1154,9 @@ function sortKey(column, row) {
     return coerceSortKey(cellText(column.render(row)));
 }
 
-/** Rows without a value sort last whichever way the column points. */
-function compareKeys(left, right) {
-    if (left === null) {
-        return right === null ? 0 : 1;
-    }
-    if (right === null) {
-        return -1;
-    }
-    if (typeof left === "number" && typeof right === "number") {
-        return left - right;
-    }
-    return String(left).localeCompare(String(right));
-}
-
-function sortedRows(rows, column, direction) {
-    return rows
-        .map((row, index) => ({ row, index, key: sortKey(column, row) }))
-        .sort((left, right) => {
-            const missing = (left.key === null ? 1 : 0) - (right.key === null ? 1 : 0);
-            // A missing value stays at the bottom rather than following the
-            // direction, so toggling a column never buries the populated rows.
-            return missing || compareKeys(left.key, right.key) * direction || left.index - right.index;
-        })
-        .map((entry) => entry.row);
+function sortedRows(rows, columns, criteria) {
+    const accessors = Object.fromEntries(columns.map((column, index) => [String(index), (row) => sortKey(column, row)]));
+    return sortByCriteria(rows, criteria, accessors);
 }
 
 /**
@@ -1189,19 +1168,37 @@ function tableKey(columns) {
     return `${activeTab}:${columns.map((column) => column.label).join("|")}`;
 }
 
-function toggleSort(key, index, descendingFirst) {
-    const current = tableSort.get(key);
-    const first = descendingFirst ? -1 : 1;
-    if (!current || current.index !== index) {
-        // A measure or a date is most useful largest first, a name alphabetically.
-        tableSort.set(key, { index, direction: first });
-    } else if (current.direction === first) {
-        tableSort.set(key, { index, direction: -first });
+function setTableSort(key, index, descendingFirst, append) {
+    const first = descendingFirst ? "desc" : "asc";
+    const next = toggleSort(tableSort.get(key) ?? [], String(index), first, append, { clearOnThird: true });
+    if (next.length) {
+        tableSort.set(key, next);
     } else {
-        // Third click restores the order the report came in.
         tableSort.delete(key);
     }
     render();
+}
+
+function sortHeader(column, criterion, priority, onClick, title) {
+    const direction = criterion?.direction;
+    const label = direction ? `${column.label}, ${direction === "asc" ? "ascending" : "descending"}, priority ${priority}` : column.label;
+    return el("th", {
+        scope: "col",
+        class: [column.num ? "num" : "", "th--sortable", direction ? "th--sorted" : ""].filter(Boolean).join(" "),
+        "aria-sort": priority === 1 ? (direction === "asc" ? "ascending" : "descending") : null,
+    }, [
+        el("button", {
+            type: "button",
+            class: "th__button",
+            title: `${title}. Shift+click to add, reverse or remove a later sort.`,
+            "aria-label": `${label}. Click to sort by this column; Shift+click to add or change a later sort.`,
+            onclick: onClick,
+        }, [
+            el("span", { text: column.label }),
+            el("span", { class: "th__arrow", "aria-hidden": "true", text: direction === "asc" ? "▲" : direction === "desc" ? "▼" : "" }),
+            priority ? el("span", { class: "th__priority", "aria-hidden": "true", text: String(priority) }) : null,
+        ]),
+    ]);
 }
 
 /**
@@ -1215,9 +1212,8 @@ function table(columns, rows, remote = null) {
         return el("p", { class: "empty", text: "No data in this window." });
     }
     const key = tableKey(columns);
-    const sort = remote ? null : tableSort.get(key);
-    const active = sort ? columns[sort.index] : null;
-    const ordered = active ? sortedRows(rows, active, sort.direction) : rows;
+    const sorts = remote ? remote.sorts : tableSort.get(key) ?? [];
+    const ordered = remote || sorts.length === 0 ? rows : sortedRows(rows, columns, sorts);
 
     return el("table", {}, [
         el("thead", {}, [
@@ -1228,39 +1224,21 @@ function table(columns, rows, remote = null) {
                     // The bar columns have no heading and repeat the value of
                     // the column before them, so they are not sortable.
                     if (!column.label) {
-                        return el("th", { class: column.num ? "num" : "" });
+                        return el("th", { scope: "col", class: column.num ? "num" : "" });
                     }
                     if (remote) {
                         if (!column.sortKey) {
-                            return el("th", { class: column.num ? "num" : "" }, [el("span", { text: column.label })]);
+                            return el("th", { scope: "col", class: column.num ? "num" : "" }, [el("span", { text: column.label })]);
                         }
-                        const current = remote.key === column.sortKey ? (remote.direction === "asc" ? 1 : -1) : 0;
-                        return el(
-                            "th",
-                            {
-                                class: [column.num ? "num" : "", "th--sortable", current ? "th--sorted" : ""].filter(Boolean).join(" "),
-                                title: `Sort every match by ${column.label}`,
-                                onclick: () => remote.onSort(column.sortKey, Boolean(column.num)),
-                            },
-                            [
-                                el("span", { text: column.label }),
-                                el("span", { class: "th__arrow", text: current === 0 ? "" : current > 0 ? "▲" : "▼" }),
-                            ],
-                        );
+                        const position = sorts.findIndex((entry) => entry.key === column.sortKey);
+                        return sortHeader(column, sorts[position], position + 1,
+                            (event) => remote.onSort(column.sortKey, Boolean(column.num), event.shiftKey),
+                            `Sort every match by ${column.label}`);
                     }
-                    const current = sort?.index === index ? sort.direction : 0;
-                    return el(
-                        "th",
-                        {
-                            class: [column.num ? "num" : "", "th--sortable", current ? "th--sorted" : ""].filter(Boolean).join(" "),
-                            title: `Sort by ${column.label}`,
-                            onclick: () => toggleSort(key, index, Boolean(column.num || column.sort)),
-                        },
-                        [
-                            el("span", { text: column.label }),
-                            el("span", { class: "th__arrow", text: current === 0 ? "" : current > 0 ? "▲" : "▼" }),
-                        ],
-                    );
+                    const position = sorts.findIndex((entry) => entry.key === String(index));
+                    return sortHeader(column, sorts[position], position + 1,
+                        (event) => setTableSort(key, index, Boolean(column.num || column.sort), event.shiftKey),
+                        `Sort by ${column.label}`);
                 }),
             ),
         ]),
@@ -1333,7 +1311,8 @@ function selfHostedRepositoryCard(fleet, orgWide, owner) {
                     { label: "Runs", num: true, render: (row) => number(row.runs) },
                     { label: "Jobs", num: true, render: (row) => number(row.jobs) },
                     { label: "", render: (row) => bar(row.jobs, Math.max(1, ...active.map((item) => item.jobs))) },
-                    { label: "Success", num: true, render: (row) => (row.decided === 0 ? "—" : healthPill(1 - row.failureRate)) },
+                    { label: "Success", num: true, sort: (row) => row.decided === 0 ? null : 1 - row.failureRate,
+                        render: (row) => (row.decided === 0 ? "—" : healthPill(1 - row.failureRate)) },
                     { label: "Failed", num: true, render: (row) => `${number(row.failed)} / ${number(row.decided)}` },
                     { label: "Retried", num: true, render: (row) => percent(row.retryRate) },
                     { label: "Busy", num: true, render: (row) => duration(row.busyTimeMs) },
@@ -1445,6 +1424,7 @@ function renderOverview(metrics) {
                               {
                                   label: "Success",
                                   num: true,
+                                  sort: (row) => row.decided === 0 || row.failureRate === null ? null : 1 - row.failureRate,
                                   // `decided` counts the jobs that reached a
                                   // verdict. At zero the rate is arithmetically
                                   // 0, which would render as a perfect 100%
@@ -1490,7 +1470,7 @@ function renderOverview(metrics) {
                               { label: "Workflow", render: (row) => row.name, wrap: true },
                               { label: "Runs", num: true, render: (row) => number(row.runs) },
                               { label: "", render: (row) => bar(row.runs, maxWorkflowRuns) },
-                              { label: "Success", num: true, render: (row) => healthPill(row.successRate) },
+                              { label: "Success", num: true, sort: (row) => row.successRate, render: (row) => healthPill(row.successRate) },
                               { label: "Failures", num: true, render: (row) => number(row.failures) },
                               // Measured from the jobs of each run, which an
                               // organization target does not collect.
@@ -1554,7 +1534,7 @@ function renderOverview(metrics) {
                     [
                         { label: "Event", render: (row) => row.event },
                         { label: "Runs", num: true, render: (row) => number(row.runs) },
-                        { label: "Success", num: true, render: (row) => healthPill(row.successRate) },
+                        { label: "Success", num: true, sort: (row) => row.successRate, render: (row) => healthPill(row.successRate) },
                     ],
                     overview.byEvent,
                 ),
@@ -1983,7 +1963,6 @@ function runnerFilterResults(traced) {
         return [el("p", { class: "empty", text: `No runner name contains ${page.query}.` })];
     }
 
-    const showsJobTime = page.rows.some((row) => Math.round(row.jobMs) !== Math.round(row.busyMs));
     const columns = [
         {
             label: "Runner",
@@ -2000,9 +1979,7 @@ function runnerFilterResults(traced) {
         },
         { label: "Jobs", num: true, sortKey: "jobs", render: (row) => number(row.jobs) },
         { label: "Busy time", num: true, sortKey: "busyMs", render: (row) => duration(row.busyMs) },
-        // Only worth a column when a runner ran jobs that overlapped, which is
-        // the case the merged busy time hides.
-        ...(showsJobTime ? [{ label: "Job time", num: true, sortKey: "jobMs", render: (row) => duration(row.jobMs) }] : []),
+        { label: "Job time", num: true, sortKey: "jobMs", render: (row) => duration(row.jobMs) },
         {
             label: "Share",
             num: true,
@@ -2014,15 +1991,9 @@ function runnerFilterResults(traced) {
 
     return [
         table(columns, page.rows, {
-            key: page.sort,
-            direction: page.direction,
-            onSort: (sortKey, descendingFirst) => {
-                if (runnerFilterSort === sortKey) {
-                    runnerFilterDirection = runnerFilterDirection === "asc" ? "desc" : "asc";
-                } else {
-                    runnerFilterSort = sortKey;
-                    runnerFilterDirection = descendingFirst ? "desc" : "asc";
-                }
+            sorts: page.sorts,
+            onSort: (sortKey, descendingFirst, append) => {
+                runnerFilterSorts = toggleSort(runnerFilterSorts, sortKey, descendingFirst ? "desc" : "asc", append);
                 runnerFilterOffset = 0;
                 requestRunnerPage({ immediate: true });
             },
@@ -2101,8 +2072,7 @@ function requestRunnerPage({ immediate = false } = {}) {
         const params = new URLSearchParams({
             projection,
             q: runnerFilterQuery.trim(),
-            sort: runnerFilterSort,
-            direction: runnerFilterDirection,
+            sorts: JSON.stringify(runnerFilterSorts),
             limit: String(RUNNER_PAGE_SIZE),
             offset: String(runnerFilterOffset),
         });

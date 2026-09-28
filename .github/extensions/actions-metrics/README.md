@@ -36,6 +36,12 @@ Ask Copilot to open the dashboard, or open the **Actions metrics** canvas from t
 | **Job explorer** | Raw job rows projected in the browser, with faceted filters that apply instantly. |
 | **Usage & cost** | Billable time GitHub-hosted runners consumed, split by runner class, and the estimated cost per workflow. |
 
+## Table sorting
+
+Click a sortable column heading to sort by it; click it again to reverse the direction. In dashboard tables, a third click restores the report's original order. Shift+click another heading to add it as the next tie-breaker, then Shift+click it again to reverse or remove that condition. The arrow and number on each heading show its direction and priority. For example, click **Success** twice for lowest success rate first, then Shift+click **Runs** for the most runs among equally successful workflows. A normal click on another heading starts a new primary sort.
+
+Missing values stay last in either direction. The runner list and Job explorer sort every matching row before paging, not just the current page; their single-column sort cycles between ascending and descending rather than restoring source order.
+
 ## Scope
 
 Point the panel at a repository or at an organization. The two are not equivalent:

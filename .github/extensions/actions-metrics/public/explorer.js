@@ -22,6 +22,7 @@ import {
 } from "./charts.js";
 import { emptyExploreFilters, hasActiveExploreFilters } from "/shared/explore.mjs";
 import { FIELD_SEPARATOR, UNIDENTIFIED } from "/shared/rows.mjs";
+import { toggleSort } from "/shared/sort.mjs";
 
 /** Facets the reader can narrow on, in the order they are offered. */
 const FACETS = [
@@ -88,8 +89,7 @@ const view = {
     filters: emptyExploreFilters(),
     openFacets: new Set(),
     facetQuery: new Map(),
-    sort: "queued",
-    direction: "desc",
+    sorts: [{ key: "queued", direction: "desc" }],
     offset: 0,
     page: null,
     heatRows: 25,
@@ -329,8 +329,7 @@ async function refreshPage() {
     try {
         const result = await ask("page", {
             filters: view.filters,
-            sort: view.sort,
-            direction: view.direction,
+            sorts: view.sorts,
             offset: view.offset,
             limit: PAGE_SIZE,
         });
@@ -953,25 +952,27 @@ function tableCard() {
     const head = el(
         "tr",
         {},
-        TABLE_COLUMNS.map((column) =>
-            el("th", { scope: "col" }, [
+        TABLE_COLUMNS.map((column) => {
+            const priority = view.sorts.findIndex((entry) => entry.key === column.sort) + 1;
+            const direction = view.sorts[priority - 1]?.direction;
+            return el("th", { scope: "col", "aria-sort": priority === 1 ? (direction === "asc" ? "ascending" : "descending") : null }, [
                 el("button", {
-                    class: `sort${view.sort === column.sort ? ` sort--${view.direction}` : ""}`,
+                    class: "sort",
                     type: "button",
-                    text: column.label,
-                    onClick: () => {
-                        if (view.sort === column.sort) {
-                            view.direction = view.direction === "asc" ? "desc" : "asc";
-                        } else {
-                            view.sort = column.sort;
-                            view.direction = column.first;
-                        }
+                    title: `Sort every match by ${column.label}. Shift+click to add, reverse or remove a later sort.`,
+                    "aria-label": `${column.label}${direction ? `, ${direction === "asc" ? "ascending" : "descending"}, priority ${priority}` : ""}. Click to sort; Shift+click to add or change a later sort.`,
+                    onClick: (event) => {
+                        view.sorts = toggleSort(view.sorts, column.sort, column.first, event.shiftKey);
                         view.offset = 0;
                         void refreshPage();
                     },
-                }),
-            ]),
-        ),
+                }, [
+                    column.label,
+                    direction ? el("span", { class: "sort__arrow", "aria-hidden": "true", text: direction === "asc" ? "▲" : "▼" }) : null,
+                    priority ? el("span", { class: "sort-priority", "aria-hidden": "true", text: String(priority) }) : null,
+                ]),
+            ]);
+        }),
     );
 
     const body = page.rows.map((row) => {

@@ -125,9 +125,9 @@ self.onmessage = (event) => {
                 return;
             }
             const subset = select(payload.filters);
-            const key = `${payload.sort}|${payload.direction}`;
+            const key = JSON.stringify(payload.sorts);
             if (key !== sortKey) {
-                sorted = sortRows(subset, payload.sort, payload.direction);
+                sorted = sortRows(subset, payload.sorts);
                 sortKey = key;
             }
             const offset = Math.max(0, Number(payload.offset) || 0);

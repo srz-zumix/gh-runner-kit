@@ -181,6 +181,7 @@ async function handle(req, res, url, instance) {
                 instance.runnerPage({
                     projection: url.searchParams.get("projection") ?? "",
                     query: url.searchParams.get("q") ?? "",
+                    sorts: url.searchParams.has("sorts") ? JSON.parse(url.searchParams.get("sorts")) : undefined,
                     sort: url.searchParams.get("sort") ?? "jobMs",
                     direction: url.searchParams.get("direction") ?? "desc",
                     limit: url.searchParams.get("limit") ?? 40,

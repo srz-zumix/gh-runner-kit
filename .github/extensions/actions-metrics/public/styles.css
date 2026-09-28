@@ -579,6 +579,19 @@ th {
     color: var(--text-color-default, inherit);
 }
 
+.th__button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.th__button:hover {
+    color: var(--text-color-default, inherit);
+}
+
 /* Reserved so the heading does not shift when the arrow appears. */
 .th__arrow {
     display: inline-block;
@@ -588,6 +601,13 @@ th {
 
 th.num .th__arrow {
     text-align: left;
+}
+
+.th__priority,
+.sort-priority {
+    margin-left: 2px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
 }
 
 tbody tr:last-child td {
@@ -1350,13 +1370,8 @@ button.heat__name--pick:hover {
     color: var(--accent);
 }
 
-.sort--asc::after {
-    content: " ▲";
-    font-size: 9px;
-}
-
-.sort--desc::after {
-    content: " ▼";
+.sort__arrow {
+    margin-left: 3px;
     font-size: 9px;
 }
 
