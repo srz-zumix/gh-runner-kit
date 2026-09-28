@@ -5,6 +5,12 @@ export function toggleSort(criteria, key, first, append, { clearOnThird = false 
         return append ? [...criteria, next] : [next];
     }
     const current = criteria[index];
+    // A plain click on a heading that is not the current primary starts a new
+    // primary sort at the column's first direction, rather than continuing the
+    // primary's click cycle (which would otherwise reset to no sort at all).
+    if (!append && index > 0) {
+        return [{ key, direction: first }];
+    }
     const next = current.direction === first ? (first === "asc" ? "desc" : "asc") : null;
     const kept = append ? criteria.slice() : [current];
     const position = append ? index : 0;

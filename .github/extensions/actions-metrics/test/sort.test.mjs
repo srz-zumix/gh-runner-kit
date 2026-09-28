@@ -18,7 +18,10 @@ test("plain click replaces priorities; Shift+click appends, toggles and removes 
     assert.deepEqual(sorts, []);
     sorts = toggleSort([{ key: "success", direction: "asc" }, { key: "runs", direction: "desc" }],
         "runs", "desc", false, { clearOnThird: true });
-    assert.deepEqual(sorts, [{ key: "runs", direction: "asc" }]);
+    assert.deepEqual(sorts, [{ key: "runs", direction: "desc" }]);
+    sorts = toggleSort([{ key: "success", direction: "desc" }, { key: "runs", direction: "asc" }],
+        "runs", "desc", false, { clearOnThird: true });
+    assert.deepEqual(sorts, [{ key: "runs", direction: "desc" }]);
 });
 
 test("criteria sort by raw success then run count, missing last, with stable ties", () => {
