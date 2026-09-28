@@ -16,6 +16,7 @@ const {
     RateLimitError,
     clearRateLimitCooldown,
     ghApi,
+    ghCliEnv,
     ghRaw,
     hostKey,
     isRateLimitError,
@@ -25,6 +26,22 @@ const {
 } = await import("../lib/gh.mjs");
 const { JobCache } = await import("../lib/jobcache.mjs");
 const { DashboardStore } = await import("../lib/store.mjs");
+
+test("gh subprocesses use stored credentials while keeping host configuration", () => {
+    const overrides = {
+        GH_TOKEN: "app-token",
+        GITHUB_TOKEN: "app-token",
+        GH_ENTERPRISE_TOKEN: "app-token",
+        GITHUB_ENTERPRISE_TOKEN: "app-token",
+        GH_HOST: "ghe.example",
+    };
+    const env = ghCliEnv(overrides);
+    for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) {
+        assert.equal(Object.hasOwn(env, key), false);
+    }
+    assert.equal(env.GH_HOST, "ghe.example");
+    assert.equal(overrides.GH_TOKEN, "app-token");
+});
 
 describe("isRateLimitError", () => {
     const cases = [

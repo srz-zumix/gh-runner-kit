@@ -12,7 +12,7 @@
 // leave this module.
 
 import { spawn } from "node:child_process";
-import { assertRateBudget, isRateLimitError, noteRateLimit } from "./gh.mjs";
+import { assertRateBudget, ghCliEnv, isRateLimitError, noteRateLimit } from "./gh.mjs";
 import { jobRowsCommand, probeRunnerKit, runnerPattern, runnerPatternMatcher } from "./runnerkit.mjs";
 // One definition of the interval arithmetic, shared with the browser-side
 // explorer so the two tabs cannot report different concurrency for one window.
@@ -184,7 +184,7 @@ function streamLines(args, env, cwd, onLine, signal) {
         }
         const child = spawn("gh", args, {
             cwd,
-            env: env ? { ...process.env, ...env } : process.env,
+            env: ghCliEnv(env),
             stdio: ["ignore", "pipe", "pipe"],
         });
         let stderr = "";

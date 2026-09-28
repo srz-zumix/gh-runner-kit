@@ -18,6 +18,7 @@ import {
     peakPerBucket,
 } from "./intervals.mjs";
 import { UNIDENTIFIED } from "./rows.mjs";
+import { sortByCriteria } from "./sort.mjs";
 
 /**
  * The filters answered in the browser. These narrow the rows already in hand
@@ -815,27 +816,18 @@ function rowMatchesFacet(row, key, selected) {
 
 /** Sort comparators the job table offers, by column key. */
 export const TABLE_SORTS = {
-    queued: (row) => row.queuedAt ?? 0,
+    queued: (row) => row.queuedAt,
     repo: (row) => row.repo.toLowerCase(),
     workflow: (row) => row.workflow.toLowerCase(),
     job: (row) => row.jobName.toLowerCase(),
-    conclusion: (row) => row.conclusion ?? "",
-    wait: (row) => row.waitMs ?? -1,
-    duration: (row) => row.durationMs ?? -1,
+    conclusion: (row) => row.conclusion,
+    wait: (row) => row.waitMs,
+    duration: (row) => row.durationMs,
     runner: (row) => row.runnerKey.toLowerCase(),
 };
 
-export function sortRows(rows, key, direction) {
-    const read = TABLE_SORTS[key] ?? TABLE_SORTS.queued;
-    const sign = direction === "asc" ? 1 : -1;
-    return rows.slice().sort((left, right) => {
-        const a = read(left);
-        const b = read(right);
-        if (a === b) {
-            return left.i - right.i;
-        }
-        return a < b ? -sign : sign;
-    });
+export function sortRows(rows, criteria) {
+    return sortByCriteria(rows, criteria, TABLE_SORTS, (left, right) => left.i - right.i);
 }
 
 /**

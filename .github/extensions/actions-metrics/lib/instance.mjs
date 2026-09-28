@@ -25,6 +25,7 @@ import {
 } from "./query.mjs";
 import { exportFleet, hasExcludeRunner, hasJobRows } from "./runnerkit.mjs";
 import { collectRunnerTimeline, compileExclusions } from "./jobs.mjs";
+import { sortByCriteria, validateSorts } from "../shared/sort.mjs";
 
 /** Hard ceiling on one page of runners, so a crafted query cannot ask for all of them at once. */
 const MAX_PAGE = 200;
@@ -467,7 +468,7 @@ export class DashboardInstance {
      * filled from a projection the reader never asked about is worse than an
      * empty one.
      */
-    runnerPage({ projection = "", query = "", sort = "jobMs", direction = "desc", limit = 40, offset = 0 } = {}) {
+    runnerPage({ projection = "", query = "", sorts, sort = "jobMs", direction = "desc", limit = 40, offset = 0 } = {}) {
         if (!this.projectionId) {
             throw Object.assign(new Error("No runner projection is loaded"), { status: 409 });
         }
@@ -477,10 +478,17 @@ export class DashboardInstance {
         if (projection !== this.projectionId) {
             throw Object.assign(new Error("That runner projection has been replaced"), { status: 409 });
         }
-        const columns = { runner: "runner", jobs: "jobs", jobMs: "jobMs", busyMs: "busyMs" };
-        const column = columns[sort];
-        if (!column) {
-            throw Object.assign(new Error(`Runners cannot be sorted by ${sort}`), { status: 400 });
+        const columns = {
+            runner: (row) => row.runner.toLowerCase(),
+            jobs: (row) => row.jobs,
+            jobMs: (row) => row.jobMs,
+            busyMs: (row) => row.busyMs,
+        };
+        const criteria = sorts ?? [{ key: sort, direction }];
+        try {
+            validateSorts(criteria, columns);
+        } catch (error) {
+            throw Object.assign(error, { status: 400 });
         }
         const size = Math.min(MAX_PAGE, Math.max(1, Number(limit) || MAX_PAGE));
         const from = Math.max(0, Number(offset) || 0);
@@ -489,13 +497,7 @@ export class DashboardInstance {
         const needle = String(query ?? "").trim().toLowerCase();
         const matches = needle === "" ? this.timelineAll : this.timelineAll.filter((row) => row.runner.toLowerCase().includes(needle));
 
-        const sign = direction === "asc" ? 1 : -1;
-        const sorted = [...matches].sort((left, right) => {
-            if (column === "runner") {
-                return sign * left.runner.localeCompare(right.runner);
-            }
-            return sign * (left[column] - right[column]) || left.runner.localeCompare(right.runner);
-        });
+        const sorted = sortByCriteria(matches, criteria, columns, (left, right) => left.runner.localeCompare(right.runner));
 
         return {
             projectionId: this.projectionId,
@@ -503,8 +505,7 @@ export class DashboardInstance {
             matched: sorted.length,
             offset: from,
             limit: size,
-            sort,
-            direction: sign === 1 ? "asc" : "desc",
+            sorts: criteria,
             query: String(query ?? "").trim(),
             rows: sorted.slice(from, from + size).map((row) => ({
                 runner: row.runner,
