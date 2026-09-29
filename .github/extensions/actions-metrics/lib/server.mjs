@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ghTokenSource, setCanvasGhToken } from "./gh.mjs";
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_DIR = join(ROOT_DIR, "public");
@@ -111,6 +112,32 @@ export async function startInstanceServer(instance) {
 }
 
 async function handle(req, res, url, instance) {
+    if (url.pathname === "/api/auth") {
+        if (req.method === "GET") {
+            sendJson(res, 200, { source: ghTokenSource() });
+            return;
+        }
+        if (req.method === "POST") {
+            if (!req.headers["content-type"]?.startsWith("application/json")) {
+                sendJson(res, 415, { error: "JSON required" });
+                return;
+            }
+            const body = await readBody(req);
+            if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.token !== "string" || body.token.length > 4096) {
+                sendJson(res, 400, { error: "Invalid token" });
+                return;
+            }
+            setCanvasGhToken(body.token.trim());
+            // The cached job lists and row snapshots were read under the old
+            // token; discard them so a following refresh collects afresh under
+            // the new credential instead of serving data it may no longer read.
+            instance.store?.invalidateAuthCaches?.();
+            sendJson(res, 200, { source: ghTokenSource() });
+            return;
+        }
+        sendJson(res, 405, { error: "Method not allowed" });
+        return;
+    }
     if (req.method === "GET" && url.pathname === "/api/events") {
         startSse(req, res, instance);
         return;

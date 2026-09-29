@@ -408,7 +408,8 @@ button:focus-visible {
     font: inherit;
 }
 
-.inline-field input[type="search"] {
+.inline-field input[type="search"],
+.inline-field input[type="password"] {
     width: 160px;
     padding: 2px 6px;
     border: 1px solid var(--border);

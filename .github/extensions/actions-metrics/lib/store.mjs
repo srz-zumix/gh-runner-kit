@@ -10,6 +10,7 @@
 // CLI than the fleet metrics do.
 
 import { collectSnapshot } from "./collect.mjs";
+import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
@@ -35,6 +36,39 @@ export class DashboardStore {
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
         this.rows = new RowStore({ cwd, log: this.log });
+    }
+
+    /**
+     * Drop every cache a credential change makes untrustworthy. The cached job
+     * lists and row snapshots were read under the previous token; keeping them
+     * would let a narrower token go on displaying data it can no longer read
+     * and answer a broader token from data collected before it was configured.
+     * A following refresh then collects afresh under the new credential.
+     */
+    invalidateAuthCaches() {
+        jobCache.invalidateAll();
+        this.rows.invalidateAll();
+        // The metrics snapshots and any in-flight collection in `this.entries`
+        // were produced under the previous token. Supersede them the same way
+        // `RowStore.invalidateAll` does: bump the generation so a collection
+        // still running - or one a following refresh would otherwise join -
+        // cannot commit or join old-credential data, abort it so it stops
+        // spending budget, drop the stale snapshot, and notify every panel so
+        // none goes on displaying data the new token may not read.
+        for (const [key, entry] of this.entries) {
+            entry.generation = (entry.generation ?? 0) + 1;
+            entry.abort?.abort();
+            entry.abort = null;
+            entry.inflight = null;
+            entry.metrics = null;
+            entry.status = "idle";
+            entry.progress = "";
+            entry.error = null;
+            entry.errorCode = null;
+            entry.retryAt = null;
+            entry.updatedAt = null;
+            this.emit(key);
+        }
     }
 
     entry(query) {

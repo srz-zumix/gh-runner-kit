@@ -28,6 +28,15 @@ Do not run the CLI to answer a question about a dashboard that is already open.
 Call `get_metrics` instead: it returns what the user is looking at, so the
 answer cannot disagree with the screen.
 
+The extension's `gh` subprocesses use stored `gh auth login` credentials by
+default, not Copilot's inherited `GH_TOKEN`. The canvas **GitHub authentication**
+setting accepts a token for the extension's `gh` subprocesses only. It stays in
+process memory, is shared by open dashboards, and is cleared on extension restart;
+the panel never reads it back or persists it. **Clear token** restores the
+stored credentials, or `ACTIONS_METRICS_GH_TOKEN` if set in the Copilot process
+environment before launch. These overrides apply to github.com and ghe.com;
+GitHub Enterprise Server hosts use stored `gh` credentials.
+
 ## Opening
 
 ```text

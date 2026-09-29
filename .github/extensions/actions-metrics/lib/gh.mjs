@@ -83,6 +83,9 @@ export function hostKey(host) {
 // target, every panel and every superseded collection that shares it.
 const cooldowns = new Map();
 const cooldownProbes = new Map();
+// Bumped whenever the active token changes so an in-flight probe started under
+// the previous token can recognise that its result is stale.
+let authGeneration = 0;
 
 /** The active cooldown of a host, or null once it has expired. */
 export function rateLimitCooldown(host, now = Date.now()) {
@@ -164,17 +167,29 @@ export async function noteRateLimit(host, error, { cwd } = {}) {
     let probe = cooldownProbes.get(key);
     if (!probe) {
         probe = (async () => {
+            const generation = authGeneration;
             const now = Date.now();
             const budget = await fetchRateLimit({ host, cwd });
+            // Install the cooldown only when the token is unchanged; a probe
+            // started under a superseded token must not block requests made
+            // with the newly configured one.
+            const commit = (until, reason) =>
+                generation === authGeneration
+                    ? setRateLimitCooldown(key, until, reason)
+                    : { host: key, until, reason };
             if (budget && budget.remaining === 0 && budget.resetAt > now) {
-                return setRateLimitCooldown(key, budget.resetAt, "primary");
+                return commit(budget.resetAt, "primary");
             }
             const parsed = parseRateReset(`${error?.message ?? ""}\n${error?.stderr ?? ""}`);
             if (parsed !== null && !(budget && budget.remaining > 0)) {
-                return setRateLimitCooldown(key, now + Math.max(parsed, 1000), "primary");
+                return commit(now + Math.max(parsed, 1000), "primary");
             }
-            return setRateLimitCooldown(key, now + SECONDARY_COOLDOWN_MS, "secondary");
-        })().finally(() => cooldownProbes.delete(key));
+            return commit(now + SECONDARY_COOLDOWN_MS, "secondary");
+        })().finally(() => {
+            if (cooldownProbes.get(key) === probe) {
+                cooldownProbes.delete(key);
+            }
+        });
         cooldownProbes.set(key, probe);
     }
     return cooldownError(await probe, error);
@@ -187,13 +202,21 @@ export async function noteRateLimit(host, error, { cwd } = {}) {
  * instead of after the first expensive request.
  */
 export async function assertRateBudget(host, { cwd } = {}) {
+    const generation = authGeneration;
     const active = rateLimitCooldown(host);
     if (active) {
         throw cooldownError(active);
     }
     const budget = await fetchRateLimit({ host, cwd });
     if (budget && budget.remaining === 0 && budget.resetAt > Date.now()) {
-        throw cooldownError(setRateLimitCooldown(host, budget.resetAt, "primary"));
+        // Install the cooldown only when the token is unchanged; a preflight
+        // started under a superseded token measured the old token's budget and
+        // must not block requests made with the newly configured one.
+        const entry =
+            generation === authGeneration
+                ? setRateLimitCooldown(host, budget.resetAt, "primary")
+                : { host: hostKey(host), until: budget.resetAt, reason: "primary" };
+        throw cooldownError(entry);
     }
     return budget;
 }
@@ -206,12 +229,30 @@ export function throwIfRateLimited(host) {
     }
 }
 
+let canvasGhToken = null;
+
+export function setCanvasGhToken(token) {
+    canvasGhToken = token || null;
+    authGeneration++;
+    cooldowns.clear();
+    cooldownProbes.clear();
+}
+
+export function ghTokenSource() {
+    return canvasGhToken ? "canvas" : process.env.ACTIONS_METRICS_GH_TOKEN ? "environment" : "stored";
+}
+
 export function ghCliEnv(overrides) {
     const env = { ...process.env, ...overrides };
+    const token = canvasGhToken || env.ACTIONS_METRICS_GH_TOKEN;
+    delete env.ACTIONS_METRICS_GH_TOKEN;
     delete env.GH_TOKEN;
     delete env.GITHUB_TOKEN;
     delete env.GH_ENTERPRISE_TOKEN;
     delete env.GITHUB_ENTERPRISE_TOKEN;
+    if (token) {
+        env.GH_TOKEN = token;
+    }
     return env;
 }
 

@@ -1,7 +1,6 @@
 // Run with `node --test .github/extensions/actions-metrics/test/`.
 //
-// Nothing here reaches GitHub: every request is refused by an active cooldown
-// before `gh` is spawned, which is exactly the behavior under test.
+// Requests here either use the local canvas server or stop before reaching GitHub.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,14 +17,17 @@ const {
     ghApi,
     ghCliEnv,
     ghRaw,
+    ghTokenSource,
     hostKey,
     isRateLimitError,
     parseRateReset,
     rateLimitCooldown,
+    setCanvasGhToken,
     setRateLimitCooldown,
 } = await import("../lib/gh.mjs");
 const { JobCache } = await import("../lib/jobcache.mjs");
 const { DashboardStore } = await import("../lib/store.mjs");
+const { startInstanceServer } = await import("../lib/server.mjs");
 
 test("gh subprocesses use stored credentials while keeping host configuration", () => {
     const overrides = {
@@ -34,13 +36,77 @@ test("gh subprocesses use stored credentials while keeping host configuration", 
         GH_ENTERPRISE_TOKEN: "app-token",
         GITHUB_ENTERPRISE_TOKEN: "app-token",
         GH_HOST: "ghe.example",
+        ACTIONS_METRICS_GH_TOKEN: "",
     };
     const env = ghCliEnv(overrides);
     for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) {
         assert.equal(Object.hasOwn(env, key), false);
     }
     assert.equal(env.GH_HOST, "ghe.example");
+    assert.equal(Object.hasOwn(env, "ACTIONS_METRICS_GH_TOKEN"), false);
     assert.equal(overrides.GH_TOKEN, "app-token");
+});
+
+test("gh subprocesses use the explicitly configured token", () => {
+    const previous = process.env.ACTIONS_METRICS_GH_TOKEN;
+    try {
+        process.env.ACTIONS_METRICS_GH_TOKEN = "dashboard-token";
+        const env = ghCliEnv({ GH_TOKEN: "app-token", GH_HOST: "github.com" });
+        assert.equal(env.GH_TOKEN, "dashboard-token");
+        assert.equal(env.GH_HOST, "github.com");
+        assert.equal(Object.hasOwn(env, "ACTIONS_METRICS_GH_TOKEN"), false);
+    } finally {
+        if (previous === undefined) {
+            delete process.env.ACTIONS_METRICS_GH_TOKEN;
+        } else {
+            process.env.ACTIONS_METRICS_GH_TOKEN = previous;
+        }
+    }
+});
+
+test("canvas token takes precedence and can be cleared without exposing it", () => {
+    const previous = process.env.ACTIONS_METRICS_GH_TOKEN;
+    try {
+        process.env.ACTIONS_METRICS_GH_TOKEN = "environment-token";
+        setCanvasGhToken("canvas-token");
+        assert.equal(ghCliEnv().GH_TOKEN, "canvas-token");
+        setCanvasGhToken(null);
+        assert.equal(ghCliEnv().GH_TOKEN, "environment-token");
+    } finally {
+        setCanvasGhToken(null);
+        if (previous === undefined) {
+            delete process.env.ACTIONS_METRICS_GH_TOKEN;
+        } else {
+            process.env.ACTIONS_METRICS_GH_TOKEN = previous;
+        }
+    }
+});
+
+test("canvas token API never returns or persists the token in dashboard state", async () => {
+    const { server, url } = await startInstanceServer({ state: () => ({ status: "idle" }) });
+    try {
+        const update = await fetch(new URL("api/auth", url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: "secret-token" }),
+        });
+        assert.equal(update.status, 200);
+        assert.deepEqual(await update.json(), { source: "canvas" });
+        assert.equal(ghCliEnv().GH_TOKEN, "secret-token");
+        const status = await fetch(new URL("api/auth", url));
+        assert.deepEqual(await status.json(), { source: "canvas" });
+        const state = await fetch(new URL("api/state", url));
+        assert.equal((await state.text()).includes("secret-token"), false);
+        const clear = await fetch(new URL("api/auth", url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: "" }),
+        });
+        assert.equal((await clear.json()).source, ghTokenSource());
+    } finally {
+        setCanvasGhToken(null);
+        await new Promise((resolve) => server.close(resolve));
+    }
 });
 
 describe("isRateLimitError", () => {
@@ -144,6 +210,23 @@ describe("JobCache", () => {
         assert.ok(cache.set(repo, run(2), [{ id: 20 }], cache.epoch(repo)));
     });
 
+    test("invalidateAll drops every target and rejects writes of collections already running", () => {
+        const cache = new JobCache();
+        const other = { host: null, nwo: "octo/beta" };
+        const epoch = cache.epoch(repo);
+        const otherEpoch = cache.epoch(other);
+        cache.set(repo, run(1), [{ id: 10 }], epoch);
+        cache.set(other, run(1), [{ id: 20 }], otherEpoch);
+        cache.invalidateAll();
+        assert.equal(cache.get(repo, run(1)), null);
+        assert.equal(cache.get(other, run(1)), null);
+        // A collection that captured the previous generation cannot write back,
+        // even for a target the invalidation never saw explicitly.
+        assert.equal(cache.set(repo, run(2), [{ id: 30 }], epoch), false);
+        assert.equal(cache.set(other, run(2), [{ id: 40 }], otherEpoch), false);
+        assert.ok(cache.set(repo, run(2), [{ id: 30 }], cache.epoch(repo)));
+    });
+
     test("evicts the least recently used runs past its capacity", () => {
         const cache = new JobCache({ capacity: 3 });
         const epoch = cache.epoch(repo);
@@ -188,6 +271,29 @@ describe("DashboardStore under a rate limit", () => {
         const hard = store.refresh(query, { force: true, bypassCache: true });
         assert.equal(store.entry(query).generation, 2);
         await Promise.all([first, second, hard]);
+    });
+});
+
+describe("DashboardStore auth cache invalidation", () => {
+    test("a token change drops the cached row snapshot so it is collected afresh", () => {
+        const store = new DashboardStore({ cwd: process.cwd() });
+        const signature = "rows-signature";
+        const entry = store.rows.entry(signature);
+        entry.status = "ready";
+        entry.payload = Buffer.from("[]");
+        entry.count = 7;
+        const revision = entry.revision;
+
+        store.invalidateAuthCaches();
+
+        const described = store.rows.describe(signature);
+        assert.equal(described.status, "idle");
+        assert.equal(described.count, 0);
+        assert.equal(store.rows.entry(signature).payload, null);
+        // A bumped revision supersedes a late completion of the collection that
+        // was reading rows under the previous token.
+        assert.ok(store.rows.entry(signature).generation > 0);
+        assert.equal(described.revision, revision + 1);
     });
 });
 
