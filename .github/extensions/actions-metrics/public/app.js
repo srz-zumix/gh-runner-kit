@@ -42,6 +42,7 @@ let activeTab = "overview";
 let authSource = null;
 let authError = null;
 let tokenDraft = "";
+let authPending = false;
 
 /**
  * The query editor edits a draft rather than the live state. Only the fields
@@ -1598,12 +1599,6 @@ function authenticationSettingsCard() {
                 const input = event.target.querySelector('input[type="password"]');
                 input.value = "";
                 input.removeAttribute("value");
-                // Disable the control before the async request so a rapid second
-                // submit cannot send an empty token and clear the one just set.
-                const submit = event.target.querySelector('[type="submit"]');
-                if (submit) {
-                    submit.disabled = true;
-                }
                 void updateCanvasToken(token);
             },
         }, [
@@ -1621,8 +1616,8 @@ function authenticationSettingsCard() {
                     },
                 }),
             ]),
-            el("button", { class: "button button--primary", type: "submit", disabled: !tokenDraft || state?.status === "loading", text: "Set token" }),
-            el("button", { class: "button", type: "button", disabled: authSource !== "canvas" || state?.status === "loading", onclick: () => { void updateCanvasToken(""); }, text: "Clear token" }),
+            el("button", { class: "button button--primary", type: "submit", disabled: !tokenDraft || authPending || state?.status === "loading", text: "Set token" }),
+            el("button", { class: "button", type: "button", disabled: authSource !== "canvas" || authPending || state?.status === "loading", onclick: () => { void updateCanvasToken(""); }, text: "Clear token" }),
         ]),
         el("p", { class: "notice", role: "status", text: authError || ({ canvas: "Canvas token active", environment: "Environment token active", stored: "Stored gh authentication active" }[authSource] ?? "") }),
     ]);
@@ -2826,7 +2821,16 @@ function renderContent() {
 }
 
 async function updateCanvasToken(token) {
+    // Serialize auth mutations: while one POST is in flight both controls are
+    // disabled, so a rapid Set-then-Clear (or vice versa) cannot send two
+    // concurrent requests whose responses could land out of order and leave
+    // the server in a state that contradicts the user's last action.
+    if (authPending) {
+        return;
+    }
+    authPending = true;
     tokenDraft = "";
+    render();
     try {
         const response = await fetch("./api/auth", {
             method: "POST",
@@ -2839,12 +2843,14 @@ async function updateCanvasToken(token) {
         }
         authSource = body.source;
         authError = null;
-        render();
-        await refreshCurrentQuery();
     } catch (error) {
         authError = error.message;
+        return;
+    } finally {
+        authPending = false;
         render();
     }
+    await refreshCurrentQuery();
 }
 
 /**
