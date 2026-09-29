@@ -48,6 +48,27 @@ export class DashboardStore {
     invalidateAuthCaches() {
         jobCache.invalidateAll();
         this.rows.invalidateAll();
+        // The metrics snapshots and any in-flight collection in `this.entries`
+        // were produced under the previous token. Supersede them the same way
+        // `RowStore.invalidateAll` does: bump the generation so a collection
+        // still running - or one a following refresh would otherwise join -
+        // cannot commit or join old-credential data, abort it so it stops
+        // spending budget, drop the stale snapshot, and notify every panel so
+        // none goes on displaying data the new token may not read.
+        for (const [key, entry] of this.entries) {
+            entry.generation = (entry.generation ?? 0) + 1;
+            entry.abort?.abort();
+            entry.abort = null;
+            entry.inflight = null;
+            entry.metrics = null;
+            entry.status = "idle";
+            entry.progress = "";
+            entry.error = null;
+            entry.errorCode = null;
+            entry.retryAt = null;
+            entry.updatedAt = null;
+            this.emit(key);
+        }
     }
 
     entry(query) {
