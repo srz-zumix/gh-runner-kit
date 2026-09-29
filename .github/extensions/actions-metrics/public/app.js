@@ -1616,8 +1616,8 @@ function authenticationSettingsCard() {
                     },
                 }),
             ]),
-            el("button", { class: "button button--primary", type: "submit", disabled: !tokenDraft || authPending || state?.status === "loading", text: "Set token" }),
-            el("button", { class: "button", type: "button", disabled: authSource !== "canvas" || authPending || state?.status === "loading", onclick: () => { void updateCanvasToken(""); }, text: "Clear token" }),
+            el("button", { class: "button button--primary", type: "submit", disabled: !tokenDraft || authPending, text: "Set token" }),
+            el("button", { class: "button", type: "button", disabled: authSource !== "canvas" || authPending, onclick: () => { void updateCanvasToken(""); }, text: "Clear token" }),
         ]),
         el("p", { class: "notice", role: "status", text: authError || ({ canvas: "Canvas token active", environment: "Environment token active", stored: "Stored gh authentication active" }[authSource] ?? "") }),
     ]);
