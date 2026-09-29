@@ -10,6 +10,7 @@
 // CLI than the fleet metrics do.
 
 import { collectSnapshot } from "./collect.mjs";
+import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
@@ -35,6 +36,18 @@ export class DashboardStore {
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
         this.rows = new RowStore({ cwd, log: this.log });
+    }
+
+    /**
+     * Drop every cache a credential change makes untrustworthy. The cached job
+     * lists and row snapshots were read under the previous token; keeping them
+     * would let a narrower token go on displaying data it can no longer read
+     * and answer a broader token from data collected before it was configured.
+     * A following refresh then collects afresh under the new credential.
+     */
+    invalidateAuthCaches() {
+        jobCache.invalidateAll();
+        this.rows.invalidateAll();
     }
 
     entry(query) {

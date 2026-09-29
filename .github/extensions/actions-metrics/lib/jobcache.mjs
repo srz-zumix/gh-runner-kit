@@ -24,6 +24,11 @@ export class JobCache {
         this.entries = new Map();
         this.size = 0;
         this.epochs = new Map();
+        // Bumped by a global invalidation so that every target's epoch changes
+        // at once - including targets first seen after the bump - and an
+        // in-flight collection that captured the previous generation cannot
+        // write its lists back.
+        this.generation = 0;
     }
 
     key(target, run) {
@@ -32,7 +37,7 @@ export class JobCache {
 
     /** The epoch a collection of `target` has to present to write back. */
     epoch(target) {
-        return this.epochs.get(targetPrefix(target)) ?? 0;
+        return `${this.generation}:${this.epochs.get(targetPrefix(target)) ?? 0}`;
     }
 
     /** Whether a run's job list can be cached at all. */
@@ -85,13 +90,24 @@ export class JobCache {
     /** Drop every list of a target and refuse writes from collections already running. */
     invalidate(target) {
         const prefix = targetPrefix(target);
-        this.epochs.set(prefix, this.epoch(target) + 1);
+        this.epochs.set(prefix, (this.epochs.get(prefix) ?? 0) + 1);
         for (const [key, list] of this.entries) {
             if (key.startsWith(prefix)) {
                 this.entries.delete(key);
                 this.size -= list.length;
             }
         }
+    }
+
+    /**
+     * Drop every list and refuse writes from every collection already running.
+     * Used when the active token changes: lists fetched under the previous
+     * credential must not answer a request made with a different one.
+     */
+    invalidateAll() {
+        this.generation += 1;
+        this.entries.clear();
+        this.size = 0;
     }
 }
 

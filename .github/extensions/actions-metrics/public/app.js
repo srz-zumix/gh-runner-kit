@@ -2850,6 +2850,10 @@ async function updateCanvasToken(token) {
         authPending = false;
         render();
     }
+    // The rows and job lists on screen were read under the previous token; the
+    // server has dropped its caches, so drop the explorer's copy too and let
+    // the refresh below re-collect everything under the new credential.
+    resetExplorer();
     await refreshCurrentQuery();
 }
 

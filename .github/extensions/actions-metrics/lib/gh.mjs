@@ -202,13 +202,21 @@ export async function noteRateLimit(host, error, { cwd } = {}) {
  * instead of after the first expensive request.
  */
 export async function assertRateBudget(host, { cwd } = {}) {
+    const generation = authGeneration;
     const active = rateLimitCooldown(host);
     if (active) {
         throw cooldownError(active);
     }
     const budget = await fetchRateLimit({ host, cwd });
     if (budget && budget.remaining === 0 && budget.resetAt > Date.now()) {
-        throw cooldownError(setRateLimitCooldown(host, budget.resetAt, "primary"));
+        // Install the cooldown only when the token is unchanged; a preflight
+        // started under a superseded token measured the old token's budget and
+        // must not block requests made with the newly configured one.
+        const entry =
+            generation === authGeneration
+                ? setRateLimitCooldown(host, budget.resetAt, "primary")
+                : { host: hostKey(host), until: budget.resetAt, reason: "primary" };
+        throw cooldownError(entry);
     }
     return budget;
 }

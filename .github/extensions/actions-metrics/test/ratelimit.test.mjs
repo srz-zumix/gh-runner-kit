@@ -210,6 +210,23 @@ describe("JobCache", () => {
         assert.ok(cache.set(repo, run(2), [{ id: 20 }], cache.epoch(repo)));
     });
 
+    test("invalidateAll drops every target and rejects writes of collections already running", () => {
+        const cache = new JobCache();
+        const other = { host: null, nwo: "octo/beta" };
+        const epoch = cache.epoch(repo);
+        const otherEpoch = cache.epoch(other);
+        cache.set(repo, run(1), [{ id: 10 }], epoch);
+        cache.set(other, run(1), [{ id: 20 }], otherEpoch);
+        cache.invalidateAll();
+        assert.equal(cache.get(repo, run(1)), null);
+        assert.equal(cache.get(other, run(1)), null);
+        // A collection that captured the previous generation cannot write back,
+        // even for a target the invalidation never saw explicitly.
+        assert.equal(cache.set(repo, run(2), [{ id: 30 }], epoch), false);
+        assert.equal(cache.set(other, run(2), [{ id: 40 }], otherEpoch), false);
+        assert.ok(cache.set(repo, run(2), [{ id: 30 }], cache.epoch(repo)));
+    });
+
     test("evicts the least recently used runs past its capacity", () => {
         const cache = new JobCache({ capacity: 3 });
         const epoch = cache.epoch(repo);
@@ -254,6 +271,29 @@ describe("DashboardStore under a rate limit", () => {
         const hard = store.refresh(query, { force: true, bypassCache: true });
         assert.equal(store.entry(query).generation, 2);
         await Promise.all([first, second, hard]);
+    });
+});
+
+describe("DashboardStore auth cache invalidation", () => {
+    test("a token change drops the cached row snapshot so it is collected afresh", () => {
+        const store = new DashboardStore({ cwd: process.cwd() });
+        const signature = "rows-signature";
+        const entry = store.rows.entry(signature);
+        entry.status = "ready";
+        entry.payload = Buffer.from("[]");
+        entry.count = 7;
+        const revision = entry.revision;
+
+        store.invalidateAuthCaches();
+
+        const described = store.rows.describe(signature);
+        assert.equal(described.status, "idle");
+        assert.equal(described.count, 0);
+        assert.equal(store.rows.entry(signature).payload, null);
+        // A bumped revision supersedes a late completion of the collection that
+        // was reading rows under the previous token.
+        assert.ok(store.rows.entry(signature).generation > 0);
+        assert.equal(described.revision, revision + 1);
     });
 });
 

@@ -128,6 +128,10 @@ async function handle(req, res, url, instance) {
                 return;
             }
             setCanvasGhToken(body.token.trim());
+            // The cached job lists and row snapshots were read under the old
+            // token; discard them so a following refresh collects afresh under
+            // the new credential instead of serving data it may no longer read.
+            instance.store?.invalidateAuthCaches?.();
             sendJson(res, 200, { source: ghTokenSource() });
             return;
         }

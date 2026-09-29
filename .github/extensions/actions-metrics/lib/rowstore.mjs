@@ -276,4 +276,33 @@ export class RowStore {
     signature(query) {
         return rowQueryId(query);
     }
+
+    /**
+     * Drop every snapshot and supersede every collection already running.
+     * Called when the active token changes: rows fetched under the previous
+     * credential must neither stay collected for, nor be recollected under, a
+     * different one. In-flight collections are aborted and their generation is
+     * bumped so a late completion cannot commit rows read with the old token.
+     */
+    invalidateAll() {
+        for (const [signature, entry] of this.entries) {
+            entry.generation += 1;
+            entry.abort?.abort();
+            entry.abort = null;
+            entry.inflight = null;
+            entry.payload = null;
+            entry.count = 0;
+            entry.truncated = false;
+            entry.malformed = 0;
+            entry.budget = 0;
+            entry.collectedAt = null;
+            entry.durationMs = 0;
+            entry.scope = null;
+            entry.status = "idle";
+            entry.progress = "";
+            entry.error = null;
+            entry.revision += 1;
+            this.emit(signature);
+        }
+    }
 }
