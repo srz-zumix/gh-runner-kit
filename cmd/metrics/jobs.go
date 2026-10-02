@@ -72,6 +72,9 @@ truncated_repos=N, go to stderr.`,
 
 			r := render.NewRenderer(flags.Exporter)
 			if r.HasExporter() {
+				// The exported JSON is the whole of stdout too, so the warnings go to stderr.
+				kitutil.WarnMetricsWarnings(data.Warnings)
+				kitutil.WarnMetricsTruncatedRepos(data.TruncatedRepos())
 				return r.RenderExportedData(rows)
 			}
 

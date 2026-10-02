@@ -28,7 +28,7 @@ import {
 } from "./lib/query.mjs";
 import { DashboardInstance } from "./lib/instance.mjs";
 import { startInstanceServer } from "./lib/server.mjs";
-import { loadPrefs, savePrefs } from "./lib/prefs.mjs";
+import { loadPrefs, rememberStepSettings } from "./lib/prefs.mjs";
 import { collectStepMetrics } from "./lib/steprows.mjs";
 import { normalizeRunnerFilter } from "./shared/steps.mjs";
 import { collectRunTimeline } from "./lib/timeline.mjs";
@@ -767,8 +767,8 @@ const canvas = createCanvas({
                 const { rows: _rows, ...visible } = result ?? {};
                 instance.setStepMetrics(settings, result, generation);
                 result = visible;
-                const prefs = await loadPrefs();
-                await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
+                // A request a newer one superseded leaves the newer settings in place.
+                await rememberStepSettings(targetKey(query), settings, () => !instance.isStaleStepRequest(generation));
                 if (result.available === false) {
                     throw new CanvasError("step_metrics_unavailable", result.reason);
                 }

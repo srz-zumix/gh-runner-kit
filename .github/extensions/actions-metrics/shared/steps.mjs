@@ -2,7 +2,6 @@ import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, parseTime } from "./ro
 
 const NS_PER_MS = 1e6;
 const INFRA_STEP_NAMES = new Set(["Set up job", "Complete job"]);
-const STEP_FAILURES = new Set(["failure"]);
 
 function text(value) {
     return typeof value === "string" ? value : "";
@@ -329,7 +328,9 @@ export function labelSetKey(labels) {
     return formatLabelSet([...new Set((labels ?? []).map((label) => String(label).toLowerCase()))].sort());
 }
 
-function matchWildcard(pattern, name) {
+// matchWildcard follows the CLI's MatchWildcard: * stands for any sequence of
+// characters, including a slash, and the rest of the pattern matches literally.
+export function matchWildcard(pattern, name) {
     const escaped = String(pattern).split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"));
     return new RegExp(`^${escaped.join(".*")}$`, "s").test(String(name ?? ""));
 }
@@ -456,7 +457,7 @@ function runnerFacets(rows) {
     };
 }
 
-export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", limit = 0, runner = {} } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {} } = {}) {
     const runnerFilter = normalizeRunnerFilter(runner);
     const allJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
     const allStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
@@ -552,6 +553,11 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             if (Number.isFinite(row.jobStartedAt)) timeline.startOffsets.push(Math.max(0, row.jobStartedAt - row.runStartedAt));
             if (Number.isFinite(row.jobCompletedAt)) timeline.endOffsets.push(Math.max(0, row.jobCompletedAt - row.runStartedAt));
         }
+        // The step filter only narrows the step statistics, after every row has fed the
+        // presence denominators and the job timing above.
+        if (stepPattern && !matchWildcard(stepPattern, row.stepName)) {
+            continue;
+        }
 
         const key = keyOf(jobKey, row.stepId);
         if (!accs.has(key)) {
@@ -583,7 +589,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         }
         if (row.startedAt !== null) {
             acc.executed += 1;
-            if (STEP_FAILURES.has(row.stepConclusion)) {
+            if (FAILURE_CONCLUSIONS.has(row.stepConclusion)) {
                 acc.failed += 1;
             }
         }
@@ -682,7 +688,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
                 offsetP90Ms: percentile(step.offsets, 90),
                 durationMs: duration.p50,
                 durationP90Ms: duration.p90,
-                failed: step.conclusions.some((value) => STEP_FAILURES.has(value)),
+                failed: step.conclusions.some((value) => FAILURE_CONCLUSIONS.has(value)),
                 infrastructure: isInfrastructureStep(step.name),
             };
         }).sort((a, b) => a.offsetMs - b.offsetMs || a.key.localeCompare(b.key) || a.id.localeCompare(b.id)),

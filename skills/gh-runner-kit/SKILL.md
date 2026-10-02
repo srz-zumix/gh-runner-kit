@@ -902,7 +902,7 @@ median `OFFSET` from the job start. A step name repeated inside one job gets a
 `#N` suffix instead of being merged, and a workflow name shared by several files
 is followed by the file. `PRESENCE` is the share of the selected jobs that
 started the step (a `--step` filter does not shrink it), `FAILURE` the share of
-the started steps that failed, and `SHARE` the median fraction of
+the started steps that failed or timed out, and `SHARE` the median fraction of
 the job duration the step took. Percentiles use the nearest-rank method.
 
 `--format json` / `--format ndjson` write the steps **unaggregated**, one row

@@ -20,20 +20,20 @@ const PREFS_FILE = join(ARTIFACTS_DIR, "prefs.json");
 const EMPTY = { lastTarget: null, lastScope: "repo", filtersByTarget: {} };
 
 let cache = null;
+// The cold read in flight, shared so concurrent first reads cannot each initialize
+// cache and drop an update another caller already merged into it.
+let loading = null;
 
 // Settings now persist on every change, not only after a collection, so two
 // changes in quick succession issue two writes. Chained rather than issued in
 // parallel: an older write finishing last would put the older value on disk.
 let writes = Promise.resolve();
 
-export async function loadPrefs() {
-    if (cache) {
-        return cache;
-    }
+async function readPrefs() {
     try {
         const raw = await readFile(PREFS_FILE, "utf8");
         const parsed = JSON.parse(raw);
-        cache = {
+        return {
             ...EMPTY,
             ...parsed,
             // Preferences written before organization targets existed.
@@ -41,14 +41,38 @@ export async function loadPrefs() {
             filtersByTarget: parsed.filtersByTarget ?? parsed.filtersByRepo ?? {},
         };
     } catch {
-        cache = { ...EMPTY, filtersByTarget: {} };
+        return { ...EMPTY, filtersByTarget: {} };
     }
-    return cache;
+}
+
+export async function loadPrefs() {
+    if (cache) {
+        return cache;
+    }
+    loading ??= readPrefs().then((prefs) => {
+        cache ??= prefs;
+        return cache;
+    });
+    return loading;
 }
 
 export async function savePrefs(update) {
-    const current = await loadPrefs();
-    cache = { ...current, ...update, filtersByTarget: { ...current.filtersByTarget, ...(update.filtersByTarget ?? {}) } };
+    await loadPrefs();
+    return commitPrefs(update);
+}
+
+// commitPrefs merges update into the loaded preferences synchronously, before its first
+// await, so a caller that checked its request is still current right before calling it
+// commits against the latest map. The per-target maps are merged entry by entry, so
+// concurrent updates for different targets do not drop each other.
+async function commitPrefs(update) {
+    const current = cache;
+    cache = {
+        ...current,
+        ...update,
+        filtersByTarget: { ...current.filtersByTarget, ...(update.filtersByTarget ?? {}) },
+        stepTimelineByTarget: { ...(current.stepTimelineByTarget ?? {}), ...(update.stepTimelineByTarget ?? {}) },
+    };
     // Serialized at call time so the chain writes the values in the order they
     // were asked for, whatever order the writes are scheduled in.
     const payload = `${JSON.stringify(cache, null, 2)}\n`;
@@ -76,6 +100,19 @@ export async function rememberFilters(identity, selector, scope, filters) {
         lastScope: scope,
         filtersByTarget: { ...current.filtersByTarget, [identity]: filters },
     });
+}
+
+/**
+ * Remember the Step timeline settings of one target. isCurrent is checked after the
+ * preferences are loaded and right before they are merged, so a request a newer one
+ * superseded never overwrites the newer settings.
+ */
+export async function rememberStepSettings(identity, settings, isCurrent = () => true) {
+    await loadPrefs();
+    if (!isCurrent()) {
+        return cache;
+    }
+    return commitPrefs({ stepTimelineByTarget: { [identity]: settings } });
 }
 
 export const prefsPath = PREFS_FILE;

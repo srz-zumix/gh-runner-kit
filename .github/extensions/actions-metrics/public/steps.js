@@ -305,6 +305,14 @@ function footnote(result) {
     return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached."} Job lists use GitHub's latest-attempt basis, including carried-over jobs.${filtered}` });
 }
 
+// The CLI reports skipped repositories and job lists on stderr; without them a partial
+// collection would look complete.
+function collectionWarnings(result) {
+    const warnings = result?.meta?.warnings ?? [];
+    if (!warnings.length) return null;
+    return el("div", {}, warnings.map((warning) => el("p", { class: "notice notice--warn", text: `Collection warning: ${warning}` })));
+}
+
 // Gantt charts are laid out as an HTML grid (name | track | duration) rather than
 // SVG so step names never overlap bars and can ellipsize with a full-name tooltip.
 function pct(value, max) {
@@ -560,6 +568,7 @@ export function renderSteps(state) {
     return [
         controlPanel(state),
         footnote(result),
+        collectionWarnings(result),
         runnersCard(state),
         el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Typical timeline" })]), el("div", { class: "card__body" }, [typicalTimeline(result)])]),
         el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Step statistics" })]), el("div", { class: "card__body" }, [stepsTable(result)])]),

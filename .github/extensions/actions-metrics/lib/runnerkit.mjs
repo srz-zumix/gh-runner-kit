@@ -298,9 +298,11 @@ function baseArgs(subcommand, { target, filters, limits, force, probe }, format 
         ...targetArgs(target).args,
         "--days",
         String(filters.days),
-        "--format",
-        format,
     ];
+    // `metrics collect` writes a snapshot rather than a report, so it has no --format.
+    if (format) {
+        args.push("--format", format);
+    }
     if (runnerTypeApplies(filters.runnerType, target)) {
         // The CLI's target resolver ties the runner inventory to the target:
         // `--type repo` needs a repository, while `--type org` reads the
@@ -920,8 +922,28 @@ export function runnerPatternMatcher(pattern) {
  * after the reports that populate the job cache, and re-fetching the window a
  * second time would double the API cost for identical rows.
  */
-export function jobRowsCommand({ target, filters, limits, pattern = "", exclusions = [], kind = "self-hosted", limit = 0, probe = null }) {
-    const args = baseArgs("jobs", { target, filters, limits, force: false, probe }, "ndjson");
+/**
+ * Arguments of a report that reads a `metrics collect` snapshot through --input. The
+ * collection flags are rejected alongside --input, because the snapshot fixes them.
+ */
+function inputArgs(subcommand, input, format) {
+    return ["runner-kit", "metrics", subcommand, "--input", input, "--format", format];
+}
+
+/**
+ * Command for `gh runner-kit metrics collect`, which writes one snapshot of the runs and
+ * their jobs to output so several reports describe exactly the same runs.
+ */
+export function snapshotCommand({ target, filters, limits, workflow, runBudget, output, probe = null }) {
+    const scopedFilters = { ...filters, workflow: workflow || filters?.workflow || "" };
+    const scopedLimits = Number.isFinite(runBudget) ? { ...limits, maxRuns: Math.max(0, Math.floor(runBudget)) } : limits;
+    const args = baseArgs("collect", { target, filters: scopedFilters, limits: scopedLimits, force: false, probe }, null);
+    args.push("--output", output);
+    return { args, env: hostEnv(target) };
+}
+
+export function jobRowsCommand({ target, filters, limits, pattern = "", exclusions = [], kind = "self-hosted", limit = 0, probe = null, input = "" }) {
+    const args = input ? inputArgs("jobs", input, "ndjson") : baseArgs("jobs", { target, filters, limits, force: false, probe }, "ndjson");
     args.push("--kind", kind);
     for (const label of Array.isArray(filters.labels) ? filters.labels : []) {
         args.push("--label", label);
@@ -957,10 +979,11 @@ export function stepRowsCommand({
     steps = [],
     limit = 0,
     probe = null,
+    input = "",
 }) {
     const scopedFilters = { ...filters, workflow: workflow || filters?.workflow || "" };
     const scopedLimits = Number.isFinite(runBudget) ? { ...limits, maxRuns: Math.max(0, Math.floor(runBudget)) } : limits;
-    const args = baseArgs("steps", { target, filters: scopedFilters, limits: scopedLimits, force: false, probe }, "ndjson");
+    const args = input ? inputArgs("steps", input, "ndjson") : baseArgs("steps", { target, filters: scopedFilters, limits: scopedLimits, force: false, probe }, "ndjson");
     args.push("--kind", kind);
     for (const label of Array.isArray(labels) ? labels : Array.isArray(filters?.labels) ? filters.labels : []) {
         args.push("--label", label);

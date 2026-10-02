@@ -195,7 +195,8 @@ func BuildStepStats(data *Data, opts StepRowOptions, statOpts StepStatOptions) [
 			continue
 		}
 		acc.stat.Executed++
-		if row.StepConclusion == stepConclusionFailure {
+		// A timed out step failed, like a timed out job does in Job.Failed.
+		if row.StepConclusion == stepConclusionFailure || row.StepConclusion == conclusionTimedOut {
 			acc.stat.Failed++
 		}
 		if row.CompletedAt == nil {

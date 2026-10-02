@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aggregateSteps, displayStepName, downsampleNewest, formatDuration, formatLabelSet, labelSetKey, matchRunner, matrixMergeMap, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
+import { aggregateSteps, displayStepName, downsampleNewest, formatDuration, formatLabelSet, labelSetKey, matchRunner, matchWildcard, matrixMergeMap, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
 
 test("timelineMatchesWorkflow compares workflow file names", () => {
     const timeline = { Workflow: "Labeler", WorkflowPath: ".github/workflows/labeler.yml" };
@@ -137,7 +137,7 @@ test("duration display keeps sub-second values honest", () => {
     assert.equal(formatDuration(1500), "2s");
 });
 
-import { jobRowsCommand, runTimelineCommand, stepRowsCommand } from "../lib/runnerkit.mjs";
+import { jobRowsCommand, runTimelineCommand, snapshotCommand, stepRowsCommand } from "../lib/runnerkit.mjs";
 
 test("stepRowsCommand uses workflow file and run budget", () => {
     const target = { kind: "repo", nwo: "owner/repo", owner: "owner", name: "repo", host: null };
@@ -354,4 +354,65 @@ test("reportsRunCapReached reads the truncated repository count from CLI stderr"
     assert.equal(reportsRunCapReached("level=WARN truncated_repos=0"), false);
     assert.equal(reportsRunCapReached("level=INFO msg=progress"), false);
     assert.equal(reportsRunCapReached(undefined), false);
+});
+
+test("a step filter keeps every job that ran a step in the presence denominator", () => {
+    const jobs = [job(1, "build", 1, 51), job(2, "build", 1, 41)];
+    const steps = [
+        step(1, "build", 101, 1, "Set up job", 1, 2),
+        step(1, "build", 101, 2, "Deploy", 6, 36),
+        step(2, "build", 102, 1, "Set up job", 1, 2),
+    ];
+    const result = aggregateSteps({ jobs, steps, stepPattern: "Dep*" });
+    assert.deepEqual(result.stepStats.map((row) => row.stepKey), ["Deploy"]);
+    assert.equal(result.stepStats[0].jobs, 2);
+    assert.equal(result.stepStats[0].presence, 0.5);
+});
+
+test("a timed out step counts as failed", () => {
+    const jobs = [job(1, "build", 1, 51), job(2, "build", 1, 41)];
+    const steps = [
+        step(1, "build", 101, 2, "Compile", 6, 36),
+        step(2, "build", 102, 2, "Compile", 6, 40, "timed_out"),
+    ];
+    const result = aggregateSteps({ jobs, steps });
+    const compile = result.stepStats.find((row) => row.stepKey === "Compile");
+    assert.equal(compile.failed, 1);
+    assert.equal(compile.failureRate, 0.5);
+    assert.equal(result.typicalTimeline[0].steps.find((row) => row.name === "Compile").failed, true);
+});
+
+test("matchWildcard mirrors the CLI pattern semantics", () => {
+    assert.equal(matchWildcard("Deploy", "Deploy"), true);
+    assert.equal(matchWildcard("Deploy", "Deploy now"), false);
+    assert.equal(matchWildcard("Run actions/*@v4", "Run actions/checkout@v4"), true);
+    assert.equal(matchWildcard("*cache*", "Restore cache"), true);
+    assert.equal(matchWildcard("a*b*c", "acb"), false);
+});
+
+test("parseCollectionWarning keeps the CLI collection warnings only", async () => {
+    const { parseCollectionWarning } = await import("../lib/steprows.mjs");
+    assert.equal(parseCollectionWarning('time=x level=WARN msg="metrics: Jobs for run #3: \\"not found\\""'), 'Jobs for run #3: "not found"');
+    assert.equal(parseCollectionWarning("time=x level=WARN msg=metrics:"), null);
+    assert.equal(parseCollectionWarning('time=x level=WARN msg="metrics: --max-runs was reached, so older runs were not collected" truncated_repos=2'), null);
+    assert.equal(parseCollectionWarning('time=x level=INFO msg="metrics: wrote the snapshot"'), null);
+    assert.equal(parseCollectionWarning('time=x level=WARN msg="something else"'), null);
+});
+
+test("snapshotCommand collects once and the reports read it through --input", () => {
+    const target = { kind: "repo", nwo: "owner/repo", owner: "owner", name: "repo", host: null };
+    const filters = { days: 7, workflow: "", runnerType: "auto", includeRepos: [], excludeRepos: [], labels: ["linux"] };
+    const collect = snapshotCommand({ target, filters, limits: {}, workflow: "ci.yml", runBudget: 20, output: "/tmp/s.json.gz" });
+    assert.deepEqual(collect.args.slice(0, 5), ["runner-kit", "metrics", "collect", "--repo", "owner/repo"]);
+    assert(!collect.args.includes("--format"));
+    assert.equal(collect.args[collect.args.indexOf("--workflow") + 1], "ci.yml");
+    assert.equal(collect.args[collect.args.indexOf("--max-runs") + 1], "20");
+    assert.equal(collect.args[collect.args.indexOf("--output") + 1], "/tmp/s.json.gz");
+    const steps = stepRowsCommand({ target, filters, limits: {}, workflow: "ci.yml", runBudget: 20, kind: "all", input: "/tmp/s.json.gz" });
+    assert.deepEqual(steps.args.slice(0, 7), ["runner-kit", "metrics", "steps", "--input", "/tmp/s.json.gz", "--format", "ndjson"]);
+    for (const flag of ["--repo", "--days", "--workflow", "--max-runs"]) assert(!steps.args.includes(flag), flag);
+    assert.equal(steps.args[steps.args.indexOf("--label") + 1], "linux");
+    const jobs = jobRowsCommand({ target, filters, limits: {}, kind: "all", input: "/tmp/s.json.gz" });
+    assert.deepEqual(jobs.args.slice(0, 7), ["runner-kit", "metrics", "jobs", "--input", "/tmp/s.json.gz", "--format", "ndjson"]);
+    assert(!jobs.args.includes("--days"));
 });

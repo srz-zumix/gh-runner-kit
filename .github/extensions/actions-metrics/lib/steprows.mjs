@@ -2,10 +2,12 @@
 // through gh runner-kit, then aggregates in shared/steps.mjs so the browser and
 // canvas actions read the same statistics.
 
-import { basename } from "node:path";
-import { assertRateBudget, isRateLimitError, noteRateLimit } from "./gh.mjs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { assertRateBudget, ghRaw, isRateLimitError, noteRateLimit } from "./gh.mjs";
 import { runLines } from "./jobs.mjs";
-import { jobRowsCommand, probeRunnerKit, stepRowsCommand } from "./runnerkit.mjs";
+import { jobRowsCommand, probeRunnerKit, snapshotCommand, stepRowsCommand } from "./runnerkit.mjs";
 import { aggregateSteps, normalizeRunnerFilter } from "../shared/steps.mjs";
 
 const DEFAULT_STEP_RUN_BUDGET = 500;
@@ -50,12 +52,70 @@ export function reportsRunCapReached(stderr) {
     return Boolean(match && Number(match[1]) > 0);
 }
 
+const METRICS_WARNING_PREFIX = "metrics: ";
+
+// Unquotes a slog text value. Go quotes it with strconv.Quote, whose escapes are mostly
+// JSON compatible; anything JSON cannot read is kept with only the quotes removed.
+function unquoteLogValue(value) {
+    if (!value.startsWith("\"")) {
+        return value;
+    }
+    try {
+        return JSON.parse(value);
+    } catch {
+        return value.slice(1, -1);
+    }
+}
+
+// The CLI logs the collection warnings on stderr as slog text lines, such as
+// `level=WARN msg="metrics: Jobs for run #1: ..."`. The run cap notice is skipped
+// because it is reported through reportsRunCapReached instead.
+export function parseCollectionWarning(line) {
+    const text = String(line ?? "");
+    if (!/(?:^|\s)level=WARN(?:\s|$)/.test(text)) {
+        return null;
+    }
+    const match = /(?:^|\s)msg=("(?:[^"\\]|\\.)*"|\S+)/.exec(text);
+    if (!match) {
+        return null;
+    }
+    const message = unquoteLogValue(match[1]);
+    if (!message.startsWith(METRICS_WARNING_PREFIX) || /(?:^|\s)truncated_repos=\d+(?:\s|$)/.test(text)) {
+        return null;
+    }
+    return message.slice(METRICS_WARNING_PREFIX.length);
+}
+
 async function streamCommand({ args, env, cwd, target, signal, onProgress, label }) {
     const rows = [];
     const counters = { malformed: 0 };
+    const warnings = [];
     onProgress?.(label);
-    const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: target?.host ?? null });
-    return { rows, malformed: counters.malformed, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
+    const onStderrLine = (line) => {
+        const warning = parseCollectionWarning(line);
+        if (warning && !warnings.includes(warning)) {
+            warnings.push(warning);
+        }
+    };
+    const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: target?.host ?? null, onStderrLine });
+    return { rows, malformed: counters.malformed, warnings, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
+}
+
+// Reads the step and job listings from one `metrics collect` snapshot, so both describe
+// exactly the same runs even when a run starts or finishes between the two reports.
+async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress }) {
+    const dir = await mkdtemp(join(tmpdir(), "actions-metrics-steps-"));
+    try {
+        const input = join(dir, "snapshot.json.gz");
+        onProgress?.(`Collecting up to ${budget} runs of ${workflowFile} with metrics collect`);
+        const collect = snapshotCommand({ ...common, output: input });
+        await ghRaw(collect.args, { cwd, env: collect.env, host: target?.host ?? null, signal });
+        const steps = await streamCommand({ ...stepRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading the steps of ${workflowFile}` });
+        const jobs = await streamCommand({ ...jobRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}` });
+        return { steps, jobs };
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
 }
 
 export async function collectStepMetrics({
@@ -97,8 +157,8 @@ export async function collectStepMetrics({
 
     const budget = clampRunBudget(runBudget);
     // Everything that changes which rows the CLI returns is part of the key; the job,
-    // matrix, infra and runner filter options only change the aggregation.
-    const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners, step });
+    // step, matrix, infra and runner filter options only change the aggregation.
+    const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners });
     const cached = reuseRows && cache?.key === rowsKey ? cache : null;
     if (!cached) {
         await assertRateBudget(target?.host ?? null, { cwd });
@@ -117,8 +177,14 @@ export async function collectStepMetrics({
         };
         let steps = cached?.steps;
         let jobs = cached?.jobs;
-        if (!cached) {
-            const stepCommand = stepRowsCommand({ ...common, steps: step ? [step] : [] });
+        // The step filter is applied in aggregateSteps rather than by the CLI, because
+        // the jobs that never ran the filtered step still count toward its presence.
+        if (!cached && probe.subcommands.has("collect")) {
+            ({ steps, jobs } = await streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress }));
+        } else if (!cached) {
+            // A CLI without metrics collect lists the runs once per report, so a run that
+            // arrives between the two can still make the listings differ slightly.
+            const stepCommand = stepRowsCommand(common);
             steps = await streamCommand({ ...stepCommand, cwd, target, signal, onProgress, label: `Reading up to ${budget} runs of ${workflowFile} with metrics steps` });
             const jobCommand = jobRowsCommand({ ...common, filters: { ...filters, workflow: workflowFile }, limits: { ...limits, maxRuns: budget } });
             jobs = await streamCommand({ ...jobCommand, cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}` });
@@ -130,9 +196,11 @@ export async function collectStepMetrics({
             mergeMatrix,
             showInfra,
             selectedJob: job,
+            stepPattern: step,
             limit,
             runner: runnerSelection,
         });
+        const warnings = [...new Set([...(steps.warnings ?? []), ...(jobs.warnings ?? [])])];
         // The CLI reports the repositories that reached the run budget on stderr. The
         // busiest repository of the unfiltered rows is the fallback for a CLI that does
         // not, compared per repository because the budget applies to each of them.
@@ -149,6 +217,7 @@ export async function collectStepMetrics({
             runBudget: budget,
             truncated,
             malformedRows: steps.malformed + jobs.malformed,
+            warnings,
             ...aggregate,
             meta: {
                 ...aggregate.meta,
@@ -157,6 +226,7 @@ export async function collectStepMetrics({
                 workflow: workflowFile,
                 job: job || "",
                 malformedRows: steps.malformed + jobs.malformed,
+                warnings,
                 reusedRows: Boolean(cached),
             },
         };

@@ -35,7 +35,7 @@ line per step of every job, keyed by workflow file, job name and step. A step wh
 repeats inside the same job is suffixed with " #N", so the occurrences are not merged.
 A workflow name shared by several workflow files is followed by the file. RUNS is how
 many jobs started the step and PRESENCE how many of the selected jobs that is, SKIPPED
-how many skipped it and FAILURE the share of the started steps that failed.
+how many skipped it and FAILURE the share of the started steps that failed or timed out.
 DUR P50, DUR P90 and DUR MAX describe the step duration, SHARE is the median fraction of the job
 duration the step took, and OFFSET the median time between the job start and the step
 start. The lines of a job are ordered by OFFSET.
@@ -77,6 +77,9 @@ the output, combine --workflow with --max-runs.`,
 
 			r := render.NewRenderer(flags.Exporter)
 			if r.HasExporter() {
+				// The exported JSON is the whole of stdout too, so the warnings go to stderr.
+				kitutil.WarnMetricsWarnings(data.Warnings)
+				kitutil.WarnMetricsTruncatedRepos(data.TruncatedRepos())
 				return r.RenderExportedData(metricspkg.BuildStepRows(data, opts))
 			}
 

@@ -64,6 +64,17 @@ func TestBuildStepStats(t *testing.T) {
 	}
 }
 
+func TestBuildStepStatsCountsTimedOutAsFailed(t *testing.T) {
+	data := stepData()
+	// Run 3's Compile timed out instead of succeeding.
+	data.Jobs[3].Steps[0].Conclusion = github.Ptr(conclusionTimedOut)
+
+	compile := findStat(t, BuildStepStats(data, StepRowOptions{}, StepStatOptions{}), "build", "Compile")
+	if compile.Executed != 3 || compile.Failed != 2 {
+		t.Errorf("compile counts = %+v, want 3 executed and 2 failed", compile)
+	}
+}
+
 func TestBuildStepStatsStepFilterKeepsDenominator(t *testing.T) {
 	stats := BuildStepStats(stepData(), StepRowOptions{Steps: []string{"Upload*"}}, StepStatOptions{})
 	if len(stats) != 2 {

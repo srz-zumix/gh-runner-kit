@@ -10,7 +10,7 @@ import { collectStepMetrics } from "./steprows.mjs";
 import { normalizeRunnerFilter } from "../shared/steps.mjs";
 import { collectRunTimeline } from "./timeline.mjs";
 import { filtersOf, limitsOf, targetOf, targetKey } from "./query.mjs";
-import { loadPrefs, savePrefs } from "./prefs.mjs";
+import { loadPrefs, rememberStepSettings } from "./prefs.mjs";
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_DIR = join(ROOT_DIR, "public");
@@ -232,8 +232,7 @@ async function handle(req, res, url, instance) {
         // started later always supersedes this one however long the file I/O takes.
         const { generation, signal } = instance.beginStepRequest();
         try {
-            const prefs = await loadPrefs();
-            await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
+            await rememberStepSettings(targetKey(query), settings, () => !instance.isStaleStepRequest(generation));
             const result = await collectStepMetrics({
                 target: targetOf(query),
                 filters: { ...filtersOf(query), ...(body.filters ?? {}) },
