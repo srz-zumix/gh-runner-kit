@@ -729,6 +729,8 @@ it shows every job the workflow-run jobs endpoint returned.
 
 `--format ndjson` writes one JSON object per line, which is what a large listing
 should use. `--jq` and `--template` require an explicit `--format json`.
+With `--format json` or `ndjson`, the collection warnings and the number of
+repositories that reached `--max-runs` (`truncated_repos=N`) go to stderr.
 Use `--exclude-runner` to drop a noisy runner from the listing, for example
 `--runner 'i-0*' --exclude-runner 'i-0deadbeef*'`.
 
@@ -895,17 +897,22 @@ Table columns: `REPO` (only when several repositories appear), `WORKFLOW`,
 `DUR MAX`, `SHARE`, `OFFSET`.
 
 **Unlike `metrics jobs`, the default output is the aggregated table.** One line
-per step of every job, keyed by workflow, job name and step, ordered by the
+per step of every job, keyed by workflow file, job name and step, ordered by the
 median `OFFSET` from the job start. A step name repeated inside one job gets a
-`#N` suffix instead of being merged. `PRESENCE` is the share of the selected
-jobs that executed the step (a `--step` filter does not shrink it), `FAILURE`
-the share of the executed steps that failed, and `SHARE` the median fraction of
+`#N` suffix instead of being merged, and a workflow name shared by several files
+is followed by the file. `PRESENCE` is the share of the selected jobs that
+started the step (a `--step` filter does not shrink it), `FAILURE` the share of
+the started steps that failed, and `SHARE` the median fraction of
 the job duration the step took. Percentiles use the nearest-rank method.
 
 `--format json` / `--format ndjson` write the steps **unaggregated**, one row
 each with the identity of its job (`RunID` and `JobID` are quoted strings in
 ndjson), so a downstream tool such as the `actions-metrics` canvas can build
-its own statistics. `--jq` and `--template` require an explicit `--format json`.
+its own statistics. Identify a step by `StepName` and `StepOccurrence` rather
+than `StepKey`, which a step literally named `Upload #2` shares with the second
+`Upload`. `--jq` and `--template` require an explicit `--format json`.
+The collection warnings and the number of repositories that reached
+`--max-runs` (`truncated_repos=N`) go to stderr with these formats.
 
 `--merge-matrix` folds `test (ubuntu, 1.22)` and `test (macos, 1.22)` into
 `test [x2]`, only when another job of the same workflow shares the prefix.

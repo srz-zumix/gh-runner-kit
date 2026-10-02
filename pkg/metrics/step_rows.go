@@ -40,8 +40,12 @@ type StepRow struct {
 	StepName       string
 	// StepKey identifies the step inside its job. It is the step name, followed by
 	// " #N" for the Nth step of the same job that shares that name, so that steps
-	// repeating a name are not merged into one.
-	StepKey        string
+	// repeating a name are not merged into one. It is only a display label: a step
+	// literally named "Upload #2" renders like the second "Upload", so tell the steps
+	// apart by StepName and StepOccurrence instead.
+	StepKey string
+	// StepOccurrence is N for the Nth step of the job named StepName, starting at 1.
+	StepOccurrence int
 	StepStatus     string
 	StepConclusion string
 	StartedAt      *time.Time
@@ -238,6 +242,7 @@ func stepRowsOf(job JobRow, steps []*github.TaskStep, runStarted *time.Time) []S
 			StepNumber:     step.GetNumber(),
 			StepName:       name,
 			StepKey:        StepKey(name, seen[name]),
+			StepOccurrence: seen[name],
 			StepStatus:     step.GetStatus(),
 			StepConclusion: step.GetConclusion(),
 			StartedAt:      started,

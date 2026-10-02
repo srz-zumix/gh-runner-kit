@@ -1,6 +1,6 @@
 import { svg } from "./charts.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
-import { displayStepName, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeRunnerFilter, splitLabelSet, timelineMatchesWorkflow } from "/shared/steps.mjs";
+import { displayStepName, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
 
 function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -33,11 +33,17 @@ function workflowFile(pathOrName) {
 
 let loading = false;
 let error = null;
-let selectedStepKey = "";
+// The id of the selected step statistic: repository, workflow file, job and step
+// occurrence, so steps sharing a display name in different jobs stay apart.
+let selectedStepId = "";
 let stepSorts = [{ key: "offset", direction: "asc" }];
 let runInput = "";
 let attemptInput = "";
 let stepRequestSeq = 0;
+let runTimelineSeq = 0;
+// The pending close request, which a following open waits for so that a late close
+// cannot clear or abort the run opened after it.
+let closingRunTimeline = Promise.resolve();
 const prefsByIdentity = new Map();
 const prefsLoading = new Set();
 
@@ -51,15 +57,6 @@ function workflowOptions(state) {
         if (!seen.has(value)) seen.set(value, label);
     }
     return [...seen.entries()].map(([value, label]) => ({ value, label }));
-}
-
-async function fetchJson(url, options) {
-    const response = await fetch(url, options);
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        throw new Error(body.reason ?? body.error ?? `Request failed with HTTP ${response.status}`);
-    }
-    return body;
 }
 
 const RUNNER_KIND_LABELS = { hosted: "GitHub-hosted", "self-hosted": "Self-hosted", unknown: "Unknown" };
@@ -127,8 +124,8 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         const stale = !timelineMatchesWorkflow(state.steps?.timeline, workflow);
         const { reuseRows: _reuse, ...settings } = body;
         state.steps = { ...(state.steps ?? {}), ...(stale ? { timeline: null, timelineRequest: null } : {}), status: "ready", settings, result };
-        if (!reuseRows || !(result.stepStats ?? []).some((row) => row.stepKey === selectedStepKey)) {
-            selectedStepKey = result.stepStats?.[0]?.stepKey ?? "";
+        if (!reuseRows || !(result.stepStats ?? []).some((row) => row.id === selectedStepId)) {
+            selectedStepId = result.stepStats?.[0]?.id ?? "";
         }
     } catch (caught) {
         if (seq === stepRequestSeq) error = caught.message;
@@ -143,6 +140,13 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
 async function openRunTimeline(state, run, repo = "", attemptValue = attemptInput) {
     const value = String(run ?? runInput ?? "").trim();
     if (!value) return;
+    // An organization target names no repository, so a bare run ID cannot be resolved.
+    if (state?.scope === "org" && !repo && !/^https?:\/\//i.test(value)) {
+        error = "This dashboard targets an organization; paste the run URL to open a run by hand.";
+        renderSoon();
+        return;
+    }
+    const seq = ++runTimelineSeq;
     loading = true;
     error = null;
     renderSoon();
@@ -152,13 +156,21 @@ async function openRunTimeline(state, run, repo = "", attemptValue = attemptInpu
     const attempt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     if (attempt) params.set("attempt", String(attempt));
     try {
-        const result = await fetchJson(`./api/run-timeline?${params}`);
+        await closingRunTimeline;
+        if (seq !== runTimelineSeq) return;
+        const response = await fetch(`./api/run-timeline?${params}`);
+        const result = await response.json().catch(() => ({}));
+        // A newer open or a close owns the panel; its response or the SSE snapshot renders.
+        if (seq !== runTimelineSeq || result.superseded) return;
+        if (!response.ok) throw new Error(result.reason ?? result.error ?? `Request failed with HTTP ${response.status}`);
         state.steps = { ...(state.steps ?? {}), timeline: result.timeline, timelineRequest: { run: value, repo, attempt } };
     } catch (caught) {
-        error = caught.message;
+        if (seq === runTimelineSeq) error = caught.message;
     } finally {
-        loading = false;
-        renderSoon();
+        if (seq === runTimelineSeq) {
+            loading = false;
+            renderSoon();
+        }
     }
 }
 
@@ -344,7 +356,9 @@ function typicalTimeline(result) {
             }));
         }
     }
-    return el("div", { class: "gantt", role: "img", "aria-label": "Typical step timeline" }, rows);
+    // A group rather than an image: an image role would hide the step names and
+    // durations inside from assistive technology.
+    return el("div", { class: "gantt", role: "group", "aria-label": "Typical step timeline" }, rows);
 }
 
 function sortedSteps(rows) {
@@ -374,9 +388,11 @@ function stepsTable(result) {
     const ordered = sortedSteps(rows);
     return el("table", { class: "steps-table" }, [
         el("thead", {}, [el("tr", {}, [stepHeader("Job", "job", "asc"), stepHeader("Step", "step", "asc"), stepHeader("p50", "p50"), stepHeader("p90", "p90"), stepHeader("CV", "cv"), stepHeader("Fail", "failure"), stepHeader("Share", "share"), stepHeader("Trend", "trend"), stepHeader("Presence", "presence")])]),
-        el("tbody", {}, ordered.map((row) => el("tr", { class: selectedStepKey === row.stepKey ? "row--selected" : "", onclick: () => { selectedStepKey = row.stepKey; renderSoon(); } }, [
+        el("tbody", {}, ordered.map((row) => el("tr", { class: selectedStepId === row.id ? "row--selected" : "", onclick: () => { selectedStepId = row.id; renderSoon(); } }, [
             el("td", { text: row.variantCount > 1 ? `${row.job} ×${row.variantCount}` : row.job }),
-            el("td", { class: "step-name", title: displayStepName(row.stepKey) === row.stepKey ? null : row.stepKey, text: displayStepName(row.stepKey) }),
+            // The step name is a button so the trend can be selected from the keyboard;
+            // its click bubbles to the row handler.
+            el("td", { class: "step-name" }, [el("button", { type: "button", class: "link-button", "aria-pressed": selectedStepId === row.id ? "true" : "false", title: displayStepName(row.stepKey) === row.stepKey ? "Show this step's trend" : row.stepKey, text: displayStepName(row.stepKey) })]),
             el("td", { class: "num", text: formatDuration(row.duration.p50) }),
             el("td", { class: "num", text: formatDuration(row.duration.p90) }),
             el("td", { class: "num", text: row.duration.cv ? row.duration.cv.toFixed(2) : "–" }),
@@ -443,7 +459,18 @@ function runTimeline(timeline, stats, workflow, onClose) {
     if (!timeline) return el("p", { class: "empty", text: "Open a run to show a single-run Gantt." });
     const jobs = timeline.Jobs ?? [];
     const sameWorkflow = timelineMatchesWorkflow(timeline, workflow);
-    const p90 = new Map(sameWorkflow ? (stats?.stepStats ?? []).map((row) => [`${row.job}${row.stepKey}`, row.duration.p90]) : []);
+    // Keyed by repository, the job name the run reports and the step id: a merged matrix
+    // statistic answers for each of its variants, and a step literally named "Upload #2"
+    // does not borrow the p90 of the second "Upload".
+    const p90Key = (repo, job, stepId) => JSON.stringify([repo, job, stepId]);
+    const p90 = new Map();
+    if (sameWorkflow) {
+        for (const row of stats?.stepStats ?? []) {
+            for (const job of row.variants?.length ? row.variants : [row.job]) {
+                p90.set(p90Key(row.repo, job, row.stepId ?? stepIdOf(row.stepName, row.stepKey)), row.duration.p90);
+            }
+        }
+    }
     const ms = (value) => Number(value) / 1e6 || 0;
     const max = Math.max(1000, ms(timeline.Duration), ...jobs.map((job) => ms(job.QueuedOffset) + ms(job.Wait) + ms(job.Duration)));
     const rows = [
@@ -478,7 +505,7 @@ function runTimeline(timeline, stats, workflow, onClose) {
         for (const step of job.Steps ?? []) {
             const offset = ms(step.Offset);
             const duration = ms(step.Duration);
-            const typical = p90.get(`${job.Name}${step.Key}`);
+            const typical = p90.get(p90Key(timeline.Repo ?? "", job.Name, stepIdOf(step.Name, step.Key, step.Occurrence)));
             const slow = duration > (typical ?? Infinity);
             const failed = ["failure", "timed_out", "cancelled"].includes(String(step.Conclusion ?? "").toLowerCase());
             rows.push(ganttStepRow({
@@ -489,17 +516,17 @@ function runTimeline(timeline, stats, workflow, onClose) {
             }));
         }
     }
-    return el("div", { class: "gantt gantt--run", role: "img", "aria-label": "Single-run Gantt" }, rows);
+    return el("div", { class: "gantt gantt--run", role: "group", "aria-label": "Single-run Gantt" }, rows);
 }
 
 async function closeRunTimeline(state) {
+    runTimelineSeq += 1;
+    loading = false;
     state.steps = { ...(state.steps ?? {}), timeline: null, timelineRequest: null };
     renderSoon();
-    try {
-        await fetch("./api/run-timeline", { method: "DELETE" });
-    } catch {
-        // The next SSE snapshot reconciles the panel if the request failed.
-    }
+    // The next SSE snapshot reconciles the panel if the request failed.
+    closingRunTimeline = fetch("./api/run-timeline", { method: "DELETE" }).then(() => {}, () => {});
+    await closingRunTimeline;
 }
 
 async function copyMermaid(timelineRequest) {
@@ -508,6 +535,8 @@ async function copyMermaid(timelineRequest) {
     if (timelineRequest.repo) params.set("repo", timelineRequest.repo);
     if (timelineRequest.attempt) params.set("attempt", String(timelineRequest.attempt));
     const response = await fetch(`./api/run-timeline?${params}`);
+    // A superseded copy answers with JSON rather than a diagram; leave the clipboard alone.
+    if (response.status === 409) return;
     const text = await response.text();
     await navigator.clipboard?.writeText(text);
 }
@@ -527,7 +556,7 @@ export function renderSteps(state) {
             .finally(() => prefsLoading.delete(state.identity));
     }
     const result = state?.steps?.result;
-    const step = (result?.stepStats ?? []).find((row) => row.stepKey === selectedStepKey) ?? result?.stepStats?.[0] ?? null;
+    const step = (result?.stepStats ?? []).find((row) => row.id === selectedStepId) ?? result?.stepStats?.[0] ?? null;
     return [
         controlPanel(state),
         footnote(result),

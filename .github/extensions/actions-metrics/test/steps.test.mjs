@@ -263,3 +263,95 @@ test("runner filter narrows statistics while pools and facets keep every runner"
     assert.deepEqual(filtered.runnerFacets.kinds.map((item) => item.value).sort(), ["hosted", "self-hosted"]);
     assert.deepEqual(filtered.runs.find((row) => row.runId === "102").runners, ["box-1"]);
 });
+
+test("a step literally named like an occurrence key stays apart", () => {
+    const literal = { ...step(1, "build", 101, 4, "Upload #2", 43, 45), StepKey: "Upload #2", StepOccurrence: 1 };
+    const second = { ...step(1, "build", 101, 5, "Upload", 41, 43), StepOccurrence: 2 };
+    // Without StepOccurrence the occurrence is recovered from the display key.
+    const { StepOccurrence: _, ...legacySecond } = second;
+    for (const rows of [[step(1, "build", 101, 3, "Upload", 37, 40), second, literal], [step(1, "build", 101, 3, "Upload", 37, 40), legacySecond, literal]]) {
+        const result = aggregateSteps({ jobs: [job(1, "build", 1, 51)], steps: rows });
+        assert.equal(result.stepStats.length, 3);
+        assert.equal(new Set(result.stepStats.map((row) => row.id)).size, 3);
+        assert.ok(result.stepStats.every((row) => row.samples === 1));
+        assert.equal(result.typicalTimeline[0].steps.length, 3);
+    }
+});
+
+test("workflow files sharing a display name stay apart", () => {
+    const other = (row) => ({ ...row, WorkflowPath: ".github/workflows/release.yml" });
+    const result = aggregateSteps({
+        jobs: [job(1, "build", 1, 51), other(job(2, "build", 1, 41))],
+        steps: [step(1, "build", 101, 2, "Compile", 6, 36), other(step(2, "build", 102, 2, "Compile", 6, 46))],
+    });
+    assert.equal(result.stepStats.length, 2);
+    assert.equal(result.jobStats.length, 2);
+    assert.deepEqual(result.jobStats.map((row) => row.workflowPath).sort(), [".github/workflows/build.yml", ".github/workflows/release.yml"]);
+});
+
+test("jobs without timestamps contribute no zero duration or wait", () => {
+    const queued = { ...job(2, "build", 1, 41), StartedAt: null, CompletedAt: null, Duration: 0, Wait: 0, Conclusion: "" };
+    const result = aggregateSteps({ jobs: [job(1, "build", 1, 51), queued], steps: [step(1, "build", 101, 2, "Compile", 6, 36)] });
+    const build = result.jobStats.find((row) => row.job === "build");
+    assert.equal(build.runs, 2);
+    assert.equal(build.duration.p50, 50_000);
+    assert.equal(build.wait.p50, 2_000);
+});
+
+test("job failure rate only counts decided jobs", () => {
+    const jobs = [job(1, "build", 1, 51, "failure"), job(2, "build", 1, 41, "cancelled"), job(3, "build", 1, 31, "skipped")];
+    const result = aggregateSteps({ jobs, steps: [] });
+    assert.equal(result.jobStats[0].failureRate, 1);
+    assert.equal(result.runners[0].failureRate, 1);
+});
+
+test("typical job offsets are sampled once per job", () => {
+    const late = (row) => ({ ...row, JobStartedAt: sec(21) });
+    const steps = [
+        step(1, "build", 101, 1, "A", 1, 2), step(1, "build", 101, 2, "B", 2, 3), step(1, "build", 101, 3, "C", 3, 4),
+        late(step(2, "build", 102, 1, "A", 21, 22)),
+        late(step(3, "build", 103, 1, "A", 21, 22)),
+    ];
+    const result = aggregateSteps({ jobs: [], steps });
+    assert.equal(result.typicalTimeline[0].startOffsetMs, 21_000);
+});
+
+test("aggregateSteps handles more timestamps than a call accepts as arguments", () => {
+    const steps = Array.from({ length: 70_000 }, (_, index) => step(index, "build", 1000 + index, 2, "Compile", 6, 36));
+    const result = aggregateSteps({ jobs: [], steps });
+    assert.ok(result.meta.newest);
+    assert.equal(result.meta.maxRunsPerRepo, 70_000);
+});
+
+test("maxRunsPerRepo counts runs per repository before the runner filter", () => {
+    const elsewhere = (row) => ({ ...row, Repo: "owner/other" });
+    const jobs = [job(1, "build", 1, 51), job(2, "build", 1, 41), elsewhere(job(3, "build", 1, 31))];
+    const result = aggregateSteps({ jobs, steps: [], runner: { name: "nobody" } });
+    assert.equal(result.meta.analysedRuns, 0);
+    assert.equal(result.meta.maxRunsPerRepo, 2);
+});
+
+test("runTimelineHost follows the host a run URL or repository names", async () => {
+    const { runTimelineHost } = await import("../lib/timeline.mjs");
+    const target = { kind: "repo", host: "ghe.example.com", owner: "o", name: "r" };
+    assert.equal(runTimelineHost({ target, run: "https://github.com/o/r/actions/runs/1" }), "github.com");
+    assert.equal(runTimelineHost({ target, repo: "other.example.com/o/r", run: "1" }), "other.example.com");
+    assert.equal(runTimelineHost({ target, repo: "o/r", run: "1" }), "ghe.example.com");
+    assert.equal(runTimelineHost({ target: null, run: "1" }), null);
+    assert.equal(runTimelineHost({ target, run: "https://ghe.internal:8443/o/r/actions/runs/1" }), "ghe.internal:8443");
+});
+
+test("stepIdOf tells a literal occurrence name from a repeated step", async () => {
+    const { stepIdOf } = await import("../shared/steps.mjs");
+    assert.notEqual(stepIdOf("Upload #2", "Upload #2"), stepIdOf("Upload", "Upload #2"));
+    assert.equal(stepIdOf("Upload", "Upload #2"), stepIdOf("Upload", "Upload #2", 2));
+    assert.equal(stepIdOf("Upload #2", "Upload #2", 1), stepIdOf("Upload #2", "Upload #2"));
+});
+
+test("reportsRunCapReached reads the truncated repository count from CLI stderr", async () => {
+    const { reportsRunCapReached } = await import("../lib/steprows.mjs");
+    assert.equal(reportsRunCapReached('time=x level=WARN msg="metrics: --max-runs was reached, so older runs were not collected" truncated_repos=2\n'), true);
+    assert.equal(reportsRunCapReached("level=WARN truncated_repos=0"), false);
+    assert.equal(reportsRunCapReached("level=INFO msg=progress"), false);
+    assert.equal(reportsRunCapReached(undefined), false);
+});

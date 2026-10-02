@@ -43,12 +43,19 @@ function readJsonLine(line, rows, counters) {
     return true;
 }
 
+// The CLI reports on stderr how many repositories reached --max-runs, because the
+// NDJSON rows have no place for it; an older CLI prints nothing and yields false.
+export function reportsRunCapReached(stderr) {
+    const match = /(?:^|\s)truncated_repos=(\d+)(?:\s|$)/m.exec(String(stderr ?? ""));
+    return Boolean(match && Number(match[1]) > 0);
+}
+
 async function streamCommand({ args, env, cwd, target, signal, onProgress, label }) {
     const rows = [];
     const counters = { malformed: 0 };
     onProgress?.(label);
     const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: target?.host ?? null });
-    return { rows, malformed: counters.malformed, truncated: Boolean(result.truncated) };
+    return { rows, malformed: counters.malformed, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
 }
 
 export async function collectStepMetrics({
@@ -126,7 +133,10 @@ export async function collectStepMetrics({
             limit,
             runner: runnerSelection,
         });
-        const truncated = steps.truncated || jobs.truncated || aggregate.meta.analysedRuns >= budget;
+        // The CLI reports the repositories that reached the run budget on stderr. The
+        // busiest repository of the unfiltered rows is the fallback for a CLI that does
+        // not, compared per repository because the budget applies to each of them.
+        const truncated = steps.truncated || jobs.truncated || aggregate.meta.maxRunsPerRepo >= budget;
         return {
             available: true,
             rows: { key: rowsKey, steps, jobs },

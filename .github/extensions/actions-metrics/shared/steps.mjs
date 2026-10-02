@@ -1,4 +1,4 @@
-import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, parseTime } from "./rows.mjs";
+import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, parseTime } from "./rows.mjs";
 
 const NS_PER_MS = 1e6;
 const INFRA_STEP_NAMES = new Set(["Set up job", "Complete job"]);
@@ -29,6 +29,54 @@ function keyOf(...parts) {
 
 export function stepKey(name, occurrence = 1) {
     return occurrence <= 1 ? String(name ?? "") : `${String(name ?? "")} #${occurrence}`;
+}
+
+// stepOccurrence recovers which occurrence of its name a step is. The CLI reports it
+// as StepOccurrence; older CLIs only report the display key, which is unambiguous
+// once read together with the step name.
+function stepOccurrence(occurrence, name, key) {
+    const reported = Number(occurrence);
+    if (Number.isInteger(reported) && reported >= 1) {
+        return reported;
+    }
+    const prefix = `${name} #`;
+    if (key !== name && key.startsWith(prefix)) {
+        const parsed = Number(key.slice(prefix.length));
+        if (Number.isInteger(parsed) && parsed >= 2) {
+            return parsed;
+        }
+    }
+    return 1;
+}
+
+// stepIdOf identifies a step inside its job from its name, its display key and the
+// occurrence the CLI reported, if any. A step literally named "Upload #2" shares its
+// display key with the second "Upload", but not its id.
+export function stepIdOf(name, key, occurrence) {
+    const stepName = String(name ?? "");
+    const displayKey = String(key ?? "") || stepName;
+    return keyOf(stepName, stepOccurrence(occurrence, stepName, displayKey));
+}
+
+// workflowIdentity tells two workflow files that share a display name apart.
+function workflowIdentity(row) {
+    return row.workflowPath || row.workflow;
+}
+
+function maxOf(values) {
+    let result = -Infinity;
+    for (const value of values) {
+        if (value > result) result = value;
+    }
+    return result;
+}
+
+function minOf(values) {
+    let result = Infinity;
+    for (const value of values) {
+        if (value < result) result = value;
+    }
+    return result;
 }
 
 export function isInfrastructureStep(name) {
@@ -95,9 +143,10 @@ export function matrixMergeMap(jobGroups) {
         if (!base) {
             continue;
         }
-        const key = keyOf(group.repo, group.workflow, base);
+        const workflow = group.workflowPath || group.workflow;
+        const key = keyOf(group.repo, workflow, base);
         if (!members.has(key)) {
-            members.set(key, { base, names: new Set(), repo: group.repo, workflow: group.workflow });
+            members.set(key, { base, names: new Set(), repo: group.repo, workflow });
         }
         members.get(key).names.add(group.jobName);
     }
@@ -117,8 +166,10 @@ export function normalizeJobRow(raw = {}, index = 0) {
     const queuedAt = parseTime(raw.QueuedAt);
     const startedAt = parseTime(raw.StartedAt);
     const completedAt = parseTime(raw.CompletedAt);
-    const durationMs = nsToMs(raw.Duration) ?? (startedAt !== null && completedAt !== null ? Math.max(0, completedAt - startedAt) : null);
-    const waitMs = nsToMs(raw.Wait) ?? (queuedAt !== null && startedAt !== null ? Math.max(0, startedAt - queuedAt) : null);
+    // The CLI reports a missing span as 0, so a duration or wait is only trusted when
+    // both of its timestamps are known; otherwise a queued job would read as instant.
+    const durationMs = startedAt !== null && completedAt !== null ? nsToMs(raw.Duration) ?? Math.max(0, completedAt - startedAt) : null;
+    const waitMs = queuedAt !== null && startedAt !== null ? nsToMs(raw.Wait) ?? Math.max(0, startedAt - queuedAt) : null;
     const repo = text(raw.Repo);
     const workflow = text(raw.Workflow);
     const workflowPath = text(raw.WorkflowPath);
@@ -166,6 +217,8 @@ export function normalizeStepRow(raw = {}, index = 0) {
     const workflowPath = text(raw.WorkflowPath);
     const jobName = text(raw.JobName);
     const stepName = text(raw.StepName);
+    const displayKey = text(raw.StepKey) || stepKey(stepName, 1);
+    const occurrence = stepOccurrence(raw.StepOccurrence, stepName, displayKey);
     const runId = id(raw.RunID);
     return {
         i: index,
@@ -191,7 +244,9 @@ export function normalizeStepRow(raw = {}, index = 0) {
         jobDurationMs: jobStartedAt !== null && jobCompletedAt !== null ? Math.max(0, jobCompletedAt - jobStartedAt) : null,
         stepNumber: Number(raw.StepNumber) || 0,
         stepName,
-        stepKey: text(raw.StepKey) || stepKey(stepName, 1),
+        stepKey: displayKey,
+        stepOccurrence: occurrence,
+        stepId: keyOf(stepName, occurrence),
         stepStatus: text(raw.StepStatus).toLowerCase(),
         stepConclusion: text(raw.StepConclusion).toLowerCase() || null,
         startedAt,
@@ -206,7 +261,7 @@ function groupJobName(row, mergeMap, mergeMatrix) {
     if (!mergeMatrix) {
         return row.jobName;
     }
-    return mergeMap.get(keyOf(row.repo, row.workflow, row.jobName)) ?? row.jobName;
+    return mergeMap.get(keyOf(row.repo, workflowIdentity(row), row.jobName)) ?? row.jobName;
 }
 
 function summarizeSamples(values) {
@@ -217,7 +272,7 @@ function summarizeSamples(values) {
         p75: percentile(clean, 75),
         p90: percentile(clean, 90),
         p95: percentile(clean, 95),
-        max: clean.length ? Math.max(...clean) : 0,
+        max: clean.length ? maxOf(clean) : 0,
         mean: mean(clean),
         cv: coefficientOfVariation(clean),
     };
@@ -355,10 +410,11 @@ function runnerPools(rows) {
     for (const row of rows) {
         const key = labelSetKey(row.labels);
         if (!pools.has(key)) {
-            pools.set(key, { key, labels: formatLabelSet(row.labels), kinds: new Map(), groups: new Map(), names: new Map(), jobs: 0, failed: 0, waits: [], durations: [] });
+            pools.set(key, { key, labels: formatLabelSet(row.labels), kinds: new Map(), groups: new Map(), names: new Map(), jobs: 0, decided: 0, failed: 0, waits: [], durations: [] });
         }
         const pool = pools.get(key);
         pool.jobs += 1;
+        if (isDecided(row.conclusion)) pool.decided += 1;
         if (row.failed) pool.failed += 1;
         countInto(pool.kinds, row.kind);
         countInto(pool.groups, row.runnerGroup);
@@ -375,7 +431,7 @@ function runnerPools(rows) {
         jobs: pool.jobs,
         wait: { p50: percentile(pool.waits, 50), p90: percentile(pool.waits, 90), samples: pool.waits.length },
         duration: { p50: percentile(pool.durations, 50), p90: percentile(pool.durations, 90), samples: pool.durations.length },
-        failureRate: pool.jobs > 0 ? pool.failed / pool.jobs : 0,
+        failureRate: pool.decided > 0 ? pool.failed / pool.decided : 0,
     })).sort((a, b) => b.jobs - a.jobs || a.labels.localeCompare(b.labels));
 }
 
@@ -406,12 +462,22 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
     const allStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
     // The matrix merge map and the runner facets come from every row, so narrowing the
     // runner filter neither renames jobs nor hides the choices needed to widen it again.
-    const mergeMap = matrixMergeMap(allJobRows.map((row) => ({ repo: row.repo, workflow: row.workflow, jobName: row.jobName })));
+    const mergeMap = matrixMergeMap(allJobRows.map((row) => ({ repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, jobName: row.jobName })));
     const facets = runnerFacets(allJobRows);
     const poolRows = allJobRows.filter((row) => !selectedJob || groupJobName(row, mergeMap, mergeMatrix) === selectedJob);
     const jobRows = allJobRows.filter((row) => matchRunner(row, runnerFilter));
     const stepRows = allStepRows.filter((row) => matchRunner(row, runnerFilter));
     const runIds = new Set([...jobRows, ...stepRows].map((row) => row.runId).filter(Boolean));
+    // The run budget caps every repository on its own and applies before the runner
+    // filter, so whether it was reached is read from the unfiltered rows per repository.
+    const collectedRuns = new Map();
+    for (const row of [...allJobRows, ...allStepRows]) {
+        if (!row.runId) continue;
+        if (!collectedRuns.has(row.repo)) collectedRuns.set(row.repo, new Set());
+        collectedRuns.get(row.repo).add(row.runId);
+    }
+    let maxRunsPerRepo = 0;
+    for (const runs of collectedRuns.values()) maxRunsPerRepo = Math.max(maxRunsPerRepo, runs.size);
     const allTimes = [...jobRows.flatMap((row) => [row.queuedAt, row.startedAt, row.completedAt]), ...stepRows.flatMap((row) => [row.runStartedAt, row.startedAt, row.completedAt])]
         .filter((value) => Number.isFinite(value));
     // PRESENCE only counts the jobs that ran at least one step, matching the CLI;
@@ -424,9 +490,11 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
     const jobWaits = new Map();
     const jobFailures = new Map();
     const runList = new Map();
+    const workflowNames = new Map();
     for (const row of jobRows) {
         const jobName = groupJobName(row, mergeMap, mergeMatrix);
-        const key = keyOf(row.repo, row.workflow, jobName);
+        const key = keyOf(row.repo, workflowIdentity(row), jobName);
+        if (!workflowNames.has(key)) workflowNames.set(key, { repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, job: jobName });
         jobRuns.set(key, (jobRuns.get(key) ?? 0) + 1);
         if (executedJobIds.has(row.jobId)) {
             jobCounts.set(key, (jobCounts.get(key) ?? 0) + 1);
@@ -440,13 +508,15 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         if (!jobFailures.has(key)) jobFailures.set(key, { failed: 0, total: 0 });
         if (Number.isFinite(row.durationMs)) jobDurations.get(key).push(row.durationMs);
         if (Number.isFinite(row.waitMs)) jobWaits.get(key).push(row.waitMs);
+        // Like the dashboard's other failure rates, only finished jobs with a success or
+        // failure conclusion count, so cancelled, skipped and running jobs do not dilute it.
         const failures = jobFailures.get(key);
-        failures.total += 1;
+        if (isDecided(row.conclusion)) failures.total += 1;
         if (row.failed) failures.failed += 1;
         // Carried-over jobs keep the attempt they ran in, so key by run and keep the
         // highest attempt, which is also the number of attempts the run has had.
         // Without a job filter, all jobs of a run collapse into one row.
-        const runKey = selectedJob ? keyOf(row.repo, row.workflow, jobName, row.runId) : keyOf(row.repo, row.workflow, row.runId);
+        const runKey = selectedJob ? keyOf(row.repo, workflowIdentity(row), jobName, row.runId) : keyOf(row.repo, workflowIdentity(row), row.runId);
         const current = runList.get(runKey) ?? { repo: row.repo, workflow: row.workflow, job: jobName, runId: row.runId, runAttempt: row.runAttempt, branch: row.branch, conclusion: row.conclusion, durationMs: 0, url: row.runUrl, jobs: 0, runners: [], labelSets: [] };
         if (row.runnerName && !current.runners.includes(row.runnerName)) current.runners.push(row.runnerName);
         const labels = formatLabelSet(row.labels);
@@ -468,20 +538,25 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         if (selectedJob && selectedJob !== jobName) {
             continue;
         }
-        const jobKey = keyOf(row.repo, row.workflow, jobName);
+        const jobKey = keyOf(row.repo, workflowIdentity(row), jobName);
         if (!jobTimeline.has(jobKey)) {
-            jobTimeline.set(jobKey, { repo: row.repo, workflow: row.workflow, job: jobName, queuedOffsets: [], startOffsets: [], endOffsets: [], steps: new Map() });
+            jobTimeline.set(jobKey, { repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, job: jobName, jobIds: new Set(), queuedOffsets: [], startOffsets: [], endOffsets: [], steps: new Map() });
         }
         const timeline = jobTimeline.get(jobKey);
-        if (Number.isFinite(row.runStartedAt)) {
+        // Every step row repeats its job's timestamps, so they are sampled once per job
+        // rather than weighting each job by how many steps it ran.
+        const jobIdentity = row.jobId || keyOf(row.runId, row.runAttempt, row.jobName);
+        if (Number.isFinite(row.runStartedAt) && !timeline.jobIds.has(jobIdentity)) {
+            timeline.jobIds.add(jobIdentity);
             if (Number.isFinite(row.jobQueuedAt)) timeline.queuedOffsets.push(Math.max(0, row.jobQueuedAt - row.runStartedAt));
             if (Number.isFinite(row.jobStartedAt)) timeline.startOffsets.push(Math.max(0, row.jobStartedAt - row.runStartedAt));
             if (Number.isFinite(row.jobCompletedAt)) timeline.endOffsets.push(Math.max(0, row.jobCompletedAt - row.runStartedAt));
         }
 
-        const key = keyOf(row.repo, row.workflow, jobName, row.stepKey);
+        const key = keyOf(jobKey, row.stepId);
         if (!accs.has(key)) {
             accs.set(key, {
+                id: key,
                 repo: row.repo,
                 workflow: row.workflow,
                 workflowPath: row.workflowPath,
@@ -489,6 +564,8 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
                 variants: [...(variants.get(jobKey) ?? new Set([row.jobName]))].sort(),
                 stepKey: row.stepKey,
                 stepName: row.stepName,
+                stepOccurrence: row.stepOccurrence,
+                stepId: row.stepId,
                 jobs: jobCounts.get(jobKey) ?? 0,
                 executed: 0,
                 skipped: 0,
@@ -519,10 +596,10 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             if (row.jobDurationMs > 0) {
                 acc.shares.push(Math.min(1, row.durationMs / row.jobDurationMs));
             }
-            if (!timeline.steps.has(row.stepKey)) {
-                timeline.steps.set(row.stepKey, { key: row.stepKey, name: row.stepName, offsets: [], durations: [], conclusions: [] });
+            if (!timeline.steps.has(row.stepId)) {
+                timeline.steps.set(row.stepId, { key: row.stepKey, id: row.stepId, name: row.stepName, offsets: [], durations: [], conclusions: [] });
             }
-            const step = timeline.steps.get(row.stepKey);
+            const step = timeline.steps.get(row.stepId);
             step.offsets.push(row.offsetMs);
             step.durations.push(row.durationMs);
             step.conclusions.push(row.stepConclusion || "");
@@ -535,6 +612,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         const jobs = Math.max(acc.jobs, acc.executed + acc.skipped);
         const trend = buildTrend(acc.samples);
         return {
+            id: acc.id,
             repo: acc.repo,
             workflow: acc.workflow,
             workflowPath: acc.workflowPath,
@@ -543,6 +621,8 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             variantCount: acc.variants.length,
             stepKey: acc.stepKey,
             stepName: acc.stepName,
+            stepOccurrence: acc.stepOccurrence,
+            stepId: acc.stepId,
             infrastructure: isInfrastructureStep(acc.stepName),
             jobs,
             executed: acc.executed,
@@ -561,18 +641,19 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         };
     });
 
-    stepStats.sort((a, b) => a.repo.localeCompare(b.repo) || a.workflow.localeCompare(b.workflow) || a.job.localeCompare(b.job) || a.offsetMs - b.offsetMs || a.stepKey.localeCompare(b.stepKey));
+    stepStats.sort((a, b) => a.repo.localeCompare(b.repo) || a.workflow.localeCompare(b.workflow) || a.workflowPath.localeCompare(b.workflowPath) || a.job.localeCompare(b.job) || a.offsetMs - b.offsetMs || a.stepKey.localeCompare(b.stepKey) || a.stepId.localeCompare(b.stepId));
     const totalSteps = stepStats.length;
     if (limit > 0) {
         stepStats = stepStats.slice(0, limit);
     }
 
     const jobStats = [...jobRuns.entries()].map(([key, count]) => {
-        const [repo, workflow, job] = key.split(FIELD_SEPARATOR);
+        const { repo, workflow, workflowPath, job } = workflowNames.get(key);
         const failures = jobFailures.get(key) ?? { failed: 0, total: 0 };
         return {
             repo,
             workflow,
+            workflowPath,
             job,
             variants: [...(variants.get(key) ?? new Set([job]))].sort(),
             runs: count,
@@ -585,6 +666,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
     const typicalTimeline = [...jobTimeline.values()].map((job) => ({
         repo: job.repo,
         workflow: job.workflow,
+        workflowPath: job.workflowPath,
         job: job.job,
         queuedOffsetMs: percentile(job.queuedOffsets, 50),
         startOffsetMs: percentile(job.startOffsets, 50),
@@ -593,6 +675,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             const duration = summarizeSamples(step.durations);
             return {
                 key: step.key,
+                id: step.id,
                 name: step.name,
                 offsetMs: percentile(step.offsets, 50),
                 offsetP25Ms: percentile(step.offsets, 25),
@@ -602,11 +685,13 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
                 failed: step.conclusions.some((value) => STEP_FAILURES.has(value)),
                 infrastructure: isInfrastructureStep(step.name),
             };
-        }).sort((a, b) => a.offsetMs - b.offsetMs || a.key.localeCompare(b.key)),
+        }).sort((a, b) => a.offsetMs - b.offsetMs || a.key.localeCompare(b.key) || a.id.localeCompare(b.id)),
     })).sort((a, b) => a.startOffsetMs - b.startOffsetMs || a.job.localeCompare(b.job));
 
-    const newest = allTimes.length ? Math.max(...allTimes) : null;
-    const oldest = allTimes.length ? Math.min(...allTimes) : null;
+    // A loop rather than a spread: a large collection holds more timestamps than a
+    // function call accepts as arguments.
+    const newest = allTimes.length ? maxOf(allTimes) : null;
+    const oldest = allTimes.length ? minOf(allTimes) : null;
     return {
         stepStats,
         jobStats,
@@ -616,6 +701,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId))).slice(0, 100),
         meta: {
             analysedRuns: runIds.size,
+            maxRunsPerRepo,
             oldest: oldest === null ? null : new Date(oldest).toISOString(),
             newest: newest === null ? null : new Date(newest).toISOString(),
             totalJobs: jobRows.length,

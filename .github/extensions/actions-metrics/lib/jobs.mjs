@@ -240,7 +240,7 @@ function streamLines(args, env, cwd, onLine, signal) {
             }
             if (stopped) {
                 // The row cap closed the stream, so a non-zero exit is expected.
-                resolve({ truncated: true });
+                resolve({ truncated: true, stderr });
                 return;
             }
             // A trailing row without its newline is still a row.
@@ -248,7 +248,7 @@ function streamLines(args, env, cwd, onLine, signal) {
                 onLine(pending);
             }
             if (code === 0) {
-                resolve({ truncated: false });
+                resolve({ truncated: false, stderr });
                 return;
             }
             const message = stderr.split("\n").map((line) => line.trim()).find((line) => line.startsWith("Error:"));

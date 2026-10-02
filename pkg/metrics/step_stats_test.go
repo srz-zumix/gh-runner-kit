@@ -138,3 +138,56 @@ func TestMatrixBaseName(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildStepStatsLiteralOccurrenceName(t *testing.T) {
+	data := stepData()
+	data.Jobs = []*github.WorkflowJob{
+		testStepJob(1, 2, 1, "build", "success", 0, 30,
+			testStep(1, "Upload", "success", 0, 10),
+			testStep(2, "Upload", "success", 10, 20),
+			testStep(3, "Upload #2", "success", 20, 30),
+		),
+	}
+	stats := BuildStepStats(data, StepRowOptions{}, StepStatOptions{})
+	if len(stats) != 3 {
+		t.Fatalf("got %d statistics, want 3: %+v", len(stats), stats)
+	}
+	for _, s := range stats {
+		if s.Samples != 1 {
+			t.Errorf("%s (%s, %d) aggregated %d samples, want 1", s.StepKey, s.StepName, s.StepOccurrence, s.Samples)
+		}
+	}
+}
+
+func TestBuildStepStatsSeparatesWorkflowFiles(t *testing.T) {
+	data := stepData()
+	data.Runs[1].Path = github.Ptr(".github/workflows/release.yml")
+	data.Jobs = []*github.WorkflowJob{
+		testStepJob(1, 1, 2, "build", "success", 0, 10, testStep(1, "Run", "success", 0, 10)),
+		testStepJob(2, 2, 1, "build", "success", 100, 120, testStep(1, "Run", "success", 100, 120)),
+	}
+	stats := BuildStepStats(data, StepRowOptions{}, StepStatOptions{})
+	if len(stats) != 2 {
+		t.Fatalf("got %d statistics, want 2: %+v", len(stats), stats)
+	}
+	for _, s := range stats {
+		if s.Workflow != "CI" || s.Jobs != 1 || s.Samples != 1 {
+			t.Errorf("statistic of %s = %+v", s.WorkflowPath, s)
+		}
+	}
+}
+
+func TestBuildStepStatsUnstartedStepIsNotExecuted(t *testing.T) {
+	data := stepData()
+	data.Jobs = []*github.WorkflowJob{
+		testStepJob(1, 2, 1, "build", "cancelled", 0, 10,
+			testStep(1, "Run", "success", 0, 10),
+			testStep(2, "Deploy", "", -1, -1),
+		),
+	}
+	stats := BuildStepStats(data, StepRowOptions{}, StepStatOptions{})
+	deploy := findStat(t, stats, "build", "Deploy")
+	if deploy.Executed != 0 || deploy.Skipped != 0 || deploy.Jobs != 1 {
+		t.Errorf("deploy counts = %+v", deploy)
+	}
+}

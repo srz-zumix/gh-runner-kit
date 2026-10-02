@@ -599,7 +599,7 @@ Unlike the aggregated reports the listing keeps the jobs that were skipped and t
 
 GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
 
-The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`.
+The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`. With `--format json` or `--format ndjson`, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
 Options:
 
@@ -829,9 +829,9 @@ gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type o
 
 Report how long each step of every job takes across the collected runs.
 
-Unlike `metrics jobs`, the default output is an aggregated table rather than JSON: one line per step of every job, keyed by workflow, job name and step. A step whose name repeats inside the same job is suffixed with a space and `#N`, so the occurrences are not merged. `RUNS` is how many jobs executed the step and `PRESENCE` how many of the selected jobs that is, `SKIPPED` how many skipped it and `FAILURE` the share of the executed steps that failed. `DUR P50`, `DUR P90` and `DUR MAX` describe the step duration, `SHARE` is the median fraction of the job duration the step took, and `OFFSET` the median time between the job start and the step start. The lines of a job are ordered by `OFFSET`, and a `REPO` column is added when the steps span several repositories.
+Unlike `metrics jobs`, the default output is an aggregated table rather than JSON: one line per step of every job, keyed by workflow file, job name and step. A step whose name repeats inside the same job is suffixed with a space and `#N`, so the occurrences are not merged. A workflow name shared by several workflow files is followed by the file in parentheses. `RUNS` is how many jobs started the step and `PRESENCE` how many of the selected jobs that is, `SKIPPED` how many skipped it and `FAILURE` the share of the started steps that failed. `DUR P50`, `DUR P90` and `DUR MAX` describe the step duration, `SHARE` is the median fraction of the job duration the step took, and `OFFSET` the median time between the job start and the step start. The lines of a job are ordered by `OFFSET`, and a `REPO` column is added when the steps span several repositories.
 
-`--format json` and `--format ndjson` instead write the steps unaggregated, one row each, with the identity of the job that ran them, so a downstream tool can build its own statistics. `--format ndjson` writes one row at a time and quotes the run and job IDs.
+`--format json` and `--format ndjson` instead write the steps unaggregated, one row each, with the identity of the job that ran them, so a downstream tool can build its own statistics. `StepOccurrence` is N for the Nth step of the job with that name, which tells a repeated step apart from one literally named like its `StepKey`. `--format ndjson` writes one row at a time and quotes the run and job IDs. With these formats, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
 The steps come from the same collection and the same local job cache as `metrics jobs`, so this issues no extra API request when it follows another `metrics` subcommand over the same window. GitHub only records step timestamps to the second, and lists the jobs of the latest attempt of every run.
 

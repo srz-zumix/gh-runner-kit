@@ -17,17 +17,28 @@ const (
 type StepStat struct {
 	Repo     string
 	Workflow string
+	// WorkflowPath is the workflow file the statistic belongs to. Two workflow files
+	// can share a display name, so the statistics are grouped by it rather than by
+	// Workflow.
+	WorkflowPath string
 	// JobName is the job the step belongs to. When matrix jobs are merged it is the
 	// name shared by every variant, without the trailing matrix values.
 	JobName string
 	// Variants is how many distinct job names were merged into JobName, which is 1
 	// unless matrix jobs were merged.
 	Variants int
-	StepKey  string
+	// StepKey is the display label of the step. StepName and StepOccurrence identify
+	// it, because a step literally named "Upload #2" shares its label with the second
+	// "Upload" of the job.
+	StepKey        string
+	StepName       string
+	StepOccurrence int
 	// Jobs is how many of the selected jobs could have run the step. It counts every
 	// job of JobName that ran at least one step, whether or not it ran this one.
 	Jobs int
-	// Executed is how many of those jobs ran the step rather than skipping it.
+	// Executed is how many of those jobs started the step. A step that was neither
+	// skipped nor started, such as one of a job that is still running or was
+	// cancelled before reaching it, counts as neither.
 	Executed int
 	Skipped  int
 	// Failed is how many of the executed occurrences failed.
@@ -74,10 +85,21 @@ type StepStatOptions struct {
 
 type stepStatKey struct {
 	repo, workflow, job, step string
+	occurrence                int
 }
 
+// jobGroupKey identifies a job of a workflow. workflow is the workflow file when it is
+// known and the display name otherwise, so two files sharing a name stay apart.
 type jobGroupKey struct {
 	repo, workflow, job string
+}
+
+// workflowIdentity is the workflow file when it is known, or the display name.
+func workflowIdentity(path, name string) string {
+	if path != "" {
+		return path
+	}
+	return name
 }
 
 // BuildStepStats aggregates the steps BuildStepRows would list for opts into one
@@ -108,7 +130,7 @@ func BuildStepStats(data *Data, opts StepRowOptions, statOpts StepStatOptions) [
 			continue
 		}
 		jobs = append(jobs, jobInfo{
-			key:      jobGroupKey{repo: job.Repo, workflow: job.Workflow, job: job.JobName},
+			key:      jobGroupKey{repo: job.Repo, workflow: workflowIdentity(job.WorkflowPath, job.Workflow), job: job.JobName},
 			duration: job.Duration,
 		})
 	}
@@ -147,17 +169,21 @@ func BuildStepStats(data *Data, opts StepRowOptions, statOpts StepStatOptions) [
 	}
 	accs := make(map[stepStatKey]*accumulator)
 	for _, row := range rows {
-		group, _ := rename(jobGroupKey{repo: row.Repo, workflow: row.Workflow, job: row.JobName})
-		key := stepStatKey{repo: group.repo, workflow: group.workflow, job: group.job, step: row.StepKey}
+		group, _ := rename(jobGroupKey{repo: row.Repo, workflow: workflowIdentity(row.WorkflowPath, row.Workflow), job: row.JobName})
+		occurrence := max(row.StepOccurrence, 1)
+		key := stepStatKey{repo: group.repo, workflow: group.workflow, job: group.job, step: row.StepName, occurrence: occurrence}
 		acc := accs[key]
 		if acc == nil {
 			acc = &accumulator{stat: StepStat{
-				Repo:     group.repo,
-				Workflow: group.workflow,
-				JobName:  group.job,
-				Variants: max(len(variants[group]), 1),
-				StepKey:  row.StepKey,
-				Jobs:     jobCounts[group],
+				Repo:           group.repo,
+				Workflow:       row.Workflow,
+				WorkflowPath:   row.WorkflowPath,
+				JobName:        group.job,
+				Variants:       max(len(variants[group]), 1),
+				StepKey:        row.StepKey,
+				StepName:       row.StepName,
+				StepOccurrence: occurrence,
+				Jobs:           jobCounts[group],
 			}}
 			accs[key] = acc
 		}
@@ -165,11 +191,14 @@ func BuildStepStats(data *Data, opts StepRowOptions, statOpts StepStatOptions) [
 			acc.stat.Skipped++
 			continue
 		}
+		if row.StartedAt == nil {
+			continue
+		}
 		acc.stat.Executed++
 		if row.StepConclusion == stepConclusionFailure {
 			acc.stat.Failed++
 		}
-		if row.StartedAt == nil || row.CompletedAt == nil {
+		if row.CompletedAt == nil {
 			continue
 		}
 		acc.stat.Samples++
@@ -209,9 +238,12 @@ func BuildStepStats(data *Data, opts StepRowOptions, statOpts StepStatOptions) [
 		return cmp.Or(
 			cmp.Compare(a.Repo, b.Repo),
 			cmp.Compare(a.Workflow, b.Workflow),
+			cmp.Compare(a.WorkflowPath, b.WorkflowPath),
 			cmp.Compare(a.JobName, b.JobName),
 			cmp.Compare(a.Offset, b.Offset),
 			cmp.Compare(a.StepKey, b.StepKey),
+			cmp.Compare(a.StepName, b.StepName),
+			cmp.Compare(a.StepOccurrence, b.StepOccurrence),
 		)
 	})
 

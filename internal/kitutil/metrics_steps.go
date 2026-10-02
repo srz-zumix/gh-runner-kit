@@ -39,7 +39,8 @@ func WriteMetricsStepsNDJSON(w io.Writer, rows []metrics.StepRow) error {
 }
 
 // RenderMetricsStepStats prints one line per step of every job. The REPO column is only
-// shown when the statistics span more than one repository.
+// shown when the statistics span more than one repository, and a workflow name is
+// followed by its file when several files of one repository share that name.
 func RenderMetricsStepStats(r *render.Renderer, stats []metrics.StepStat) error {
 	withRepo := false
 	for _, s := range stats {
@@ -47,6 +48,15 @@ func RenderMetricsStepStats(r *render.Renderer, stats []metrics.StepStat) error 
 			withRepo = true
 			break
 		}
+	}
+	type workflowName struct{ repo, name string }
+	paths := make(map[workflowName]map[string]bool)
+	for _, s := range stats {
+		key := workflowName{repo: s.Repo, name: s.Workflow}
+		if paths[key] == nil {
+			paths[key] = make(map[string]bool)
+		}
+		paths[key][s.WorkflowPath] = true
 	}
 
 	header := []string{"WORKFLOW", "JOB", "STEP", "RUNS", "PRESENCE", "SKIPPED", "FAILURE", "DUR P50", "DUR P90", "DUR MAX", "SHARE", "OFFSET"}
@@ -67,8 +77,12 @@ func RenderMetricsStepStats(r *render.Renderer, stats []metrics.StepStat) error 
 		if s.Samples > 0 {
 			share = FormatPercent(s.Share)
 		}
+		workflow := FormatOptional(s.Workflow)
+		if len(paths[workflowName{repo: s.Repo, name: s.Workflow}]) > 1 && s.WorkflowPath != "" {
+			workflow += " (" + s.WorkflowPath + ")"
+		}
 		row := []string{
-			FormatOptional(s.Workflow),
+			workflow,
 			job,
 			FormatOptional(s.StepKey),
 			strconv.Itoa(s.Executed),

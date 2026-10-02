@@ -60,9 +60,11 @@ type TimelineJob struct {
 
 // TimelineStep is one step of a TimelineJob.
 type TimelineStep struct {
-	Number      int64
-	Name        string
-	Key         string
+	Number int64
+	Name   string
+	Key    string
+	// Occurrence is N for the Nth step of the job named Name, starting at 1.
+	Occurrence  int
 	Status      string
 	Conclusion  string
 	StartedAt   *time.Time
@@ -184,6 +186,7 @@ func BuildRunTimeline(repo repository.Repository, run *github.WorkflowRun, jobs 
 				Number:      step.StepNumber,
 				Name:        step.StepName,
 				Key:         step.StepKey,
+				Occurrence:  step.StepOccurrence,
 				Status:      step.StepStatus,
 				Conclusion:  step.StepConclusion,
 				StartedAt:   step.StartedAt,

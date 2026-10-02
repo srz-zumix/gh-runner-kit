@@ -19,6 +19,7 @@ import {
     // which the panel echoes back, not the identity of the settings it was
     // drawn with.
     projectionId as projectionKey,
+    ROW_FIELDS,
     scopeOf,
     targetKey,
     targetOf,
@@ -69,6 +70,16 @@ export class DashboardInstance {
         // a runner filter change can re-aggregate without calling the CLI again.
         this.stepRowCache = null;
         this.stepGeneration = 0;
+        this.stepAbort = null;
+        // Which target and collection the step state was requested for, so a target or
+        // window change drops it instead of showing it under the new one.
+        this.stepBase = null;
+        this.runTimelineGeneration = 0;
+        this.runTimelineAbort = null;
+        // Aborted and replaced on every credential change, for the requests that do not
+        // claim a step or run timeline generation, such as a mermaid copy.
+        this.authAbort = new AbortController();
+        this.authUnsubscribe = this.store.onAuthChange?.(() => this.invalidateStepState()) ?? null;
         this.attach();
     }
     /** The display selector for this panel's target, shown in the UI and responses. */
@@ -140,6 +151,9 @@ export class DashboardInstance {
     dispose() {
         this.unsubscribe?.();
         this.unsubscribe = null;
+        this.authUnsubscribe?.();
+        this.authUnsubscribe = null;
+        this.resetStepState();
         this.rowUnsubscribe?.();
         this.rowUnsubscribe = null;
         this.dropTimeline();
@@ -193,6 +207,9 @@ export class DashboardInstance {
         const stored = this.store.snapshot(this.identity);
         if (this.timelineBase !== null && this.timelineBase !== this.baseKey(stored)) {
             this.dropTimeline();
+        }
+        if (this.stepBase !== null && this.stepBase !== this.stepBaseKey()) {
+            this.resetStepState();
         }
         return {
             instanceId: this.instanceId,
@@ -525,11 +542,48 @@ export class DashboardInstance {
     }
 
 
+    // stepBaseKey identifies the target and the settings that decide which step rows
+    // the CLI returns, so the step state is dropped once the panel shows another
+    // target or window, but survives a change that only redraws the fleet metrics.
+    stepBaseKey() {
+        const query = this.effectiveQuery;
+        const fields = ROW_FIELDS.filter((name) => name !== "rowBudget").map((name) => [name, query?.[name] ?? null]);
+        return JSON.stringify([this.identity, fields]);
+    }
+
+    // resetStepState supersedes every step and run timeline request in flight and drops
+    // the step state and its raw rows, without broadcasting.
+    resetStepState() {
+        this.stepGeneration += 1;
+        this.stepAbort?.abort();
+        this.stepAbort = null;
+        this.runTimelineGeneration += 1;
+        this.runTimelineAbort?.abort();
+        this.runTimelineAbort = null;
+        this.stepBase = null;
+        this.stepRowCache = null;
+        this.steps = { status: "idle", settings: null, result: null, error: null, timeline: null, mermaid: null };
+    }
+
+    // invalidateStepState drops the step state after a credential change: it was read
+    // under the previous token, which the new one may not be allowed to read.
+    invalidateStepState() {
+        this.authAbort.abort();
+        this.authAbort = new AbortController();
+        this.resetStepState();
+        this.broadcast();
+    }
+
     // beginStepRequest numbers a step collection so that a slower, older request cannot
-    // overwrite the result of a newer one when filters are applied in quick succession.
+    // overwrite the result of a newer one when filters are applied in quick succession,
+    // and aborts the request it supersedes so it stops spending API budget. Claim it
+    // before the first await so a request that started later always wins.
     beginStepRequest() {
         this.stepGeneration += 1;
-        return this.stepGeneration;
+        this.stepAbort?.abort();
+        this.stepAbort = new AbortController();
+        this.stepBase = this.stepBaseKey();
+        return { generation: this.stepGeneration, signal: this.stepAbort.signal };
     }
 
     isStaleStepRequest(generation) {
@@ -543,6 +597,7 @@ export class DashboardInstance {
         if (this.isStaleStepRequest(generation)) {
             return null;
         }
+        this.stepAbort = null;
         if (rows) {
             this.stepRowCache = rows;
         }
@@ -563,18 +618,38 @@ export class DashboardInstance {
         if (this.isStaleStepRequest(generation)) {
             return null;
         }
+        this.stepAbort = null;
         this.steps = { ...this.steps, status: "error", settings, error: error?.message ?? String(error) };
         this.broadcast();
         return this.state();
     }
 
-    setRunTimeline(request, timeline, mermaid = null) {
+    // beginRunTimeline numbers a single-run timeline request like beginStepRequest, so
+    // a slower, older run or one a close or credential change superseded cannot show.
+    beginRunTimeline() {
+        this.runTimelineGeneration += 1;
+        this.runTimelineAbort?.abort();
+        this.runTimelineAbort = new AbortController();
+        this.stepBase ??= this.stepBaseKey();
+        return { generation: this.runTimelineGeneration, signal: this.runTimelineAbort.signal };
+    }
+
+    // setRunTimeline shows a single-run timeline, or returns null when a newer request,
+    // a close or a credential change has superseded it.
+    setRunTimeline(request, timeline, mermaid = null, generation) {
+        if (generation !== undefined && generation !== this.runTimelineGeneration) {
+            return null;
+        }
+        this.runTimelineAbort = null;
         this.steps = { ...this.steps, status: "ready", timelineRequest: request, timeline, mermaid, error: null };
         this.broadcast();
         return this.state();
     }
 
     clearRunTimeline() {
+        this.runTimelineGeneration += 1;
+        this.runTimelineAbort?.abort();
+        this.runTimelineAbort = null;
         this.steps = { ...this.steps, timelineRequest: null, timeline: null, mermaid: null };
         this.broadcast();
         return this.state();

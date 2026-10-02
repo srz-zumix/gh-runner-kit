@@ -745,7 +745,7 @@ const canvas = createCanvas({
                     kind: "all",
                     runnerFilter: normalizeRunnerFilter({ kind: input.runnerKind, labels: input.runsOn, group: input.runnerGroup, name: input.runner }),
                 };
-                const generation = instance.beginStepRequest();
+                const { generation, signal } = instance.beginStepRequest();
                 let result;
                 try {
                     result = await collectStepMetrics({
@@ -756,6 +756,7 @@ const canvas = createCanvas({
                         ...settings,
                         reuseRows: input.reuseRows === true,
                         cache: instance.stepRowCache,
+                        signal,
                     });
                 } catch (error) {
                     instance.setStepError(settings, error, generation);
@@ -809,6 +810,7 @@ const canvas = createCanvas({
             handler: async (ctx) => {
                 const { instance } = panelFor(ctx.instanceId);
                 const query = instance.effectiveQuery;
+                const { generation, signal } = instance.beginRunTimeline();
                 let result;
                 try {
                     result = await collectRunTimeline({
@@ -818,6 +820,7 @@ const canvas = createCanvas({
                         run: ctx.input?.run ?? "",
                         attempt: Number(ctx.input?.attempt),
                         format: "json",
+                        signal,
                     });
                 } catch (error) {
                     throw new CanvasError("run_timeline_failed", error?.message ?? String(error));
@@ -825,7 +828,9 @@ const canvas = createCanvas({
                 if (result.available === false) {
                     throw new CanvasError("run_timeline_unavailable", result.reason);
                 }
-                instance.setRunTimeline({ run: ctx.input?.run ?? "", repo: ctx.input?.repo ?? "", attempt: ctx.input?.attempt ?? null }, result.timeline);
+                // The response still reflects this request even if a newer one, a close
+                // or a credential change superseded it in the panel.
+                instance.setRunTimeline({ run: ctx.input?.run ?? "", repo: ctx.input?.repo ?? "", attempt: ctx.input?.attempt ?? null }, result.timeline, null, generation);
                 return result.timeline;
             },
         },

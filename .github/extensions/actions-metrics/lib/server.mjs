@@ -133,9 +133,10 @@ async function handle(req, res, url, instance) {
                 return;
             }
             setCanvasGhToken(body.token.trim());
-            // The cached job lists and row snapshots were read under the old
-            // token; discard them so a following refresh collects afresh under
-            // the new credential instead of serving data it may no longer read.
+            // The cached job lists, row snapshots and every panel's step state were
+            // read under the old token; discard them so a following refresh collects
+            // afresh under the new credential instead of serving data it may no
+            // longer read.
             instance.store?.invalidateAuthCaches?.();
             sendJson(res, 200, { source: ghTokenSource() });
             return;
@@ -227,10 +228,12 @@ async function handle(req, res, url, instance) {
             limit: Number(body.limit) || 0,
             runnerFilter: normalizeRunnerFilter(body.runnerFilter),
         };
-        const prefs = await loadPrefs();
-        await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
-        const generation = instance.beginStepRequest();
+        // Claimed before the preferences are read and written, so a request that
+        // started later always supersedes this one however long the file I/O takes.
+        const { generation, signal } = instance.beginStepRequest();
         try {
+            const prefs = await loadPrefs();
+            await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
             const result = await collectStepMetrics({
                 target: targetOf(query),
                 filters: { ...filtersOf(query), ...(body.filters ?? {}) },
@@ -239,6 +242,7 @@ async function handle(req, res, url, instance) {
                 ...settings,
                 reuseRows: body.reuseRows === true,
                 cache: instance.stepRowCache,
+                signal,
             });
             const visible = instance.setStepMetrics(settings, result, generation);
             if (visible === null) {
@@ -263,6 +267,11 @@ async function handle(req, res, url, instance) {
     if (req.method === "GET" && url.pathname === "/api/run-timeline") {
         const query = instance.effectiveQuery;
         const format = url.searchParams.get("format") === "mermaid" ? "mermaid" : "json";
+        // Only the JSON request opens the run in the panel; a mermaid copy leaves the
+        // drawn run and its pending request alone.
+        const claim = format === "json" ? instance.beginRunTimeline() : null;
+        // A credential change still has to cancel a mermaid copy read under the old token.
+        const authSignal = instance.authAbort.signal;
         try {
             const result = await collectRunTimeline({
                 cwd: instance.store.cwd,
@@ -271,8 +280,13 @@ async function handle(req, res, url, instance) {
                 run: url.searchParams.get("run") ?? "",
                 attempt: Number(url.searchParams.get("attempt")),
                 format,
+                signal: claim?.signal ?? authSignal,
             });
             if (format === "mermaid") {
+                if (authSignal.aborted) {
+                    sendJson(res, 409, { available: false, superseded: true, reason: "The credential changed while the timeline was read." });
+                    return;
+                }
                 const text = result.body ?? "";
                 res.writeHead(result.available === false ? 424 : 200, {
                     "Content-Type": "text/plain; charset=utf-8",
@@ -282,11 +296,19 @@ async function handle(req, res, url, instance) {
                 res.end(text);
                 return;
             }
+            if (claim?.generation !== instance.runTimelineGeneration) {
+                sendJson(res, 409, { available: false, superseded: true, reason: "A newer run timeline request replaced this one." });
+                return;
+            }
             if (result.available !== false) {
-                instance.setRunTimeline({ run: url.searchParams.get("run") ?? "", repo: url.searchParams.get("repo") ?? "", attempt: Number(url.searchParams.get("attempt")) || null }, result.timeline);
+                instance.setRunTimeline({ run: url.searchParams.get("run") ?? "", repo: url.searchParams.get("repo") ?? "", attempt: Number(url.searchParams.get("attempt")) || null }, result.timeline, null, claim.generation);
             }
             sendJson(res, result.available === false ? 424 : 200, result);
         } catch (error) {
+            if (claim && claim.generation !== instance.runTimelineGeneration) {
+                sendJson(res, 409, { available: false, superseded: true, reason: "A newer run timeline request replaced this one." });
+                return;
+            }
             sendJson(res, 502, { available: false, reason: error?.message ?? String(error) });
         }
         return;

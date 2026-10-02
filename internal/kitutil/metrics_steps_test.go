@@ -75,4 +75,14 @@ func TestRenderMetricsStepStats(t *testing.T) {
 	if out := render1(stats); !strings.Contains(out, "octo/b") {
 		t.Errorf("several repositories should get a REPO column:\n%s", out)
 	}
+
+	stats[1].Repo = "octo/a"
+	stats[0].WorkflowPath = ".github/workflows/ci.yml"
+	stats[1].WorkflowPath = ".github/workflows/release.yml"
+	out = render1(stats)
+	for _, want := range []string{"CI (.github/workflows/ci.yml)", "CI (.github/workflows/release.yml)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("workflow files sharing a name should be told apart, missing %q:\n%s", want, out)
+		}
+	}
 }
