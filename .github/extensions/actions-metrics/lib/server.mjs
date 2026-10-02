@@ -6,6 +6,11 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ghTokenSource, setCanvasGhToken } from "./gh.mjs";
+import { collectStepMetrics } from "./steprows.mjs";
+import { normalizeRunnerFilter } from "../shared/steps.mjs";
+import { collectRunTimeline } from "./timeline.mjs";
+import { filtersOf, limitsOf, targetOf, targetKey } from "./query.mjs";
+import { loadPrefs, savePrefs } from "./prefs.mjs";
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_DIR = join(ROOT_DIR, "public");
@@ -198,6 +203,92 @@ async function handle(req, res, url, instance) {
         // Fire and forget: progress and the result arrive over SSE.
         void instance.project(request).catch(() => {});
         sendJson(res, 202, instance.state());
+        return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/step-prefs") {
+        const prefs = await loadPrefs();
+        sendJson(res, 200, prefs.stepTimelineByTarget?.[instance.identity] ?? {});
+        return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/steps") {
+        const body = await readBody(req);
+        const query = instance.effectiveQuery;
+        const settings = {
+            workflow: String(body.workflow ?? body.filters?.workflow ?? query.workflow ?? "").trim(),
+            job: String(body.job ?? "").trim(),
+            mergeMatrix: body.mergeMatrix !== false,
+            showInfra: body.showInfra !== false,
+            runBudget: body.runBudget,
+            kind: String(body.kind ?? "all").trim() || "all",
+            runner: String(body.runner ?? "").trim(),
+            excludeRunners: Array.isArray(body.excludeRunners) ? body.excludeRunners : [],
+            step: String(body.step ?? "").trim(),
+            limit: Number(body.limit) || 0,
+            runnerFilter: normalizeRunnerFilter(body.runnerFilter),
+        };
+        const prefs = await loadPrefs();
+        await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
+        const generation = instance.beginStepRequest();
+        try {
+            const result = await collectStepMetrics({
+                target: targetOf(query),
+                filters: { ...filtersOf(query), ...(body.filters ?? {}) },
+                limits: limitsOf(query),
+                cwd: instance.store.cwd,
+                ...settings,
+                reuseRows: body.reuseRows === true,
+                cache: instance.stepRowCache,
+            });
+            const visible = instance.setStepMetrics(settings, result, generation);
+            if (visible === null) {
+                sendJson(res, 409, { available: false, superseded: true, reason: "A newer step request replaced this one." });
+                return;
+            }
+            sendJson(res, visible.available === false ? 424 : 200, visible);
+        } catch (error) {
+            if (instance.setStepError(settings, error, generation) === null) {
+                sendJson(res, 409, { available: false, superseded: true, reason: "A newer step request replaced this one." });
+                return;
+            }
+            sendJson(res, 502, { available: false, reason: error?.message ?? String(error) });
+        }
+        return;
+    }
+    if (req.method === "DELETE" && url.pathname === "/api/run-timeline") {
+        instance.clearRunTimeline();
+        sendJson(res, 200, { cleared: true });
+        return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/run-timeline") {
+        const query = instance.effectiveQuery;
+        const format = url.searchParams.get("format") === "mermaid" ? "mermaid" : "json";
+        try {
+            const result = await collectRunTimeline({
+                cwd: instance.store.cwd,
+                target: targetOf(query),
+                repo: url.searchParams.get("repo") ?? "",
+                run: url.searchParams.get("run") ?? "",
+                attempt: Number(url.searchParams.get("attempt")),
+                format,
+            });
+            if (format === "mermaid") {
+                const text = result.body ?? "";
+                res.writeHead(result.available === false ? 424 : 200, {
+                    "Content-Type": "text/plain; charset=utf-8",
+                    "Cache-Control": "no-store",
+                    "Content-Length": Buffer.byteLength(text),
+                });
+                res.end(text);
+                return;
+            }
+            if (result.available !== false) {
+                instance.setRunTimeline({ run: url.searchParams.get("run") ?? "", repo: url.searchParams.get("repo") ?? "", attempt: Number(url.searchParams.get("attempt")) || null }, result.timeline);
+            }
+            sendJson(res, result.available === false ? 424 : 200, result);
+        } catch (error) {
+            sendJson(res, 502, { available: false, reason: error?.message ?? String(error) });
+        }
         return;
     }
     if (req.method === "GET" && url.pathname === "/api/runners") {

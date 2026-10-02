@@ -147,6 +147,29 @@ func (f *APIJobFetcher) Jobs(ctx context.Context, repo repository.Repository, ru
 	return jobs, err
 }
 
+// APIAttemptJobFetcher reads the jobs of exactly the attempt the run describes, rather
+// than the jobs the latest attempt reports, which also carry the jobs earlier attempts
+// ran and the latest one did not re-run.
+type APIAttemptJobFetcher struct {
+	client *gh.GitHubClient
+}
+
+// NewAPIAttemptJobFetcher builds an attempt-specific JobFetcher backed by client.
+func NewAPIAttemptJobFetcher(client *gh.GitHubClient) *APIAttemptJobFetcher {
+	return &APIAttemptJobFetcher{client: client}
+}
+
+// Jobs implements JobFetcher.
+func (f *APIAttemptJobFetcher) Jobs(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, error) {
+	var jobs []*github.WorkflowJob
+	err := withRetry(ctx, func() error {
+		var err error
+		jobs, err = gh.ListWorkflowJobsAttempt(ctx, f.client, repo, run.GetID(), int64(run.GetRunAttempt()))
+		return err
+	})
+	return jobs, err
+}
+
 // CachedJobFetcher serves job lists from disk before falling back to inner.
 // Only completed runs are cached, because the job list of a run still in progress keeps
 // changing and would otherwise be frozen at its first observation.
@@ -154,12 +177,21 @@ type CachedJobFetcher struct {
 	inner   JobFetcher
 	cache   *Cache
 	refresh bool
+	load    func(repo repository.Repository, runID int64, attempt int) ([]*github.WorkflowJob, bool)
+	save    func(repo repository.Repository, runID int64, attempt int, jobs []*github.WorkflowJob) error
 }
 
 // NewCachedJobFetcher wraps inner with cache. refresh ignores existing entries and
-// rewrites them from the API.
+// rewrites them from the API. inner must list the jobs the latest attempt reports.
 func NewCachedJobFetcher(inner JobFetcher, cache *Cache, refresh bool) *CachedJobFetcher {
-	return &CachedJobFetcher{inner: inner, cache: cache, refresh: refresh}
+	return &CachedJobFetcher{inner: inner, cache: cache, refresh: refresh, load: cache.LoadJobs, save: cache.SaveJobs}
+}
+
+// NewCachedAttemptJobFetcher wraps an attempt-specific inner fetcher, such as
+// APIAttemptJobFetcher, with cache. Its entries are stored apart from the ones
+// NewCachedJobFetcher writes, because the two listings differ for a re-run.
+func NewCachedAttemptJobFetcher(inner JobFetcher, cache *Cache, refresh bool) *CachedJobFetcher {
+	return &CachedJobFetcher{inner: inner, cache: cache, refresh: refresh, load: cache.LoadAttemptJobs, save: cache.SaveAttemptJobs}
 }
 
 // Jobs implements JobFetcher.
@@ -169,8 +201,8 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	attempt := run.GetRunAttempt()
 
 	if cacheable && !f.refresh {
-		if jobs, ok := f.cache.LoadJobs(repo, runID, attempt); ok {
-			logger.Debug("metrics: job cache hit", "run_id", runID)
+		if jobs, ok := f.load(repo, runID, attempt); ok {
+			logger.Debug("metrics: job cache hit", "run_id", runID, "attempt", attempt)
 			return jobs, nil
 		}
 	}
@@ -181,11 +213,52 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	}
 
 	if cacheable {
-		if err := f.cache.SaveJobs(repo, runID, attempt, jobs); err != nil {
+		if err := f.save(repo, runID, attempt, jobs); err != nil {
 			logger.Debug("metrics: failed to cache jobs", "run_id", runID, "error", err)
 		}
 	}
 	return jobs, nil
+}
+
+// FetchRunAttempt reads one attempt of a workflow run. An attempt of 0 or less reads the
+// latest attempt. The returned run describes that attempt, including when it started.
+func FetchRunAttempt(ctx context.Context, client *gh.GitHubClient, repo repository.Repository, runID int64, attempt int) (*github.WorkflowRun, error) {
+	var run *github.WorkflowRun
+	err := withRetry(ctx, func() error {
+		var err error
+		if attempt <= 0 {
+			run, err = gh.GetWorkflowRunByID(ctx, client, repo, runID)
+		} else {
+			run, err = gh.GetWorkflowRunAttempt(ctx, client, repo, runID, attempt, nil)
+		}
+		return err
+	})
+	return run, err
+}
+
+// FetchJobAttempt reads which attempt of a workflow run a job belongs to. A job URL does
+// not name its attempt, and every attempt gives its jobs new IDs, so a job of an earlier
+// attempt is missing from the job list of the latest one.
+func FetchJobAttempt(ctx context.Context, client *gh.GitHubClient, repo repository.Repository, runID, jobID int64) (int, error) {
+	var job *github.WorkflowJob
+	err := withRetry(ctx, func() error {
+		var err error
+		job, err = gh.GetWorkflowJobByID(ctx, client, repo, jobID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return JobAttempt(job, runID)
+}
+
+// JobAttempt returns the run attempt a job belongs to, after checking that the job is
+// part of the workflow run runID.
+func JobAttempt(job *github.WorkflowJob, runID int64) (int, error) {
+	if job.GetRunID() != runID {
+		return 0, fmt.Errorf("job %d belongs to workflow run %d, not %d", job.GetID(), job.GetRunID(), runID)
+	}
+	return int(job.GetRunAttempt()), nil
 }
 
 // Collector gathers the workflow runs, jobs and runners a metrics command needs.

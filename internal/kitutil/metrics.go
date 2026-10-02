@@ -415,7 +415,13 @@ func (m *MetricsFlags) usageFetcher(client *gh.GitHubClient) metrics.UsageFetche
 
 // cache opens the on-disk cache, reporting false when it is disabled or unusable.
 func (m *MetricsFlags) cache() (*metrics.Cache, bool) {
-	if m.NoCache {
+	return OpenMetricsCache(m.NoCache)
+}
+
+// OpenMetricsCache opens the on-disk metrics cache, reporting false when noCache
+// disables it or it is unusable.
+func OpenMetricsCache(noCache bool) (*metrics.Cache, bool) {
+	if noCache {
 		return nil, false
 	}
 

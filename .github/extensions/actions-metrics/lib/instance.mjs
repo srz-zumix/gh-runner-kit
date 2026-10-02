@@ -26,6 +26,7 @@ import {
 import { exportFleet, hasExcludeRunner, hasJobRows } from "./runnerkit.mjs";
 import { collectRunnerTimeline, compileExclusions } from "./jobs.mjs";
 import { sortByCriteria, validateSorts } from "../shared/sort.mjs";
+import { timelineMatchesWorkflow } from "../shared/steps.mjs";
 
 /** Hard ceiling on one page of runners, so a crafted query cannot ask for all of them at once. */
 const MAX_PAGE = 200;
@@ -63,6 +64,11 @@ export class DashboardInstance {
         // they never enter the state that is pushed on every progress line.
         this.rowSignature = null;
         this.rowUnsubscribe = null;
+        this.steps = { status: "idle", settings: null, result: null, error: null, timeline: null, mermaid: null };
+        // Raw CLI rows of the latest step collection, kept out of the broadcast state so
+        // a runner filter change can re-aggregate without calling the CLI again.
+        this.stepRowCache = null;
+        this.stepGeneration = 0;
         this.attach();
     }
     /** The display selector for this panel's target, shown in the UI and responses. */
@@ -213,6 +219,7 @@ export class DashboardInstance {
             timelineError: this.timelineError,
             timelineRequest: this.timelineRequest,
             rows: this.rowState(),
+            steps: this.steps,
         };
     }
 
@@ -515,6 +522,62 @@ export class DashboardInstance {
                 unidentified: row.unidentified,
             })),
         };
+    }
+
+
+    // beginStepRequest numbers a step collection so that a slower, older request cannot
+    // overwrite the result of a newer one when filters are applied in quick succession.
+    beginStepRequest() {
+        this.stepGeneration += 1;
+        return this.stepGeneration;
+    }
+
+    isStaleStepRequest(generation) {
+        return generation !== undefined && generation !== this.stepGeneration;
+    }
+
+    // setStepMetrics stores a step collection and returns the result without its raw
+    // rows, or null when a newer request has superseded it.
+    setStepMetrics(settings, result, generation) {
+        const { rows, ...visible } = result ?? {};
+        if (this.isStaleStepRequest(generation)) {
+            return null;
+        }
+        if (rows) {
+            this.stepRowCache = rows;
+        }
+        const stale = !timelineMatchesWorkflow(this.steps.timeline, settings?.workflow);
+        this.steps = {
+            ...this.steps,
+            ...(stale ? { timeline: null, timelineRequest: null, mermaid: null } : {}),
+            status: visible?.available === false ? "error" : "ready",
+            settings,
+            result: visible,
+            error: visible?.available === false ? visible.reason : null,
+        };
+        this.broadcast();
+        return visible;
+    }
+
+    setStepError(settings, error, generation) {
+        if (this.isStaleStepRequest(generation)) {
+            return null;
+        }
+        this.steps = { ...this.steps, status: "error", settings, error: error?.message ?? String(error) };
+        this.broadcast();
+        return this.state();
+    }
+
+    setRunTimeline(request, timeline, mermaid = null) {
+        this.steps = { ...this.steps, status: "ready", timelineRequest: request, timeline, mermaid, error: null };
+        this.broadcast();
+        return this.state();
+    }
+
+    clearRunTimeline() {
+        this.steps = { ...this.steps, timelineRequest: null, timeline: null, mermaid: null };
+        this.broadcast();
+        return this.state();
     }
 
     /**

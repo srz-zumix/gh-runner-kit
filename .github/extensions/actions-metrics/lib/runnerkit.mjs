@@ -124,6 +124,7 @@ export async function probeRunnerKit(cwd) {
                     available: false,
                     version: null,
                     subcommands: new Set(),
+                    jobSubcommands: new Set(),
                     flags: new Set(),
                     reason: `gh runner-kit metrics is unavailable: ${describe(error)}`,
                 };
@@ -135,6 +136,12 @@ export async function probeRunnerKit(cwd) {
                 // The version banner is cosmetic.
             }
             const subcommands = parseSubcommands(help);
+            let jobSubcommands = new Set();
+            try {
+                jobSubcommands = parseSubcommands(await ghRaw(["runner-kit", "job", "--help"], { cwd }));
+            } catch {
+                // Builds before the job command cannot render this help.
+            }
             // The repository filters live on each subcommand rather than on the
             // `metrics` parent, so the flag set is read off one representative
             // subcommand and applied to all of them. Passing a flag a older
@@ -145,7 +152,7 @@ export async function probeRunnerKit(cwd) {
             } catch {
                 // An unreadable flag list only costs the optional filters.
             }
-            return { available: true, version, subcommands, flags, reason: null };
+            return { available: true, version, subcommands, jobSubcommands, flags, reason: null };
         })();
     }
     return probeOnce;
@@ -931,6 +938,83 @@ export function jobRowsCommand({ target, filters, limits, pattern = "", exclusio
         args.push("--limit", String(limit));
     }
     return { args, env: hostEnv(target) };
+}
+
+
+
+/** Command for one `gh runner-kit metrics steps` run, as NDJSON for streaming aggregation. */
+export function stepRowsCommand({
+    target,
+    filters,
+    limits,
+    workflow,
+    runBudget,
+    labels,
+    pattern = "",
+    exclusions = [],
+    kind = "all",
+    jobs = [],
+    steps = [],
+    limit = 0,
+    probe = null,
+}) {
+    const scopedFilters = { ...filters, workflow: workflow || filters?.workflow || "" };
+    const scopedLimits = Number.isFinite(runBudget) ? { ...limits, maxRuns: Math.max(0, Math.floor(runBudget)) } : limits;
+    const args = baseArgs("steps", { target, filters: scopedFilters, limits: scopedLimits, force: false, probe }, "ndjson");
+    args.push("--kind", kind);
+    for (const label of Array.isArray(labels) ? labels : Array.isArray(filters?.labels) ? filters.labels : []) {
+        args.push("--label", label);
+    }
+    if (pattern) {
+        args.push("--runner", pattern);
+    }
+    for (const exclusion of Array.isArray(exclusions) ? exclusions : []) {
+        args.push("--exclude-runner", exclusion);
+    }
+    for (const job of Array.isArray(jobs) ? jobs : []) {
+        if (job) {
+            args.push("--job", job);
+        }
+    }
+    for (const step of Array.isArray(steps) ? steps : []) {
+        if (step) {
+            args.push("--step", step);
+        }
+    }
+    if (limit > 0) {
+        args.push("--limit", String(limit));
+    }
+    return { args, env: hostEnv(target) };
+}
+
+/** Command for `gh runner-kit job timeline`. */
+export function runTimelineCommand({ repo, run, attempt, format = "json", target = null, refresh = false } = {}) {
+    const args = ["runner-kit", "job", "timeline", String(run ?? ""), "--format", format];
+    // A run URL already names its repository, and the CLI rejects a conflicting --repo.
+    const isUrl = /^https?:\/\//i.test(String(run ?? "").trim());
+    const repoName = repo || (!isUrl && target?.kind === "repo" ? formatTarget(target) : "");
+    if (repoName) {
+        args.push("--repo", repoName);
+    }
+    if (Number.isFinite(attempt) && attempt > 0) {
+        args.push("--attempt", String(Math.floor(attempt)));
+    }
+    if (refresh) {
+        args.push("--refresh");
+    }
+    return { args, env: target ? hostEnv(target) : null };
+}
+
+/** Whether the installed `gh runner-kit` carries `metrics steps`. */
+export async function hasStepRows(cwd) {
+    const probe = await probeRunnerKit(cwd);
+    return probe.available && probe.subcommands.has("steps");
+}
+
+/** Whether the installed `gh runner-kit` carries `job timeline`. */
+export async function hasRunTimeline(cwd) {
+    const probe = await probeRunnerKit(cwd);
+    return probe.available && probe.jobSubcommands?.has("timeline");
 }
 
 /** Whether the installed `gh runner-kit` carries the `metrics jobs` subcommand. */

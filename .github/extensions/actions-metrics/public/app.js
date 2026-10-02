@@ -1,3 +1,4 @@
+import { renderSteps } from "./steps.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
 import {
     FIELD_GROUPS,
@@ -2791,6 +2792,11 @@ function renderContent() {
         tab.setAttribute("aria-selected", String(tab.dataset.tab === activeTab));
     }
 
+    if (activeTab === "steps") {
+        dom.content.replaceChildren(...renderSteps(state).filter(Boolean), authenticationSettingsCard());
+        return;
+    }
+
     if (activeTab === "explore") {
         // Checked ahead of the metrics gate: the explorer reads its own row
         // collection, so it has something to show even when no fleet metrics
@@ -3081,6 +3087,8 @@ dom.queryForm.addEventListener("submit", (event) => {
         });
 });
 
+document.addEventListener("actions-metrics:render", () => render());
+
 document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
         return;
@@ -3103,7 +3111,12 @@ for (const tab of dom.tabs) {
     tab.addEventListener("click", () => {
         activeTab = tab.dataset.tab;
         render();
-        if (activeTab === "explore") {
+        if (activeTab === "steps") {
+        dom.content.replaceChildren(...renderSteps(state).filter(Boolean), authenticationSettingsCard());
+        return;
+    }
+
+    if (activeTab === "explore") {
             // Opening the tab is what asks for the rows: collecting them for a
             // reader who never opens it would spend the API budget on a tab
             // that is not on screen.

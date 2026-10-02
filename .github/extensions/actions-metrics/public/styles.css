@@ -1439,3 +1439,229 @@ button.heat__name--pick:hover {
 [hidden] {
     display: none !important;
 }
+
+/* Step timeline */
+.gantt {
+    --gantt-name: minmax(140px, 32%);
+    --gantt-dur: 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px 12px;
+    background: var(--background-color-default, #fff);
+    border: 1px solid var(--border-color-default, #d0d7de);
+    border-radius: 6px;
+    font-size: var(--text-body-small, 12px);
+    line-height: 20px;
+}
+.gantt--run {
+    margin-top: 12px;
+}
+.gantt__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.gantt__title {
+    font-weight: var(--font-weight-semibold, 600);
+}
+.gantt__close {
+    flex: none;
+}
+.link-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--true-color-blue, #0969da);
+    cursor: pointer;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+}
+.link-button:hover {
+    text-decoration: underline;
+}
+.runs-table .row--selected {
+    background: var(--background-color-muted, rgba(175, 184, 193, 0.12));
+}
+.runs-table__retried {
+    color: var(--true-color-orange, #bc4c00);
+    font-weight: var(--font-weight-semibold, 600);
+}
+.gantt__group {
+    margin-top: 8px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border-color-default, #d0d7de);
+    font-weight: var(--font-weight-semibold, 600);
+}
+.gantt__row {
+    display: grid;
+    grid-template-columns: var(--gantt-name) 1fr var(--gantt-dur);
+    align-items: center;
+    column-gap: 10px;
+    min-height: 22px;
+    border-radius: 4px;
+}
+.gantt__row:not(.gantt__row--axis):hover {
+    background: var(--background-color-muted, rgba(175, 184, 193, 0.12));
+}
+.gantt__row--job {
+    margin-top: 8px;
+}
+.gantt__name {
+    display: -webkit-box;
+    overflow: hidden;
+    padding-left: 4px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+.gantt__name--job {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-weight: var(--font-weight-semibold, 600);
+}
+.gantt__jobname,
+.gantt__runner {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.gantt__runner {
+    color: var(--text-color-muted, #6e7781);
+    font-weight: normal;
+    font-size: 11px;
+    line-height: 14px;
+}
+.controls--runner {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-color-default, #d0d7de);
+}
+.controls__label {
+    font-weight: var(--font-weight-semibold, 600);
+}
+.runners-table__labels {
+    font-family: var(--font-mono, "SFMono-Regular", Consolas, "Liberation Mono", monospace);
+    font-size: var(--text-code-inline, 12px);
+    overflow-wrap: anywhere;
+}
+.runners-table__row--selectable {
+    cursor: pointer;
+}
+.runners-table__row--selectable:hover,
+.runners-table .row--selected {
+    background: var(--background-color-muted, rgba(175, 184, 193, 0.12));
+}
+.runners-table--compact {
+    margin-top: 12px;
+}
+.runners-table caption {
+    padding-bottom: 4px;
+    color: var(--text-color-muted, #6e7781);
+    text-align: left;
+}
+.runs-table__runner {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.gantt__row:not(.gantt__row--job) .gantt__name {
+    padding-left: 12px;
+}
+.gantt__dur {
+    color: var(--text-color-muted, #6e7781);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.gantt__track,
+.gantt__ticks {
+    position: relative;
+    height: 22px;
+}
+.gantt__track {
+    background:
+        linear-gradient(to right, var(--border-color-default, #d0d7de) 1px, transparent 1px) 0 0 / 25% 100% repeat-x;
+    border-right: 1px solid var(--border-color-default, #d0d7de);
+}
+.gantt__tick {
+    position: absolute;
+    top: 0;
+    color: var(--text-color-muted, #6e7781);
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+.gantt__tick:first-child {
+    transform: none;
+}
+.gantt__tick:last-child {
+    transform: translateX(-100%);
+}
+.gantt__bar,
+.gantt__range,
+.gantt__wait,
+.gantt__jobspan {
+    position: absolute;
+    box-sizing: border-box;
+}
+.gantt__bar {
+    top: 4px;
+    height: 14px;
+    border-radius: 3px;
+    background: var(--true-color-blue, #0969da);
+}
+.gantt__bar--infra {
+    background: var(--text-color-muted, #6e7781);
+}
+.gantt__bar--failed,
+.gantt__bar--slow {
+    background: var(--true-color-red, #cf222e);
+}
+.gantt__range {
+    top: 10px;
+    height: 2px;
+    background: var(--text-color-muted, #6e7781);
+    opacity: 0.5;
+}
+.gantt__wait {
+    top: 5px;
+    height: 12px;
+    border: 1px dashed var(--true-color-blue, #0969da);
+    border-radius: 3px;
+    background: var(--true-color-blue-muted, #ddf4ff);
+}
+.gantt__jobspan {
+    top: 5px;
+    height: 12px;
+    border-radius: 3px;
+    background: var(--true-color-blue, #0969da);
+    opacity: 0.35;
+}
+.steps-table .step-name {
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.steps-table tbody tr {
+    cursor: pointer;
+}
+.steps-table tbody tr:hover,
+.steps-table .row--selected {
+    background: var(--background-color-muted, rgba(175, 184, 193, 0.12));
+}
+.trend__p50 {
+    fill: var(--true-color-blue, #0969da);
+}
+.trend__p90 {
+    fill: var(--true-color-red, #cf222e);
+}
+.notice--warn {
+    border-color: var(--true-color-red-muted, #ffebe9);
+}

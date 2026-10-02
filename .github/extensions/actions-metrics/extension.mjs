@@ -21,11 +21,17 @@ import {
     querySchema,
     scopeOf,
     targetKey,
+    targetOf,
+    filtersOf,
+    limitsOf,
     validateQuery,
 } from "./lib/query.mjs";
 import { DashboardInstance } from "./lib/instance.mjs";
 import { startInstanceServer } from "./lib/server.mjs";
-import { loadPrefs } from "./lib/prefs.mjs";
+import { loadPrefs, savePrefs } from "./lib/prefs.mjs";
+import { collectStepMetrics } from "./lib/steprows.mjs";
+import { normalizeRunnerFilter } from "./shared/steps.mjs";
+import { collectRunTimeline } from "./lib/timeline.mjs";
 
 /** instanceId -> { instance, server, url } */
 const panels = new Map();
@@ -700,6 +706,127 @@ const canvas = createCanvas({
                         busyTimeMs: bucket.busyTimeMs,
                     })),
                 };
+            },
+        },
+
+        {
+            name: "get_step_metrics",
+            description:
+                "Collect and read the Step timeline statistics for one workflow file across many recent runs. Uses `gh runner-kit metrics steps --format ndjson` plus `metrics jobs` for denominators, so `workflow` must be a workflow file name such as ci.yml or an ID, not the display name.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    workflow: { type: "string", description: "Workflow file name/path or ID, for example ci.yml. Defaults to the dashboard workflow filter when set." },
+                    job: { type: "string", description: "Optional job name or merged matrix base to focus on." },
+                    section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns per runs-on pool job counts, wait, duration and failure rate." },
+                    limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum rows returned in the requested section. Defaults to 50." },
+                    mergeMatrix: { type: "boolean", description: "Merge matrix job variants when at least two variants share a base name. Defaults to true." },
+                    showInfra: { type: "boolean", description: "Include Set up job, Complete job and Post-* steps. Defaults to true." },
+                    runBudget: { type: "integer", minimum: 1, maximum: 5000, description: "Newest runs per repository to sample with --max-runs. Defaults to 500." },
+                    runnerKind: { type: "string", enum: ["all", "self-hosted", "github-hosted"], description: "Keep only the jobs of this runner kind. Defaults to all." },
+                    runsOn: { type: "string", description: "Keep only the jobs whose runs-on label set equals this comma-separated set, ignoring order and case, for example self-hosted,linux." },
+                    runnerGroup: { type: "string", description: "Keep only the jobs that ran in this runner group." },
+                    runner: { type: "string", description: "Keep only the jobs that ran on a runner whose name matches this pattern; * matches any characters. Hosted runners are named GitHub Actions." },
+                    reuseRows: { type: "boolean", description: "Re-aggregate the rows of the previous collection instead of calling the CLI again when the workflow and run budget are unchanged. Defaults to false." },
+                },
+                additionalProperties: false,
+            },
+            handler: async (ctx) => {
+                const { instance } = panelFor(ctx.instanceId);
+                const state = await settled(instance);
+                const query = instance.effectiveQuery;
+                const input = ctx.input ?? {};
+                const settings = {
+                    workflow: input.workflow ?? query.workflow ?? "",
+                    job: input.job ?? "",
+                    mergeMatrix: input.mergeMatrix !== false,
+                    showInfra: input.showInfra !== false,
+                    runBudget: input.runBudget,
+                    kind: "all",
+                    runnerFilter: normalizeRunnerFilter({ kind: input.runnerKind, labels: input.runsOn, group: input.runnerGroup, name: input.runner }),
+                };
+                const generation = instance.beginStepRequest();
+                let result;
+                try {
+                    result = await collectStepMetrics({
+                        target: targetOf(query),
+                        filters: filtersOf(query),
+                        limits: limitsOf(query),
+                        cwd: instance.store.cwd,
+                        ...settings,
+                        reuseRows: input.reuseRows === true,
+                        cache: instance.stepRowCache,
+                    });
+                } catch (error) {
+                    instance.setStepError(settings, error, generation);
+                    throw new CanvasError("step_metrics_failed", error?.message ?? String(error));
+                }
+                // The response still reflects this request even if a newer one replaced
+                // it in the panel.
+                const { rows: _rows, ...visible } = result ?? {};
+                instance.setStepMetrics(settings, result, generation);
+                result = visible;
+                const prefs = await loadPrefs();
+                await savePrefs({ stepTimelineByTarget: { ...(prefs.stepTimelineByTarget ?? {}), [targetKey(query)]: settings } });
+                if (result.available === false) {
+                    throw new CanvasError("step_metrics_unavailable", result.reason);
+                }
+                const cap = Math.min(Math.max(Number(input.limit) || 50, 1), 200);
+                const section = input.section ?? "steps";
+                return {
+                    target: state.key,
+                    workflow: result.workflow,
+                    job: result.job,
+                    meta: result.meta,
+                    runnerFilter: result.runnerFilter,
+                    ...(section === "jobs" ? { jobs: result.jobStats.slice(0, cap) } : {}),
+                    ...(section === "runners" ? { runners: result.runners.slice(0, cap), runnerFacets: result.runnerFacets } : {}),
+                    ...(section === "timeline" ? { timeline: result.typicalTimeline.slice(0, cap) } : {}),
+                    ...(section === "trend"
+                        ? { trends: result.stepStats.slice(0, cap).map((row) => ({ job: row.job, stepKey: row.stepKey, trend: row.trend })) }
+                        : {}),
+                    // Raw per-run samples are only useful for the trend section; omit them elsewhere to keep the response small.
+                    ...(section === "steps"
+                        ? { steps: result.stepStats.slice(0, cap).map(({ trend, ...row }) => ({ ...row, trend: trend ? { firstP50Ms: trend.firstP50Ms, secondP50Ms: trend.secondP50Ms, deltaP50Ms: trend.deltaP50Ms } : trend })) }
+                        : {}),
+                };
+            },
+        },
+        {
+            name: "show_run_timeline",
+            description:
+                "Open a single workflow run as a job/step Gantt timeline in the Step timeline tab and return the parsed JSON from `gh runner-kit job timeline --format json`. The run may be an ID or a GitHub Actions run URL.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    run: { type: "string", description: "Workflow run ID or URL. Required." },
+                    repo: { type: "string", description: "Repository in [HOST/]OWNER/REPO form. Optional when the dashboard target is a repository or the run is a URL." },
+                    attempt: { type: "integer", minimum: 1, description: "Run attempt. Defaults to the latest attempt, or the attempt in the URL." },
+                },
+                required: ["run"],
+                additionalProperties: false,
+            },
+            handler: async (ctx) => {
+                const { instance } = panelFor(ctx.instanceId);
+                const query = instance.effectiveQuery;
+                let result;
+                try {
+                    result = await collectRunTimeline({
+                        cwd: instance.store.cwd,
+                        target: targetOf(query),
+                        repo: ctx.input?.repo ?? "",
+                        run: ctx.input?.run ?? "",
+                        attempt: Number(ctx.input?.attempt),
+                        format: "json",
+                    });
+                } catch (error) {
+                    throw new CanvasError("run_timeline_failed", error?.message ?? String(error));
+                }
+                if (result.available === false) {
+                    throw new CanvasError("run_timeline_unavailable", result.reason);
+                }
+                instance.setRunTimeline({ run: ctx.input?.run ?? "", repo: ctx.input?.repo ?? "", attempt: ctx.input?.attempt ?? null }, result.timeline);
+                return result.timeline;
             },
         },
         {
