@@ -194,6 +194,20 @@ test("run list shows one row per run unless a job is selected", () => {
     assert.deepEqual(filtered.map((row) => [row.runId, row.job]), [["600", "lint"]]);
 });
 
+test("run list conclusion does not depend on job order", () => {
+    const conclusionOf = (jobs) => aggregateSteps({ jobs, steps: [] }).runs.find((row) => row.runId === "700").conclusion;
+    const ok = { ...job(1, "build", 1, 11), RunID: "700" };
+    const cancelled = { ...job(2, "lint", 1, 5, "cancelled"), RunID: "700" };
+    const failed = { ...job(3, "test", 1, 5, "failure"), RunID: "700" };
+    const running = { ...job(4, "deploy", 1, 5, ""), RunID: "700" };
+    assert.equal(conclusionOf([ok, cancelled]), "cancelled");
+    assert.equal(conclusionOf([cancelled, ok]), "cancelled");
+    assert.equal(conclusionOf([cancelled, failed, ok]), "failure");
+    assert.equal(conclusionOf([ok, failed, cancelled]), "failure");
+    assert.equal(conclusionOf([ok, running]), null);
+    assert.equal(conclusionOf([running, ok]), null);
+});
+
 test("runTimelineCommand lets a run URL name its own repository", () => {
     const target = { kind: "repo", nwo: "owner/repo", owner: "owner", name: "repo", host: null };
     const { args } = runTimelineCommand({ target, run: "https://github.com/other/repo/actions/runs/123", format: "json" });

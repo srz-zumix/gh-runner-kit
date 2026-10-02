@@ -86,7 +86,9 @@ export function parseCollectionWarning(line) {
     return message.slice(METRICS_WARNING_PREFIX.length);
 }
 
-async function streamCommand({ args, env, cwd, target, signal, onProgress, label }) {
+// A report reading a local snapshot through --input makes no API request, so it passes
+// gated=false and still renders after metrics collect spent the remaining budget.
+async function streamCommand({ args, env, cwd, target, signal, onProgress, label, gated = true }) {
     const rows = [];
     const counters = { malformed: 0 };
     const warnings = [];
@@ -97,7 +99,7 @@ async function streamCommand({ args, env, cwd, target, signal, onProgress, label
             warnings.push(warning);
         }
     };
-    const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: target?.host ?? null, onStderrLine });
+    const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: gated ? target?.host ?? null : undefined, onStderrLine });
     return { rows, malformed: counters.malformed, warnings, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
 }
 
@@ -110,8 +112,8 @@ async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, s
         onProgress?.(`Collecting up to ${budget} runs of ${workflowFile} with metrics collect`);
         const collect = snapshotCommand({ ...common, output: input });
         await ghRaw(collect.args, { cwd, env: collect.env, host: target?.host ?? null, signal });
-        const steps = await streamCommand({ ...stepRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading the steps of ${workflowFile}` });
-        const jobs = await streamCommand({ ...jobRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}` });
+        const steps = await streamCommand({ ...stepRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading the steps of ${workflowFile}`, gated: false });
+        const jobs = await streamCommand({ ...jobRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}`, gated: false });
         return { steps, jobs };
     } finally {
         await rm(dir, { recursive: true, force: true });

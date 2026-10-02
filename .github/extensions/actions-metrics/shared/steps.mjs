@@ -457,6 +457,23 @@ function runnerFacets(rows) {
     };
 }
 
+// The run list reports one conclusion per run whatever order its jobs arrive in: any
+// failure wins, then cancellation, and an unfinished job (null) outranks a success so
+// a run that is still going never reads as successful. Unknown values rank last.
+const RUN_CONCLUSION_RANK = ["failure", "timed_out", "startup_failure", "cancelled", "action_required", "stale", null, "success", "neutral", "skipped"];
+
+function conclusionRank(conclusion) {
+    const rank = RUN_CONCLUSION_RANK.indexOf(conclusion ?? null);
+    return rank === -1 ? RUN_CONCLUSION_RANK.length : rank;
+}
+
+function outranksConclusion(candidate, current) {
+    const left = conclusionRank(candidate);
+    const right = conclusionRank(current);
+    if (left !== right) return left < right;
+    return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
+}
+
 export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {} } = {}) {
     const runnerFilter = normalizeRunnerFilter(runner);
     const allJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
@@ -525,7 +542,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         current.runAttempt = Math.max(current.runAttempt, row.runAttempt);
         current.durationMs += row.durationMs ?? 0;
         current.jobs += 1;
-        if (row.failed) current.conclusion = row.conclusion;
+        if (outranksConclusion(row.conclusion, current.conclusion)) current.conclusion = row.conclusion;
         runList.set(runKey, current);
     }
 
