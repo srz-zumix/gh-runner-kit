@@ -317,6 +317,38 @@ Options:
 | `--owner` | current repository owner | Select an organization by owner name |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 
+### Show when every job and step of a workflow run ran
+
+```sh
+gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] [--job PATTERN]... [--show-waiting=false] [--no-cache] [--refresh] [--format json|mermaid|table] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Show when every job and step of one workflow run attempt ran, on a time axis that starts when the attempt started, like [Kesin11/actions-timeline](https://github.com/Kesin11/actions-timeline) does.
+
+The `<RUN>` argument is required. It is a run ID or the URL of a run, of one of its attempts or of one of its jobs, such as `https://github.com/OWNER/REPO/actions/runs/RUN_ID/attempts/2`. A run ID takes the repository from `--repo` or the current directory. A job URL keeps only that job and, unless `--attempt` is given, shows the attempt the job belongs to.
+
+The default table lists every job with its runner wait and duration, followed by its steps, with `OFFSET` measured from the start of the attempt. `--format mermaid` writes a Mermaid Gantt chart with one section per job, an `active` bar for the time the job waited for a runner and one bar per step, marked `crit` when it failed, which renders directly in a GitHub Markdown file or a job summary. `--format json` writes the whole timeline with durations in nanoseconds and the run and job IDs quoted.
+
+`--attempt` selects an earlier attempt than the latest one, and only the jobs of that attempt are shown. The jobs of a completed attempt are cached on disk, like the `metrics` subcommands do.
+
+```sh
+gh runner-kit job timeline https://github.com/OWNER/REPO/actions/runs/RUN_ID --format mermaid >> "$GITHUB_STEP_SUMMARY"
+```
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--attempt` | latest attempt | Show this attempt of the run instead of the latest one. Must agree with the attempt in a `<RUN>` URL |
+| `--format` | `table` | Output format: `{json\|mermaid\|table}` |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires `--format json` |
+| `--job` | all jobs | Keep only the jobs whose name matches this pattern, which accepts a `*` wildcard (repeatable) |
+| `--no-cache` | `false` | Do not read or write the cached jobs of the run |
+| `--refresh` | `false` | Ignore the cached jobs of the run and fetch them again |
+| `-R`, `--repo` | repository of `<RUN>`, or the current repository | Select a repository using the `[HOST/]OWNER/REPO` format. Must agree with the repository in a `<RUN>` URL |
+| `--show-waiting` | `true` | Show how long every job waited for a runner |
+| `-t`, `--template` | - | Format JSON output using a Go template. Requires `--format json` |
+
 ### Recommend how many runners each runs-on label set needs
 
 ```sh
@@ -567,7 +599,7 @@ Unlike the aggregated reports the listing keeps the jobs that were skipped and t
 
 GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
 
-The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`.
+The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`. With `--format json` or `--format ndjson`, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
 Options:
 
@@ -786,6 +818,58 @@ Options:
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
+| `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+### Report how long each step of every job takes
+
+```sh
+gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--job PATTERN]... [--step PATTERN]... [--merge-matrix] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+Report how long each step of every job takes across the collected runs.
+
+Unlike `metrics jobs`, the default output is an aggregated table rather than JSON: one line per step of every job, keyed by workflow file, job name and step. A step whose name repeats inside the same job is suffixed with a space and `#N`, so the occurrences are not merged. A workflow name shared by several workflow files is followed by the file in parentheses. `RUNS` is how many jobs started the step and `PRESENCE` how many of the selected jobs that is, `SKIPPED` how many skipped it and `FAILURE` the share of the started steps that failed or timed out. `DUR P50`, `DUR P90` and `DUR MAX` describe the step duration, `SHARE` is the median fraction of the job duration the step took, and `OFFSET` the median time between the job start and the step start. The lines of a job are ordered by `OFFSET`, and a `REPO` column is added when the steps span several repositories.
+
+`--format json` and `--format ndjson` instead write the steps unaggregated, one row each, with the identity of the job that ran them, so a downstream tool can build its own statistics. `StepOccurrence` is N for the Nth step of the job with that name, which tells a repeated step apart from one literally named like its `StepKey`. `--format ndjson` writes one row at a time and quotes the run and job IDs. With these formats, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
+
+The steps come from the same collection and the same local job cache as `metrics jobs`, so this issues no extra API request when it follows another `metrics` subcommand over the same window. GitHub only records step timestamps to the second, and lists the jobs of the latest attempt of every run.
+
+`--job` and `--step` keep the jobs and the steps whose name matches the pattern, where `*` stands for any sequence of characters, including a slash. A step filter does not change the `PRESENCE` denominator, which still counts every selected job.
+
+`--merge-matrix` folds the variants of a matrix job, such as `test (ubuntu, 1.22)` and `test (macos, 1.22)`, into one job named `test`, shown with the number of variants as `test [x2]`. A job name is only folded when another job of the same workflow shares its prefix. It only applies to the table.
+
+The output of a busy organization is large. To bound the API requests rather than the output, combine `--workflow` with `--max-runs`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
+| `--branch` | all branches | Keep only the workflow runs of this branch |
+| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--event` | all events | Keep only the workflow runs triggered by this event |
+| `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
+| `--exclude-runner` | - | Drop the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and it wins over `--runner` |
+| `--format` | `table` | Output format: `{json\|ndjson\|table}` |
+| `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
+| `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires an explicit `--format json` |
+| `--job` | all jobs | Keep only the jobs whose name matches this pattern, which accepts a `*` wildcard (repeatable) |
+| `--kind` | `all` | Keep only the jobs of this runner kind: `{all\|self-hosted\|github-hosted}` |
+| `--label` | all label sets | Keep only the jobs requesting this label. Repeatable, and a job must carry every one of them |
+| `--limit` | `0` | Stop after this many rows with `--format json\|ndjson`, or this many table lines, which still aggregates every step. `0` keeps everything |
+| `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
+| `--merge-matrix` | `false` | Fold the variants of a matrix job into one job in the table |
+| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--runner` | all runners | Keep only the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and a job matching any of them is kept |
+| `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
+| `--step` | all steps | Keep only the steps whose name matches this pattern, which accepts a `*` wildcard (repeatable) |
+| `-t`, `--template` | - | Format JSON output using a Go template. Requires an explicit `--format json` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 

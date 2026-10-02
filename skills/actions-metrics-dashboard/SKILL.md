@@ -8,7 +8,7 @@ description: Open and drive the Actions metrics dashboard, the Copilot CLI canva
 Reference for the `actions-metrics` canvas extension shipped in this repository
 at `.github/extensions/actions-metrics/`. It collects the `gh runner-kit
 metrics` reports over a single window, renders them as a dashboard, and exposes
-every number it shows as structured JSON.
+every number it shows as structured JSON. It also has a Step timeline tab for per-step workflow timing statistics and single-run job/step Gantt timelines.
 
 ## Dashboard or CLI
 
@@ -64,12 +64,39 @@ before paging; their single-column sort toggles between two directions.
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
+| `show_run_timeline` | Show one workflow run ID or URL as a job/step Gantt in the Step timeline tab. Inputs: required `run`, optional `repo`, optional `attempt`. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 
 `trace_runner` takes exactly one of `query` (a name fragment, or a pattern
 carrying `*`), `all` (every runner, the expensive path) or `clear` (restore the
 fleet-wide chart). `exclude` is not one of the three; it narrows whichever of
 the first two runs.
+
+## Step timeline
+
+Use the **Step timeline** tab when the user asks which steps are slow, flaky,
+skipped, moving later in time, or consuming most of a job. It requires a
+current `gh runner-kit` binary with `metrics steps` and `job timeline`; if those
+commands are missing, tell the user to update `gh runner-kit` and do not treat
+the empty tab as evidence that no steps ran.
+
+Important workflow rule: `metrics steps --workflow` expects the workflow file
+name or ID (`ci.yml`, not the display name `Build and Test`). Prefer the
+workflow path already present in dashboard workflow rows; use its basename for
+collection. The tab samples newest runs with `--max-runs`, so always mention
+the reported run count, observed range and truncation flag when summarising.
+
+`get_step_metrics` returns the aggregated data and updates the tab selection.
+The `section` input controls whether the response focuses `steps`, `jobs`,
+`timeline`, `trend`, or `runners`; omitted fields inherit the dashboard target and filters.
+The runner inputs filter jobs after collection; pass `reuseRows: true` to
+re-aggregate the rows already collected without calling the CLI again. Use
+`section: "runners"` to compare `runs-on` pools (wait/run percentiles, failure
+rate) and mention `meta.unfilteredJobs` when a runner filter is active.
+`show_run_timeline` opens a single run, keeps waiting bars, and returns the CLI
+JSON. Use it for a run ID or URL the user names, or after selecting a run from
+the Step timeline run list.
 
 ## Target and scope
 

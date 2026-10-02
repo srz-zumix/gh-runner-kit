@@ -13,7 +13,7 @@ The CLI answers one question per invocation and prints a table. This panel runs 
   gh extension install srz-zumix/gh-runner-kit
   ```
 
-  The panel probes the installed binary and names the reports it cannot run, so an older version degrades rather than fails.
+  The panel probes the installed binary and names the reports it cannot run, so an older version degrades rather than fails. The **Step timeline** tab needs a build that provides `gh runner-kit metrics steps` and `gh runner-kit job timeline`; older builds show an update notice for that tab while the rest of the dashboard continues to work.
 
 Reading self-hosted runner inventories needs the runner scopes; without them the panel still reports everything derived from workflow runs and jobs, and says which inventory it had to skip.
 
@@ -35,8 +35,45 @@ Ask Copilot to open the dashboard, or open the **Actions metrics** canvas from t
 | **Self-hosted runners** | The registered fleet, how busy each runner was, and the labels they carry. |
 | **Queue & capacity** | Queue time per runs-on label set, label demand against capacity, and the pool size each label set needs to hold a target wait. |
 | **Runner activity** | Concurrency over time, a per-runner busy heatmap, and one small chart per runner so a single runner's day can be read on its own. |
+| **Step timeline** | Per-step statistics across the newest runs of one workflow file, a typical Gantt timeline, trends, run samples, and a single-run job/step Gantt with waiting bars. |
 | **Job explorer** | Raw job rows projected in the browser, with faceted filters that apply instantly. |
 | **Usage & cost** | Billable time GitHub-hosted runners consumed, split by runner class, and the estimated cost per workflow. |
+
+## Step timeline
+
+The **Step timeline** tab samples the newest runs of one workflow file with
+`gh runner-kit metrics steps --format ndjson --workflow <file> --max-runs <N>`
+and streams `metrics jobs --format ndjson` over the same slice for job
+denominators. The workflow selector uses workflow file names, such as `ci.yml`;
+GitHub display names like `Build and Test` are not accepted by the CLI. The
+footnote always reports how many runs were analysed, the observed time range,
+whether the run budget truncated the sample, and that GitHub's latest-attempt
+job listing is the basis.
+
+The tab groups matrix jobs by their base name only when at least two variants
+share that base. Infrastructure steps (`Set up job`, `Complete job`, and names starting with `Post` followed by a space) can be hidden. Durations come from GitHub's
+second-precision step timestamps, so sub-second values are displayed as `<1s`.
+A run ID or Actions run URL opens the single-run Gantt through
+`gh runner-kit job timeline`; the **Copy mermaid** button asks the CLI for the
+Mermaid output of the same run.
+
+The **Runner** row filters the sampled jobs by runner kind (self-hosted or
+GitHub-hosted), `runs-on` label set, runner group and runner name (`*`
+wildcards). Filter changes re-aggregate the rows already collected instead of
+calling the CLI again; **Load steps** always fetches fresh rows. The
+**Runners** card groups jobs by `runs-on` label set with wait and run
+percentiles and the failure rate, and clicking a row toggles that label set as
+the filter. The selected step is also broken down by label set, the run list
+shows the runners of each run, and the single-run Gantt shows each job's
+runner name and group.
+
+HTTP endpoints used by the tab:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/step-prefs` | Read per-target Step timeline preferences. |
+| `POST /api/steps` | Collect and aggregate step statistics for a workflow file. |
+| `GET /api/run-timeline?run=<id-or-url>&attempt=<n>` | Return one run's timeline JSON. Add `format=mermaid` for Mermaid text. |
 
 ## Table sorting
 
@@ -69,6 +106,8 @@ The panel stops sending requests to a host as soon as one of them is refused for
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally focusing a job, merging matrix variants, hiding infrastructure steps, filtering by runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
+| `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as Prometheus text or JSON. |
 
 A section that could not be collected reports why rather than returning zeros, so the agent can tell "nothing ran" apart from "this was never measured".

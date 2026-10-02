@@ -213,6 +213,19 @@ func WarnMetricsWarnings(warnings []string) {
 	}
 }
 
+// MetricsTruncatedReposKey is the stderr attribute WarnMetricsTruncatedRepos writes, so a
+// caller streaming a machine-readable listing can tell that the --max-runs cap was reached.
+const MetricsTruncatedReposKey = "truncated_repos"
+
+// WarnMetricsTruncatedRepos reports on stderr how many repositories reached the --max-runs
+// cap, which a machine-readable listing cannot carry without changing its row schema.
+func WarnMetricsTruncatedRepos(truncated int) {
+	if truncated <= 0 {
+		return
+	}
+	logger.Warn("metrics: --max-runs was reached, so older runs were not collected", MetricsTruncatedReposKey, truncated)
+}
+
 // Collect resolves the target scope and gathers the workflow activity the reports need.
 func (m *MetricsFlags) Collect(cmd *cobra.Command) (*metrics.Data, error) {
 	window, err := m.Window()
@@ -415,7 +428,13 @@ func (m *MetricsFlags) usageFetcher(client *gh.GitHubClient) metrics.UsageFetche
 
 // cache opens the on-disk cache, reporting false when it is disabled or unusable.
 func (m *MetricsFlags) cache() (*metrics.Cache, bool) {
-	if m.NoCache {
+	return OpenMetricsCache(m.NoCache)
+}
+
+// OpenMetricsCache opens the on-disk metrics cache, reporting false when noCache
+// disables it or it is unusable.
+func OpenMetricsCache(noCache bool) (*metrics.Cache, bool) {
+	if noCache {
 		return nil, false
 	}
 

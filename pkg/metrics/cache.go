@@ -28,6 +28,10 @@ type Cache struct {
 const (
 	jobsKind  = "jobs"
 	usageKind = "usage"
+	// attemptJobsKind holds the jobs of one specific run attempt. They are kept apart
+	// from jobsKind, which holds the jobs the latest attempt reports including the ones
+	// carried over from earlier attempts, so neither listing ever answers for the other.
+	attemptJobsKind = "attempt-jobs"
 )
 
 // NewCache prepares the on-disk cache root. Individual entries are placed under a
@@ -55,6 +59,17 @@ func (c *Cache) LoadJobs(repo repository.Repository, runID int64, attempt int) (
 // SaveJobs writes the job list of attempt of repo's runID.
 func (c *Cache) SaveJobs(repo repository.Repository, runID int64, attempt int, jobs []*github.WorkflowJob) error {
 	return c.save(repo, jobsKind, runID, attempt, jobs)
+}
+
+// LoadAttemptJobs returns the cached jobs of exactly attempt of repo's runID, reporting
+// whether they were present.
+func (c *Cache) LoadAttemptJobs(repo repository.Repository, runID int64, attempt int) ([]*github.WorkflowJob, bool) {
+	return load[[]*github.WorkflowJob](c, repo, attemptJobsKind, runID, attempt)
+}
+
+// SaveAttemptJobs writes the jobs of exactly attempt of repo's runID.
+func (c *Cache) SaveAttemptJobs(repo repository.Repository, runID int64, attempt int, jobs []*github.WorkflowJob) error {
+	return c.save(repo, attemptJobsKind, runID, attempt, jobs)
 }
 
 // LoadUsage returns the cached billable usage of attempt of repo's runID, reporting

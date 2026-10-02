@@ -32,7 +32,7 @@ require organization owner permission.
 
 ## CLI Structure
 
-```
+```text
 gh runner-kit                # Root command
 ├── available                # List runners a repository can use
 ├── cordon                   # Stop runners from receiving new jobs
@@ -53,6 +53,8 @@ gh runner-kit                # Root command
 │   │   └── remove             # Remove a runner from a runner group
 │   ├── update                # Update the settings of a runner group
 │   └── view                  # Show the settings of a runner group
+├── job                      # Inspect the jobs of a single workflow run
+│   └── timeline              # When every job and step of a run attempt ran
 ├── list                     # List self-hosted runners (organization by default)
 ├── metrics                  # Runner utilization and queue time reports
 │   ├── capacity              # Recommended pool size per runs-on label set
@@ -63,6 +65,8 @@ gh runner-kit                # Root command
 │   ├── label                 # Demand and supply per single label
 │   ├── queue                 # Wait time per runs-on label set
 │   ├── runner                # Activity per runner, label set or group
+│   ├── runs                  # The collected workflow runs, one row each
+│   ├── steps                 # Duration statistics per step of every job
 │   ├── summary               # Fleet overview
 │   └── workflow              # Failure rate, duration and retry rate per workflow
 ├── run                      # Download, register and run a runner agent
@@ -390,6 +394,52 @@ gh runner-kit group view <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] \
 
 Available `--fields` values are the same as for `group list`.
 
+### job timeline
+
+Shows when every job and step of one workflow run attempt ran, on a time axis
+starting when the attempt started, like Kesin11/actions-timeline.
+
+```bash
+gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] \
+  [--job PATTERN]... [--show-waiting=false] [--no-cache] [--refresh] \
+  [--format json|mermaid|table]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--attempt` | latest attempt | Show this attempt instead of the latest one. Must agree with the attempt in a `<RUN>` URL |
+| `--format` | `table` | Output format: `json`, `mermaid` or `table` |
+| `--job` | all jobs | Keep only the jobs whose name matches this pattern, repeatable and accepting a `*` wildcard |
+| `--no-cache` | `false` | Do not read or write the cached jobs of the run |
+| `--refresh` | `false` | Ignore the cached jobs of the run and fetch them again |
+| `-R`, `--repo` | repository of `<RUN>`, or the current repository | Select a repository. Must agree with the repository in a `<RUN>` URL |
+| `--show-waiting` | `true` | Show how long every job waited for a runner |
+
+`<RUN>` is required: a run ID, or the URL of a run
+(`.../actions/runs/RUN_ID`), an attempt (`.../attempts/N`) or a job
+(`.../job/JOB_ID`, which keeps only that job and shows the attempt it belongs to
+unless `--attempt` is given). A bare run ID takes the
+repository from `--repo` or the current directory.
+
+Table columns: `JOB`, `STEP`, `CONCLUSION`, `OFFSET`, `WAIT` (hidden by
+`--show-waiting=false`), `DURATION`, `RUNNER`. Each job line is followed by its
+steps, and `OFFSET` is measured from the start of the attempt.
+
+`--format mermaid` writes a Mermaid Gantt chart with one section per job: an
+`active` bar for the runner wait, then one bar per step, `crit` when it failed
+and `done` when it was skipped or cancelled. Times are relative (`00:00:00` is
+the attempt start), so the chart does not depend on the time zone. It renders
+directly in Markdown, for example in a job summary:
+
+```bash
+gh runner-kit job timeline "$RUN_URL" --format mermaid >> "$GITHUB_STEP_SUMMARY"
+```
+
+`--format json` writes the whole timeline, durations in nanoseconds and the run
+and job IDs quoted. Jobs of a completed attempt are cached like the `metrics`
+job lists, and the command warns when no job matched, which is also what an
+old attempt whose jobs GitHub no longer returns looks like.
+
 ### list
 
 Lists self-hosted runners including their cordon status.
@@ -476,7 +526,8 @@ Definitions to be aware of when reading the numbers:
   jobs are excluded entirely.
 - **Skipped jobs.** A skipped job never occupied a runner, so it is excluded
   from every aggregate report, as is the label-less entry the jobs API returns
-  for a skipped reusable workflow call. `metrics jobs` lists both.
+  for a skipped reusable workflow call. `metrics jobs` lists both, and
+  `metrics steps` counts skipped steps in `SKIPPED`.
 - **Hosted jobs.** Jobs identified as running on GitHub-hosted runners are
   excluded from every fleet metric and only counted in `HOSTED JOBS`; the
   `metrics workflow` report is the exception and includes them by default so a
@@ -678,6 +729,8 @@ it shows every job the workflow-run jobs endpoint returned.
 
 `--format ndjson` writes one JSON object per line, which is what a large listing
 should use. `--jq` and `--template` require an explicit `--format json`.
+With `--format json` or `ndjson`, the collection warnings and the number of
+repositories that reached `--max-runs` (`truncated_repos=N`) go to stderr.
 Use `--exclude-runner` to drop a noisy runner from the listing, for example
 `--runner 'i-0*' --exclude-runner 'i-0deadbeef*'`.
 
@@ -813,6 +866,61 @@ and `STARTED`, but does not treat `UPDATED` as an authoritative
 completion time because GitHub may update it after the run finished. Use
 `--format ndjson` for row-by-row consumption. Under `--all-repos`, `--max-runs`
 applies independently to each repository.
+
+### metrics steps
+
+Reports how long each step of every job takes across the collected runs, the
+statistical counterpart of `job timeline`.
+
+```bash
+gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
+  [--job PATTERN]... [--step PATTERN]... [--merge-matrix] \
+  [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... \
+  [--kind all|self-hosted|github-hosted] [--limit N] \
+  [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--exclude-runner` | - | Drop the jobs that ran on this runner name, repeatable, accepting a `*` wildcard and winning over `--runner` |
+| `--format` | `table` | Output format: `json`, `ndjson` or `table` |
+| `--job` | all jobs | Keep only the jobs whose name matches this pattern, repeatable and accepting a `*` wildcard |
+| `--kind` | `all` | Keep only the jobs of this runner kind |
+| `--label` | all label sets | Keep only the jobs requesting this label, repeatable and combined with AND |
+| `--limit` | `0` | Stop after this many JSON rows or table lines. The table still aggregates every step |
+| `--merge-matrix` | `false` | Fold the variants of a matrix job into one job in the table |
+| `--runner` | all runners | Keep only the jobs that ran on this runner name, repeatable, combined with OR and accepting a `*` wildcard |
+| `--step` | all steps | Keep only the steps whose name matches this pattern, repeatable and accepting a `*` wildcard |
+
+Table columns: `REPO` (only when several repositories appear), `WORKFLOW`,
+`JOB`, `STEP`, `RUNS`, `PRESENCE`, `SKIPPED`, `FAILURE`, `DUR P50`, `DUR P90`,
+`DUR MAX`, `SHARE`, `OFFSET`.
+
+**Unlike `metrics jobs`, the default output is the aggregated table.** One line
+per step of every job, keyed by workflow file, job name and step, ordered by the
+median `OFFSET` from the job start. A step name repeated inside one job gets a
+`#N` suffix instead of being merged, and a workflow name shared by several files
+is followed by the file. `PRESENCE` is the share of the selected jobs that
+started the step (a `--step` filter does not shrink it), `FAILURE` the share of
+the started steps that failed or timed out, and `SHARE` the median fraction of
+the job duration the step took. Percentiles use the nearest-rank method.
+
+`--format json` / `--format ndjson` write the steps **unaggregated**, one row
+each with the identity of its job (`RunID` and `JobID` are quoted strings in
+ndjson), so a downstream tool such as the `actions-metrics` canvas can build
+its own statistics. Identify a step by `StepName` and `StepOccurrence` rather
+than `StepKey`, which a step literally named `Upload #2` shares with the second
+`Upload`. `--jq` and `--template` require an explicit `--format json`.
+The collection warnings and the number of repositories that reached
+`--max-runs` (`truncated_repos=N`) go to stderr with these formats.
+
+`--merge-matrix` folds `test (ubuntu, 1.22)` and `test (macos, 1.22)` into
+`test [x2]`, only when another job of the same workflow shares the prefix.
+
+The steps come from the same collection and job cache as the other `metrics`
+subcommands, so this issues **no extra API request** after one of them over the
+same window. Step timestamps are recorded to the second, and only the latest
+attempt of every run is covered; use `job timeline --attempt` for an earlier one.
 
 ### metrics summary
 

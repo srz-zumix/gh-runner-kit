@@ -150,63 +150,103 @@ func normalizeRunnerName(kind JobKind, name string, id int64) string {
 // finished yet, reporting their missing timestamps as unset, because a listing exists to
 // show every job the workflow-run jobs endpoint returned.
 func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
-	filter := NormalizeLabelSet(opts.Labels)
-	runnerIDs := data.SelfHostedRunnerIDs()
+	b := newJobRowBuilder(data, opts)
+	rows := make([]JobRow, 0, len(data.Jobs))
+	for _, raw := range data.Jobs {
+		if row, ok := b.build(raw); ok {
+			rows = append(rows, row)
+		}
+	}
 
+	sortJobRows(rows)
+
+	if opts.Limit > 0 && len(rows) > opts.Limit {
+		rows = rows[:opts.Limit]
+	}
+	return rows
+}
+
+// jobRowBuilder turns raw jobs into JobRows and applies the JobRowOptions filters, so
+// that the job and the step listings select exactly the same jobs.
+type jobRowBuilder struct {
+	data      *Data
+	opts      JobRowOptions
+	labels    []string
+	runnerIDs map[int64]bool
+	runByID   map[int64]*github.WorkflowRun
+}
+
+func newJobRowBuilder(data *Data, opts JobRowOptions) *jobRowBuilder {
 	// Index the runs by ID so each job can borrow the event and the workflow file path
 	// that its raw job record does not carry.
 	runByID := make(map[int64]*github.WorkflowRun, len(data.Runs))
 	for _, run := range data.Runs {
 		runByID[run.GetID()] = run
 	}
+	return &jobRowBuilder{
+		data:      data,
+		opts:      opts,
+		labels:    NormalizeLabelSet(opts.Labels),
+		runnerIDs: data.SelfHostedRunnerIDs(),
+		runByID:   runByID,
+	}
+}
 
-	rows := make([]JobRow, 0, len(data.Jobs))
-	for _, raw := range data.Jobs {
-		kind := ClassifyJob(raw, runnerIDs)
-		if !opts.matchKind(kind) {
-			continue
-		}
-		// A job passes the label filter when its runs-on set carries every requested
-		// label, which is the same subset test a runner has to satisfy to pick it up.
-		if len(filter) > 0 && !MatchesRunner(filter, raw.Labels) {
-			continue
-		}
-		runnerName := normalizeRunnerName(kind, raw.GetRunnerName(), raw.GetRunnerID())
-		if !opts.matchRunner(runnerName) {
-			continue
-		}
+// run returns the collected run a job belongs to, or nil when it is unknown.
+func (b *jobRowBuilder) run(runID int64) *github.WorkflowRun {
+	return b.runByID[runID]
+}
 
-		runID := raw.GetRunID()
-		run := runByID[runID]
-		queued := optionalTime(raw.GetCreatedAt().Time)
-		started := optionalTime(raw.GetStartedAt().Time)
-		completed := optionalTime(raw.GetCompletedAt().Time)
-
-		rows = append(rows, JobRow{
-			Repo:         data.RunRepositories[runID],
-			RunID:        runID,
-			RunAttempt:   raw.GetRunAttempt(),
-			JobID:        raw.GetID(),
-			Workflow:     raw.GetWorkflowName(),
-			WorkflowPath: run.GetPath(),
-			JobName:      raw.GetName(),
-			Event:        run.GetEvent(),
-			Branch:       raw.GetHeadBranch(),
-			Labels:       raw.Labels,
-			Kind:         kind,
-			RunnerID:     raw.GetRunnerID(),
-			RunnerName:   runnerName,
-			RunnerGroup:  raw.GetRunnerGroupName(),
-			Status:       raw.GetStatus(),
-			Conclusion:   raw.GetConclusion(),
-			QueuedAt:     queued,
-			StartedAt:    started,
-			CompletedAt:  completed,
-			Wait:         span(queued, started),
-			Duration:     span(started, completed),
-		})
+// build converts raw into a JobRow, reporting false when the filters drop it.
+func (b *jobRowBuilder) build(raw *github.WorkflowJob) (JobRow, bool) {
+	kind := ClassifyJob(raw, b.runnerIDs)
+	if !b.opts.matchKind(kind) {
+		return JobRow{}, false
+	}
+	// A job passes the label filter when its runs-on set carries every requested
+	// label, which is the same subset test a runner has to satisfy to pick it up.
+	if len(b.labels) > 0 && !MatchesRunner(b.labels, raw.Labels) {
+		return JobRow{}, false
+	}
+	runnerName := normalizeRunnerName(kind, raw.GetRunnerName(), raw.GetRunnerID())
+	if !b.opts.matchRunner(runnerName) {
+		return JobRow{}, false
 	}
 
+	runID := raw.GetRunID()
+	run := b.runByID[runID]
+	queued := optionalTime(raw.GetCreatedAt().Time)
+	started := optionalTime(raw.GetStartedAt().Time)
+	completed := optionalTime(raw.GetCompletedAt().Time)
+
+	return JobRow{
+		Repo:         b.data.RunRepositories[runID],
+		RunID:        runID,
+		RunAttempt:   raw.GetRunAttempt(),
+		JobID:        raw.GetID(),
+		Workflow:     raw.GetWorkflowName(),
+		WorkflowPath: run.GetPath(),
+		JobName:      raw.GetName(),
+		Event:        run.GetEvent(),
+		Branch:       raw.GetHeadBranch(),
+		Labels:       raw.Labels,
+		Kind:         kind,
+		RunnerID:     raw.GetRunnerID(),
+		RunnerName:   runnerName,
+		RunnerGroup:  raw.GetRunnerGroupName(),
+		Status:       raw.GetStatus(),
+		Conclusion:   raw.GetConclusion(),
+		QueuedAt:     queued,
+		StartedAt:    started,
+		CompletedAt:  completed,
+		Wait:         span(queued, started),
+		Duration:     span(started, completed),
+	}, true
+}
+
+// sortJobRows orders the rows by the instant they started so that the same collection
+// always produces the same listing.
+func sortJobRows(rows []JobRow) {
 	slices.SortFunc(rows, func(a, b JobRow) int {
 		if c := compareOptionalTime(a.StartedAt, b.StartedAt); c != 0 {
 			return c
@@ -218,11 +258,6 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 		// the ID is what keeps equally timed jobs in a reproducible order.
 		return cmp.Compare(a.JobID, b.JobID)
 	})
-
-	if opts.Limit > 0 && len(rows) > opts.Limit {
-		rows = rows[:opts.Limit]
-	}
-	return rows
 }
 
 // optionalTime keeps a timestamp GitHub never recorded distinguishable from the zero

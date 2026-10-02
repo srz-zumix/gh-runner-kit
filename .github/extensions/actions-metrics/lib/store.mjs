@@ -36,6 +36,15 @@ export class DashboardStore {
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
         this.rows = new RowStore({ cwd, log: this.log });
+        // Panels hold data of their own, such as step statistics and run timelines,
+        // that a credential change has to drop too.
+        this.authListeners = new Set();
+    }
+
+    /** Call `listener` whenever the credential changes. Returns an unsubscribe. */
+    onAuthChange(listener) {
+        this.authListeners.add(listener);
+        return () => this.authListeners.delete(listener);
     }
 
     /**
@@ -68,6 +77,13 @@ export class DashboardStore {
             entry.retryAt = null;
             entry.updatedAt = null;
             this.emit(key);
+        }
+        for (const listener of [...this.authListeners]) {
+            try {
+                listener();
+            } catch {
+                // A broken panel must never keep the others on old-credential data.
+            }
         }
     }
 

@@ -55,7 +55,9 @@ job a runner of its own. The ID is dropped from RUNNER, leaving every hosted job
 
 The output is large: a busy organization produces hundreds of thousands of rows over the
 default window. Prefer --format ndjson to consume it row by row, and narrow it with
---label, --runner, --exclude-runner or --limit.`,
+--label, --runner, --exclude-runner or --limit. With --format json or ndjson, the
+collection warnings and the number of repositories that reached --max-runs, as
+truncated_repos=N, go to stderr.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := opts.Validate(); err != nil {
@@ -70,6 +72,9 @@ default window. Prefer --format ndjson to consume it row by row, and narrow it w
 
 			r := render.NewRenderer(flags.Exporter)
 			if r.HasExporter() {
+				// The exported JSON is the whole of stdout too, so the warnings go to stderr.
+				kitutil.WarnMetricsWarnings(data.Warnings)
+				kitutil.WarnMetricsTruncatedRepos(data.TruncatedRepos())
 				return r.RenderExportedData(rows)
 			}
 
@@ -84,6 +89,7 @@ default window. Prefer --format ndjson to consume it row by row, and narrow it w
 			// The listing is the whole of stdout, so the collection warnings go to stderr
 			// instead of being dropped.
 			kitutil.WarnMetricsWarnings(data.Warnings)
+			kitutil.WarnMetricsTruncatedRepos(data.TruncatedRepos())
 			write := kitutil.WriteMetricsJobsJSON
 			if format == jobsFormatNDJSON {
 				write = kitutil.WriteMetricsJobsNDJSON

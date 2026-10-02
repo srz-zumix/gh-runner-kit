@@ -156,13 +156,13 @@ function distribute(cells, buckets, from, to) {
  * `gh.mjs`. One stream can cost thousands of requests, so the budget is checked
  * up front rather than discovered after the first refusal.
  */
-export async function runLines(args, env, cwd, onLine, signal, { host } = {}) {
+export async function runLines(args, env, cwd, onLine, signal, { host, onStderrLine } = {}) {
     const gated = host !== undefined;
     if (gated) {
         await assertRateBudget(host, { cwd });
     }
     try {
-        return await streamLines(args, env, cwd, onLine, signal);
+        return await streamLines(args, env, cwd, onLine, signal, onStderrLine);
     } catch (error) {
         if (gated && isRateLimitError(error)) {
             throw await noteRateLimit(host, error, { cwd });
@@ -171,7 +171,7 @@ export async function runLines(args, env, cwd, onLine, signal, { host } = {}) {
     }
 }
 
-function streamLines(args, env, cwd, onLine, signal) {
+function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
     return new Promise((resolve, reject) => {
         // The signal can already be aborted here: an await between the caller
         // and this point (the rate budget check) lets the collection be
@@ -188,6 +188,7 @@ function streamLines(args, env, cwd, onLine, signal) {
             stdio: ["ignore", "pipe", "pipe"],
         });
         let stderr = "";
+        let pendingStderr = "";
         let pending = "";
         let stopped = false;
         let aborted = false;
@@ -208,6 +209,17 @@ function streamLines(args, env, cwd, onLine, signal) {
         child.stderr.on("data", (chunk) => {
             // Keep only the tail: the CLI logs a progress line per repository.
             stderr = (stderr + chunk).slice(-8192);
+            // Every line still reaches onStderrLine, so a warning logged early is not
+            // lost to the bounded tail.
+            if (onStderrLine) {
+                pendingStderr += chunk;
+                let cut = pendingStderr.indexOf("\n");
+                while (cut >= 0) {
+                    onStderrLine(pendingStderr.slice(0, cut));
+                    pendingStderr = pendingStderr.slice(cut + 1);
+                    cut = pendingStderr.indexOf("\n");
+                }
+            }
         });
 
         child.stdout.setEncoding("utf8");
@@ -234,13 +246,17 @@ function streamLines(args, env, cwd, onLine, signal) {
         });
         child.on("close", (code) => {
             signal?.removeEventListener?.("abort", onAbort);
+            if (onStderrLine && pendingStderr) {
+                onStderrLine(pendingStderr);
+                pendingStderr = "";
+            }
             if (aborted) {
                 reject(new Error("The runner timeline was superseded."));
                 return;
             }
             if (stopped) {
                 // The row cap closed the stream, so a non-zero exit is expected.
-                resolve({ truncated: true });
+                resolve({ truncated: true, stderr });
                 return;
             }
             // A trailing row without its newline is still a row.
@@ -248,7 +264,7 @@ function streamLines(args, env, cwd, onLine, signal) {
                 onLine(pending);
             }
             if (code === 0) {
-                resolve({ truncated: false });
+                resolve({ truncated: false, stderr });
                 return;
             }
             const message = stderr.split("\n").map((line) => line.trim()).find((line) => line.startsWith("Error:"));
