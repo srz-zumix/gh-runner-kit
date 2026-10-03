@@ -219,6 +219,7 @@ async function handle(req, res, url, instance) {
             workflow: String(body.workflow ?? body.filters?.workflow ?? query.workflow ?? "").trim(),
             job: String(body.job ?? "").trim(),
             jobStatus: normalizeJobStatus(body.jobStatus),
+            includeAllAttempts: body.includeAllAttempts === true,
             mergeMatrix: body.mergeMatrix !== false,
             showInfra: body.showInfra !== false,
             runBudget: body.runBudget,
