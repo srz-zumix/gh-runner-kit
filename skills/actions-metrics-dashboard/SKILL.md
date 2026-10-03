@@ -56,6 +56,11 @@ to rank lowest success rate first and most runs first within equal rates.
 Missing values remain last. The runner list and Job explorer sort all matches
 before paging; their single-column sort toggles between two directions.
 
+In **Workflows**, the **Workflow** column links to each repository's workflow
+file on its default branch, on the dashboard's GitHub host, in a new tab.
+Dynamic workflows (Copilot, Dependabot) and rows without a file path stay plain
+text; they do not identify a repository workflow file.
+
 ## Actions
 
 | Action | Purpose |
@@ -98,11 +103,15 @@ Changing this option requires collection even with `reuseRows: true`, because
 the row cache is scoped by attempt mode. The UI persists it per target.
 
 All-attempt mode gives the run list one row per attempt; selecting a row opens
-that attempt's Gantt. `meta.latestAttemptBasis` is false,
+that attempt's Gantt. Each run-list row also has a **GitHub** link next to
+**Gantt** that opens the same attempt on the dashboard's GitHub host in a new
+tab. `meta.latestAttemptBasis` is false,
 `meta.analysedAttempts` counts attempts with matching rows, and
 `meta.historicalAttemptsRequested` / `meta.historicalAttemptsWithJobs` report
 historical coverage. Surface `meta.warnings`: empty or unreadable earlier
-attempts mean incomplete history, not success or no timeout. This mode needs
+attempts mean incomplete history, not success or no timeout. The tab displays
+collection warnings collapsed by default; click the warning count to expand
+or collapse the full messages. This mode needs
 `metrics collect`, `metrics runs` and `job timeline` in the installed CLI.
 
 `get_step_metrics` returns the aggregated data and updates the tab selection.

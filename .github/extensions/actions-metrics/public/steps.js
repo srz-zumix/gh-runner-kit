@@ -338,7 +338,10 @@ function footnote(result) {
 function collectionWarnings(result) {
     const warnings = result?.meta?.warnings ?? [];
     if (!warnings.length) return null;
-    return el("div", {}, warnings.map((warning) => el("p", { class: "notice notice--warn", text: `Collection warning: ${warning}` })));
+    return el("details", { class: "notice notice--warn collection-warnings" }, [
+        el("summary", { text: `Collection warnings (${number(warnings.length)})` }),
+        el("ul", {}, warnings.map((warning) => el("li", { text: warning }))),
+    ]);
 }
 
 // Gantt charts are laid out as an HTML grid (name | track | duration) rather than
@@ -469,11 +472,13 @@ function runList(result, state) {
     const rows = result?.runs ?? [];
     if (rows.length === 0) return el("p", { class: "empty", text: "No run list for this job yet." });
     const open = state?.steps?.timeline;
+    const origin = `https://${state?.target?.host || "github.com"}`;
     return el("table", { class: "runs-table" }, [
         el("thead", {}, [el("tr", {}, [el("th", { text: "Run" }), el("th", { class: "num", text: result?.includeAllAttempts ? "Attempt" : "Attempts" }), el("th", { text: "Result" }), el("th", { text: "Runner" }), el("th", { class: "num", text: "Total" }), el("th", { text: "Open" })])]),
         el("tbody", {}, rows.slice(0, 30).map((row) => {
             const show = () => void openRunTimeline(state, row.runId, row.repo ?? "", row.runAttempt);
             const active = open && String(open.RunID) === String(row.runId) && Number(open.RunAttempt) === Number(row.runAttempt);
+            const url = `${origin}/${row.repo}/actions/runs/${row.runId}/attempts/${row.runAttempt}`;
             return el("tr", { class: active ? "row--selected" : "" }, [
                 el("td", {}, [el("button", { type: "button", class: "link-button", title: "Show this run's Gantt", text: row.runId, onclick: show })]),
                 el("td", { class: `num${row.runAttempt > 1 ? " runs-table__retried" : ""}`, title: result?.includeAllAttempts ? `Statistics for attempt ${row.runAttempt}; click Gantt to open this attempt` : row.runAttempt > 1 ? `Re-run ${row.runAttempt - 1} time(s); statistics use attempt ${row.runAttempt}` : null, text: number(row.runAttempt) }),
@@ -485,7 +490,10 @@ function runList(result, state) {
                     return el("td", { class: "runs-table__runner", title: title || null, text: summary.text });
                 })(),
                 el("td", { class: "num", text: formatDuration(row.durationMs) }),
-                el("td", {}, [el("button", { type: "button", class: "ghost", text: "Gantt", onclick: show })]),
+                el("td", {}, [el("div", { class: "runs-table__actions" }, [
+                    el("button", { type: "button", class: "ghost", text: "Gantt", onclick: show }),
+                    el("a", { href: url, target: "_blank", rel: "noreferrer", title: `Open ${row.repo} run ${row.runId} attempt ${row.runAttempt} on GitHub`, text: "GitHub" }),
+                ])]),
             ]);
         })),
     ]);

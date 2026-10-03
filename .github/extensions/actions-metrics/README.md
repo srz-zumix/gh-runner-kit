@@ -39,6 +39,12 @@ Ask Copilot to open the dashboard, or open the **Actions metrics** canvas from t
 | **Job explorer** | Raw job rows projected in the browser, with faceted filters that apply instantly. |
 | **Usage & cost** | Billable time GitHub-hosted runners consumed, split by runner class, and the estimated cost per workflow. |
 
+The **Workflow** column of **Workflows** links to the workflow file on the
+repository's default branch, opening the selected GitHub host in a new tab.
+This works for both repository and organization targets. Dynamically generated
+workflows, such as Copilot and Dependabot, and rows without a file path remain
+plain text because there is no repository workflow file to link.
+
 ## Step timeline
 
 The **Step timeline** tab samples the newest runs of one workflow file with
@@ -63,8 +69,13 @@ the run list has one row per attempt, and its **Gantt** button opens that
 specific attempt. The footnote reports the number of attempts with matching
 rows and how many requested historical attempts returned jobs. Missing,
 unreadable or empty historical job lists produce a collection warning,
-not a claim that the run succeeded. This option requires `metrics collect`,
+not a claim that the run succeeded. Collection warnings are collapsed by
+default; click the warning count to expand or collapse the full messages.
+This option requires `metrics collect`,
 `metrics runs` and `job timeline` in the installed `gh runner-kit`.
+
+Each row in **Runs and single-run Gantt** also has a **GitHub** link next to
+**Gantt**, opening that run's attempt on the selected GitHub host in a new tab.
 
 The tab groups matrix jobs by their base name only when at least two variants
 share that base. Infrastructure steps (`Set up job`, `Complete job`, and names starting with `Post` followed by a space) can be hidden. Durations come from GitHub's
