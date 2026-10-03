@@ -72,12 +72,30 @@ function jobKey(row) {
     return JSON.stringify([row.Repo, String(row.RunID), String(row.JobID)]);
 }
 
+function isMissing(value) {
+    return value === null || value === undefined || value === "";
+}
+
+// The snapshot rows win on duplicate keys because their runner classification is backed
+// by the runner inventory, which the attempt timelines do not have. History only fills
+// the run start that the snapshot's carried-over step rows lack.
 export function mergeAttemptRows(latest, historical) {
     const jobs = new Map(latest.jobs.map((row) => [jobKey(row), row]));
     const steps = new Map(latest.steps.map((row) => [JSON.stringify([jobKey(row), row.StepNumber]), row]));
     for (const rows of historical) {
-        for (const row of rows.jobs) jobs.set(jobKey(row), row);
-        for (const row of rows.steps) steps.set(JSON.stringify([jobKey(row), row.StepNumber]), row);
+        for (const row of rows.jobs) {
+            const key = jobKey(row);
+            if (!jobs.has(key)) jobs.set(key, row);
+        }
+        for (const row of rows.steps) {
+            const key = JSON.stringify([jobKey(row), row.StepNumber]);
+            const existing = steps.get(key);
+            if (!existing) {
+                steps.set(key, row);
+            } else if (isMissing(existing.RunStartedAt) && !isMissing(row.RunStartedAt)) {
+                steps.set(key, { ...existing, RunStartedAt: row.RunStartedAt });
+            }
+        }
     }
     return { jobs: [...jobs.values()], steps: [...steps.values()] };
 }

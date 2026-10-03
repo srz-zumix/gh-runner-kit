@@ -76,6 +76,25 @@ test("merging attempts deduplicates carried-over jobs without merging reruns or 
     assert.equal(carried.steps[0].RunStartedAt, null);
 });
 
+test("merging attempts keeps the snapshot's inventory-backed runner metadata on carried-over jobs", () => {
+    const original = timelineRows(timeline(), "owner/repo");
+    const snapshot = (row) => ({ ...row, Kind: "self-hosted", RunnerName: "linux-01", RunnerGroup: "Default" });
+    const carried = {
+        jobs: original.jobs.map(snapshot),
+        steps: original.steps.map((row, index) => ({ ...snapshot(row), RunStartedAt: index === 0 ? at(50) : null })),
+    };
+    const rows = mergeAttemptRows(carried, [original]);
+    assert.equal(rows.jobs.length, 1);
+    assert.equal(rows.steps.length, 3);
+    assert.deepEqual([...rows.jobs, ...rows.steps].map((row) => row.Kind), Array(4).fill("self-hosted"));
+    assert.deepEqual(rows.steps.map((row) => row.RunnerName), Array(3).fill("linux-01"));
+    assert.deepEqual(rows.steps.map((row) => row.RunStartedAt), [at(50), at(0), at(0)]);
+    assert.equal(carried.steps[1].RunStartedAt, null);
+    const selfHosted = aggregateSteps({ ...rows, includeAllAttempts: true, runner: { kind: "self-hosted" } });
+    assert.equal(selfHosted.meta.totalJobs, 1);
+    assert.equal(selfHosted.stepStats.find((row) => row.stepKey === "Compile").samples, 1);
+});
+
 test("earlier attempt rows honour collection kind, runner, exclusions and subset label filters", async () => {
     const rows = timelineRows(timeline(), "owner/repo");
     assert.equal(filterAttemptRows(rows, { kind: "github-hosted", runner: "GitHub*", labels: ["UBUNTU-LATEST"] }).jobs.length, 1);
