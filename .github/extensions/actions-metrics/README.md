@@ -67,6 +67,17 @@ the filter. The selected step is also broken down by label set, the run list
 shows the runners of each run, and the single-run Gantt shows each job's
 runner name and group.
 
+The **Job status** selector keeps jobs matching a lifecycle status
+(`queued`, `in_progress`, `completed`, etc.) or conclusion (`success`,
+`failure`, `cancelled`, `skipped`, etc.), including every step of those jobs.
+It defaults to **All statuses**, combines with the runner filters, and
+re-aggregates collected rows without calling the CLI again. Statistics,
+trends, the typical timeline, runner pools and run samples all use the
+matching jobs. Status choices and counts come from all sampled jobs so the
+filter can always be widened; a selection with no matches stays visible.
+The selection is saved per target. The single-run Gantt also hides jobs that
+do not match; **Copy mermaid** still exports the full run.
+
 HTTP endpoints used by the tab:
 
 | Endpoint | Purpose |
@@ -106,7 +117,7 @@ The panel stops sending requests to a host as soon as one of them is refused for
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally focusing a job, merging matrix variants, hiding infrastructure steps, filtering by runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
 | `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as Prometheus text or JSON. |
 

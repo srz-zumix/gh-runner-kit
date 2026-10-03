@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aggregateSteps, displayStepName, downsampleNewest, formatDuration, formatLabelSet, labelSetKey, matchRunner, matchWildcard, matrixMergeMap, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
+import { aggregateSteps, displayStepName, downsampleNewest, filterTimelineJobs, formatDuration, formatLabelSet, labelSetKey, matchJobStatus, matchRunner, matchWildcard, matrixMergeMap, normalizeJobStatus, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
 
 test("timelineMatchesWorkflow compares workflow file names", () => {
     const timeline = { Workflow: "Labeler", WorkflowPath: ".github/workflows/labeler.yml" };
@@ -276,6 +276,124 @@ test("runner filter narrows statistics while pools and facets keep every runner"
     assert.equal(filtered.runners.length, 2);
     assert.deepEqual(filtered.runnerFacets.kinds.map((item) => item.value).sort(), ["hosted", "self-hosted"]);
     assert.deepEqual(filtered.runs.find((row) => row.runId === "102").runners, ["box-1"]);
+});
+
+test("job status matches lifecycle status or conclusion and defaults to every job", () => {
+    const completed = { status: "completed", conclusion: "failure" };
+    assert.equal(normalizeJobStatus(" FAILURE "), "failure");
+    assert.equal(normalizeJobStatus(null), "");
+    assert.equal(matchJobStatus(completed, ""), true);
+    assert.equal(matchJobStatus(completed, "completed"), true);
+    assert.equal(matchJobStatus(completed, " FAILURE "), true);
+    assert.equal(matchJobStatus(completed, "success"), false);
+    assert.equal(matchJobStatus({ status: "in_progress", conclusion: null }, "in_progress"), true);
+    assert.equal(matchJobStatus({ status: "in_progress", conclusion: null }, "success"), false);
+});
+
+test("job status filters whole jobs, all their steps and every statistical surface", () => {
+    const jobs = [
+        { ...job(1, "build", 1, 51), Status: "completed" },
+        { ...job(2, "build", 1, 41, "failure"), Status: "completed" },
+        { ...job(3, "build", 1, 31, "failure"), Status: "completed" },
+    ];
+    const steps = [
+        step(1, "build", 101, 1, "Compile", 1, 40),
+        // The successful step's JobConclusion is intentionally stale; the job
+        // listing owns its outcome, not the individual step or its repeated fields.
+        step(2, "build", 102, 1, "Compile", 1, 11),
+        step(2, "build", 102, 2, "Test", 11, 21, "failure"),
+        step(2, "build", 102, 3, "Deploy", null, null, "skipped"),
+        step(3, "build", 103, 2, "Test", 2, 22, "failure"),
+    ];
+    const result = aggregateSteps({ jobs, steps, jobStatus: " FAILURE " });
+    assert.equal(result.jobStatus, "failure");
+    assert.equal(result.meta.jobStatus, "failure");
+    assert.equal(result.meta.totalJobs, 2);
+    assert.equal(result.meta.unfilteredJobs, 3);
+    assert.equal(result.meta.totalStepRows, 4);
+    assert.equal(result.meta.analysedRuns, 2);
+    assert.equal(result.meta.maxRunsPerRepo, 3);
+    assert.equal(result.jobStats[0].runs, 2);
+    assert.equal(result.runners[0].jobs, 2);
+    const compile = result.stepStats.find((row) => row.stepKey === "Compile");
+    assert.equal(compile.samples, 1);
+    assert.equal(compile.duration.p50, 10_000);
+    assert.equal(compile.presence, 0.5);
+    assert.equal(compile.byRunner[0].samples, 1);
+    assert.deepEqual(compile.trend.points.map((point) => point.runId), ["102"]);
+    assert.equal(result.stepStats.find((row) => row.stepKey === "Deploy").skipped, 1);
+    assert.equal(result.typicalTimeline[0].steps.find((row) => row.name === "Compile").durationMs, 10_000);
+    assert.deepEqual(result.runs.map((row) => row.runId), ["103", "102"]);
+    assert.deepEqual(result.jobStatusFacets, [
+        { value: "completed", count: 3 },
+        { value: "failure", count: 2 },
+        { value: "success", count: 1 },
+    ]);
+    assert.equal(aggregateSteps({ jobs, steps, jobStatus: "completed" }).meta.totalStepRows, 5);
+    assert.deepEqual(aggregateSteps({ jobs, steps, jobStatus: "" }), aggregateSteps({ jobs, steps }));
+});
+
+test("job status joins steps by repository, workflow, run and attempt, not just job name or ID", () => {
+    const failed = { ...job(1, "build", 1, 51, "failure"), Status: "completed" };
+    const original = step(1, "build", 101, 1, "Compile", 1, 11);
+    const variants = [
+        { Repo: "owner/other" },
+        { WorkflowPath: ".github/workflows/release.yml" },
+        { RunID: "900" },
+        { RunAttempt: 2 },
+    ];
+    const jobs = [failed, ...variants.map((patch) => ({ ...failed, ...patch, Conclusion: "success" }))];
+    const steps = [original, ...variants.map((patch) => ({ ...original, ...patch }))];
+    const result = aggregateSteps({ jobs, steps, jobStatus: "failure" });
+    assert.equal(result.meta.totalJobs, 1);
+    assert.equal(result.meta.totalStepRows, 1);
+    assert.equal(result.stepStats[0].samples, 1);
+});
+
+test("job status composes with runner and job filters without changing matrix names", () => {
+    const jobs = [
+        onRunner(job(1, "test (linux)", 1, 51, "failure"), ["self-hosted", "linux"], "self-hosted", "box-1"),
+        onRunner(job(2, "test (macos)", 1, 41), ["macos-latest"], "hosted", "GitHub Actions"),
+        onRunner(job(3, "test (linux)", 1, 31, "failure"), ["ubuntu-latest"], "hosted", "GitHub Actions"),
+    ];
+    const steps = jobs.map((row, index) => onRunner(step(index + 1, row.JobName, row.RunID, 1, "Test", 1, 11), row.Labels, row.Kind, row.RunnerName));
+    const result = aggregateSteps({ jobs, steps, selectedJob: "test", jobStatus: "failure", runner: { kind: "self-hosted" } });
+    assert.equal(result.stepStats[0].job, "test");
+    assert.equal(result.stepStats[0].samples, 1);
+    assert.equal(result.meta.totalJobs, 1);
+    assert.equal(result.runners.reduce((sum, pool) => sum + pool.jobs, 0), 2);
+    assert.equal(result.runnerFacets.kinds.length, 2);
+    assert.deepEqual(result.jobStatusFacets.map((item) => item.value).sort(), ["failure", "success"]);
+    assert.deepEqual(result.runs.map((row) => row.runId), ["101"]);
+});
+
+test("queued jobs count without timed samples and an unmatched status stays empty", () => {
+    const jobs = [{ ...job(1, "build", 1, 51, ""), Status: "queued", StartedAt: null, CompletedAt: null }];
+    const queued = aggregateSteps({ jobs, steps: [], jobStatus: "queued" });
+    assert.equal(queued.meta.totalJobs, 1);
+    assert.equal(queued.jobStats[0].runs, 1);
+    assert.equal(queued.runners[0].duration.samples, 0);
+    const empty = aggregateSteps({ jobs, steps: [step(2, "build", 102, 1, "Compile", 1, 11)], jobStatus: "failure" });
+    assert.equal(empty.meta.totalJobs, 0);
+    assert.equal(empty.meta.totalStepRows, 0);
+    for (const key of ["stepStats", "jobStats", "typicalTimeline", "runs", "runners"]) assert.deepEqual(empty[key], []);
+    assert.deepEqual(empty.jobStatusFacets, [{ value: "queued", count: 1 }]);
+});
+
+test("single-run Gantt uses the job status filter without dropping steps or mutating the timeline", () => {
+    const timeline = { Jobs: [
+        { Name: "build", Status: "completed", Conclusion: "success", Steps: [{ Conclusion: "success" }] },
+        { Name: "test", Status: "completed", Conclusion: "failure", Steps: [{ Conclusion: "success" }, { Conclusion: "failure" }, { Conclusion: "skipped" }] },
+        { Name: "deploy", Status: "in_progress", Conclusion: "", Steps: [] },
+    ] };
+    assert.deepEqual(filterTimelineJobs(timeline, "failure").map((row) => row.Name), ["test"]);
+    assert.equal(filterTimelineJobs(timeline, "failure")[0].Steps.length, 3);
+    assert.equal(filterTimelineJobs(timeline, "completed").length, 2);
+    assert.deepEqual(filterTimelineJobs(timeline, "in_progress").map((row) => row.Name), ["deploy"]);
+    assert.deepEqual(filterTimelineJobs(timeline, "cancelled"), []);
+    assert.deepEqual(filterTimelineJobs(timeline), timeline.Jobs);
+    assert.equal(timeline.Jobs.length, 3);
+    assert.deepEqual(filterTimelineJobs(null, "failure"), []);
 });
 
 test("a step literally named like an occurrence key stays apart", () => {

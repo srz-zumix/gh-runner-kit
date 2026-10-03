@@ -403,6 +403,31 @@ function countedList(map) {
     return [...map.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)));
 }
 
+export function normalizeJobStatus(value) {
+    return String(value ?? "").trim().toLowerCase();
+}
+
+export function matchJobStatus(row, value) {
+    const status = normalizeJobStatus(value);
+    return !status || normalizeJobStatus(row.status) === status || normalizeJobStatus(row.conclusion) === status;
+}
+
+export function filterTimelineJobs(timeline, jobStatus = "") {
+    return (timeline?.Jobs ?? []).filter((job) => matchJobStatus({ status: job.Status, conclusion: job.Conclusion }, jobStatus));
+}
+
+function jobStatusFacets(rows) {
+    const counts = new Map();
+    for (const row of rows) {
+        for (const value of new Set([row.status, row.conclusion])) countInto(counts, value);
+    }
+    return countedList(counts);
+}
+
+function jobRowKey(row) {
+    return keyOf(row.repo, workflowIdentity(row), row.runId, row.runAttempt, row.jobId || row.jobName);
+}
+
 // runnerPools groups jobs by their runs-on set. Wait and duration percentiles only use
 // jobs that recorded the timestamps they need, so queued or skipped jobs do not pull
 // the medians toward zero.
@@ -474,17 +499,22 @@ function outranksConclusion(candidate, current) {
     return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
 }
 
-export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {} } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "" } = {}) {
     const runnerFilter = normalizeRunnerFilter(runner);
+    const statusFilter = normalizeJobStatus(jobStatus);
     const allJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
     const allStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
-    // The matrix merge map and the runner facets come from every row, so narrowing the
-    // runner filter neither renames jobs nor hides the choices needed to widen it again.
+    // The matrix merge map and the runner facets come from every row, so narrowing
+    // filters neither renames jobs nor hides the choices needed to widen them again.
     const mergeMap = matrixMergeMap(allJobRows.map((row) => ({ repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, jobName: row.jobName })));
     const facets = runnerFacets(allJobRows);
-    const poolRows = allJobRows.filter((row) => !selectedJob || groupJobName(row, mergeMap, mergeMatrix) === selectedJob);
-    const jobRows = allJobRows.filter((row) => matchRunner(row, runnerFilter));
-    const stepRows = allStepRows.filter((row) => matchRunner(row, runnerFilter));
+    const statusRows = allJobRows.filter((row) => matchJobStatus(row, statusFilter));
+    const matchingJobs = new Set(statusRows.map(jobRowKey));
+    const poolRows = statusRows.filter((row) => !selectedJob || groupJobName(row, mergeMap, mergeMatrix) === selectedJob);
+    const jobRows = statusRows.filter((row) => matchRunner(row, runnerFilter));
+    // Step outcomes need not match their job's outcome: a failed job can contain
+    // successful or skipped steps. Match the job listing, not JobConclusion.
+    const stepRows = allStepRows.filter((row) => matchRunner(row, runnerFilter) && (!statusFilter || matchingJobs.has(jobRowKey(row))));
     const runIds = new Set([...jobRows, ...stepRows].map((row) => row.runId).filter(Boolean));
     // The run budget caps every repository on its own and applies before the runner
     // filter, so whether it was reached is read from the unfiltered rows per repository.
@@ -721,6 +751,8 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         typicalTimeline,
         runners: runnerPools(poolRows),
         runnerFacets: facets,
+        jobStatus: statusFilter,
+        jobStatusFacets: jobStatusFacets(allJobRows),
         runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId))).slice(0, 100),
         meta: {
             analysedRuns: runIds.size,
@@ -730,6 +762,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             totalJobs: jobRows.length,
             unfilteredJobs: allJobRows.length,
             runnerFilter,
+            jobStatus: statusFilter,
             totalStepRows: stepRows.length,
             totalSteps,
             latestAttemptBasis: true,

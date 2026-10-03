@@ -30,7 +30,7 @@ import { DashboardInstance } from "./lib/instance.mjs";
 import { startInstanceServer } from "./lib/server.mjs";
 import { loadPrefs, rememberStepSettings } from "./lib/prefs.mjs";
 import { collectStepMetrics } from "./lib/steprows.mjs";
-import { normalizeRunnerFilter } from "./shared/steps.mjs";
+import { normalizeJobStatus, normalizeRunnerFilter } from "./shared/steps.mjs";
 import { collectRunTimeline } from "./lib/timeline.mjs";
 
 /** instanceId -> { instance, server, url } */
@@ -718,6 +718,7 @@ const canvas = createCanvas({
                 properties: {
                     workflow: { type: "string", description: "Workflow file name/path or ID, for example ci.yml. Defaults to the dashboard workflow filter when set." },
                     job: { type: "string", description: "Optional job name or merged matrix base to focus on." },
+                    jobStatus: { type: "string", description: "Keep jobs matching this lifecycle status or conclusion, such as in_progress, completed, success, failure or cancelled, and all their steps. Empty or omitted means all statuses." },
                     section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns per runs-on pool job counts, wait, duration and failure rate." },
                     limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum rows returned in the requested section. Defaults to 50." },
                     mergeMatrix: { type: "boolean", description: "Merge matrix job variants when at least two variants share a base name. Defaults to true." },
@@ -739,6 +740,7 @@ const canvas = createCanvas({
                 const settings = {
                     workflow: input.workflow ?? query.workflow ?? "",
                     job: input.job ?? "",
+                    jobStatus: normalizeJobStatus(input.jobStatus),
                     mergeMatrix: input.mergeMatrix !== false,
                     showInfra: input.showInfra !== false,
                     runBudget: input.runBudget,
@@ -778,6 +780,8 @@ const canvas = createCanvas({
                     target: state.key,
                     workflow: result.workflow,
                     job: result.job,
+                    jobStatus: result.jobStatus,
+                    jobStatusFacets: result.jobStatusFacets,
                     meta: result.meta,
                     runnerFilter: result.runnerFilter,
                     ...(section === "jobs" ? { jobs: result.jobStats.slice(0, cap) } : {}),
