@@ -1,6 +1,6 @@
 import { svg } from "./charts.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
-import { displayStepName, filterTimelineJobs, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeJobStatus, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
+import { displayStepName, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeJobStatus, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
 
 function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -40,6 +40,10 @@ let stepSorts = [{ key: "offset", direction: "asc" }];
 let runInput = "";
 let attemptInput = "";
 let stepRequestSeq = 0;
+// The settings of the step request in flight, with the target and sequence it belongs
+// to. Renders before its response would otherwise rebuild the controls from the
+// previous settings and later requests would read those back.
+let pendingStepRequest = null;
 let runTimelineSeq = 0;
 // The pending close request, which a following open waits for so that a late close
 // cannot clear or abort the run opened after it.
@@ -114,6 +118,8 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         reuseRows,
     };
     const seq = ++stepRequestSeq;
+    const { reuseRows: _reuse, ...settings } = body;
+    pendingStepRequest = { seq, identity: state?.identity, settings };
     loading = true;
     error = null;
     renderSoon();
@@ -124,7 +130,6 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         if (seq !== stepRequestSeq || result.superseded) return;
         if (!response.ok) throw new Error(result.reason ?? result.error ?? `Request failed with HTTP ${response.status}`);
         const stale = !timelineMatchesWorkflow(state.steps?.timeline, workflow);
-        const { reuseRows: _reuse, ...settings } = body;
         state.steps = { ...(state.steps ?? {}), ...(stale ? { timeline: null, timelineRequest: null } : {}), status: "ready", settings, result };
         if (!reuseRows || !(result.stepStats ?? []).some((row) => row.id === selectedStepId)) {
             selectedStepId = result.stepStats?.[0]?.id ?? "";
@@ -133,6 +138,7 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         if (seq === stepRequestSeq) error = caught.message;
     } finally {
         if (seq === stepRequestSeq) {
+            if (pendingStepRequest?.seq === seq) pendingStepRequest = null;
             loading = false;
             renderSoon();
         }
@@ -181,7 +187,7 @@ function renderSoon() {
 }
 
 function controlPanel(state) {
-    const settings = state?.steps?.settings ?? prefsByIdentity.get(state?.identity) ?? {};
+    const settings = effectiveStepSettings(state?.steps?.settings ?? prefsByIdentity.get(state?.identity), pendingStepRequest, state?.identity);
     const options = workflowOptions(state);
     const currentWorkflow = settings.workflow || state?.filters?.workflow || options[0]?.value || "";
     const jobs = state?.steps?.result?.jobStats ?? [];
@@ -228,7 +234,8 @@ function controlPanel(state) {
 function runnerControls(state, settings) {
     const facets = state?.steps?.result?.runnerFacets;
     if (!facets) return null;
-    const filter = normalizeRunnerFilter(state?.steps?.result?.runnerFilter ?? settings.runnerFilter);
+    const pendingFilter = pendingStepRequest?.identity === state?.identity ? pendingStepRequest.settings.runnerFilter : undefined;
+    const filter = normalizeRunnerFilter(pendingFilter ?? state?.steps?.result?.runnerFilter ?? settings.runnerFilter);
     if (filter.labels) {
         const key = labelSetKey(splitLabelSet(filter.labels));
         filter.labels = (facets.labelSets ?? []).find((item) => labelSetKey(splitLabelSet(item.value)) === key)?.value ?? filter.labels;

@@ -916,6 +916,156 @@ export function runnerPatternMatcher(pattern) {
     return new RegExp(`^${source}$`);
 }
 
+class BadPatternError extends Error {}
+
+// scanChunk splits off the leading stars and the next chunk up to an unbracketed `*`.
+function scanChunk(pattern) {
+    let index = 0;
+    let star = false;
+    while (index < pattern.length && pattern[index] === "*") {
+        index += 1;
+        star = true;
+    }
+    const start = index;
+    let inRange = false;
+    for (; index < pattern.length; index += 1) {
+        const char = pattern[index];
+        if (char === "\\") {
+            if (index + 1 < pattern.length) index += 1;
+        } else if (char === "[") {
+            inRange = true;
+        } else if (char === "]") {
+            inRange = false;
+        } else if (char === "*" && !inRange) {
+            break;
+        }
+    }
+    return { star, chunk: pattern.slice(start, index), rest: pattern.slice(index) };
+}
+
+// getEsc reads one possibly escaped character of a character class.
+function getEsc(chunk) {
+    if (chunk.length === 0 || chunk[0] === "-" || chunk[0] === "]") throw new BadPatternError();
+    let index = 0;
+    if (chunk[0] === "\\") {
+        index = 1;
+        if (chunk.length === 1) throw new BadPatternError();
+    }
+    const rest = chunk.slice(index + 1);
+    if (rest.length === 0) throw new BadPatternError();
+    return { char: chunk[index], rest };
+}
+
+// matchChunk matches one star-free chunk against the start of name, returning the
+// unmatched remainder, or null when it does not match. It keeps parsing the chunk after
+// a mismatch so that a malformed pattern is always reported.
+function matchChunk(chunk, name) {
+    let failed = false;
+    let rest = name;
+    while (chunk.length > 0) {
+        if (!failed && rest.length === 0) failed = true;
+        const head = chunk[0];
+        if (head === "[") {
+            const char = failed ? null : rest[0];
+            if (!failed) rest = rest.slice(1);
+            chunk = chunk.slice(1);
+            let negated = false;
+            if (chunk.length > 0 && chunk[0] === "^") {
+                negated = true;
+                chunk = chunk.slice(1);
+            }
+            let matched = false;
+            let ranges = 0;
+            for (;;) {
+                if (chunk.length > 0 && chunk[0] === "]" && ranges > 0) {
+                    chunk = chunk.slice(1);
+                    break;
+                }
+                const lo = getEsc(chunk);
+                let hi = lo;
+                chunk = lo.rest;
+                if (chunk[0] === "-") {
+                    hi = getEsc(chunk.slice(1));
+                    chunk = hi.rest;
+                }
+                if (char !== null && lo.char.codePointAt(0) <= char.codePointAt(0) && char.codePointAt(0) <= hi.char.codePointAt(0)) matched = true;
+                ranges += 1;
+            }
+            if (matched === negated) failed = true;
+            continue;
+        }
+        if (head === "?") {
+            if (!failed) {
+                if (rest[0] === "/") failed = true;
+                rest = rest.slice(1);
+            }
+            chunk = chunk.slice(1);
+            continue;
+        }
+        if (head === "\\") {
+            chunk = chunk.slice(1);
+            if (chunk.length === 0) throw new BadPatternError();
+        }
+        if (!failed) {
+            if (chunk[0] !== rest[0]) failed = true;
+            rest = rest.slice(1);
+        }
+        chunk = chunk.slice(1);
+    }
+    return failed ? null : rest;
+}
+
+function pathMatch(pattern, name) {
+    while (pattern.length > 0) {
+        const scanned = scanChunk(pattern);
+        pattern = scanned.rest;
+        if (scanned.star && scanned.chunk.length === 0) {
+            return !name.includes("/");
+        }
+        const rest = matchChunk(scanned.chunk, name);
+        if (rest !== null && (rest.length === 0 || pattern.length > 0)) {
+            name = rest;
+            continue;
+        }
+        let advanced = false;
+        if (scanned.star) {
+            for (let index = 0; index < name.length && name[index] !== "/"; index += 1) {
+                const skipped = matchChunk(scanned.chunk, name.slice(index + 1));
+                if (skipped !== null) {
+                    if (pattern.length === 0 && skipped.length > 0) continue;
+                    name = skipped;
+                    advanced = true;
+                    break;
+                }
+            }
+        }
+        if (advanced) continue;
+        // Report a malformed remainder the same way Go does before giving up.
+        while (pattern.length > 0) {
+            const next = scanChunk(pattern);
+            pattern = next.rest;
+            matchChunk(next.chunk, []);
+        }
+        return false;
+    }
+    return name.length === 0;
+}
+
+/**
+ * Whether name matches a `--runner`/`--exclude-runner` pattern the way the CLI's Go
+ * `path.Match` does: `*` and `?` stop at a slash, `[...]` is a character class (`^`
+ * negates it) and a backslash makes the next character literal. A malformed pattern,
+ * which the CLI rejects before collecting, matches nothing.
+ */
+export function matchRunnerPattern(pattern, name) {
+    try {
+        return pathMatch(Array.from(String(pattern ?? "")), Array.from(String(name ?? "")));
+    } catch (error) {
+        if (error instanceof BadPatternError) return false;
+        throw error;
+    }
+}
+
 /**
  * Command for one `gh runner-kit metrics jobs` run, as NDJSON so the caller can
  * consume it row by row. `--refresh` is deliberately never forwarded: this runs

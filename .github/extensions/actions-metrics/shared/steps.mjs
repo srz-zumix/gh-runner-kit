@@ -352,6 +352,15 @@ export function isRunnerFilterActive(filter) {
     return value.kind !== "all" || Boolean(value.labels || value.group || value.name);
 }
 
+// effectiveStepSettings lays the settings of a step request still in flight over the
+// ones the panel last received, so a render before the response keeps showing what
+// the user picked. A request made for another dashboard target is ignored.
+export function effectiveStepSettings(settings, pending, identity) {
+    const base = settings ?? {};
+    if (!pending || pending.identity !== identity) return base;
+    return { ...base, ...pending.settings };
+}
+
 // matchRunner applies a runner filter to a job or step row. The kind semantics follow
 // the CLI's --kind: self-hosted keeps every job that did not run on a hosted runner.
 export function matchRunner(row, filter) {

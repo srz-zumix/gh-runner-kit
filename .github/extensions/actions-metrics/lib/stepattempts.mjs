@@ -1,6 +1,7 @@
 import { GhError, isRateLimitError, mapLimit } from "./gh.mjs";
+import { matchRunnerPattern } from "./runnerkit.mjs";
 import { collectRunTimeline } from "./timeline.mjs";
-import { matchRunner, matchWildcard, normalizeJobRow } from "../shared/steps.mjs";
+import { matchRunner, normalizeJobRow } from "../shared/steps.mjs";
 
 // Adapt the CLI's attempt timeline to the same row schema as metrics jobs/steps.
 // The CLI owns timestamps, durations, runner classification and step occurrences.
@@ -84,8 +85,11 @@ export function mergeAttemptRows(latest, historical) {
 export function filterAttemptRows(rows, { kind = "all", runner = "", excludeRunners = [], labels = [] } = {}) {
     const jobs = rows.jobs.filter((row) => {
         const job = normalizeJobRow(row);
-        if (!matchRunner(job, { kind, name: runner })) return false;
-        if (excludeRunners.some((pattern) => matchWildcard(pattern, job.runnerName))) return false;
+        if (!matchRunner(job, { kind })) return false;
+        // The runner patterns were handed to the CLI for the latest attempts, so they
+        // are matched with the CLI's path.Match semantics rather than the browser's.
+        if (runner && !matchRunnerPattern(runner, job.runnerName)) return false;
+        if (excludeRunners.some((pattern) => matchRunnerPattern(pattern, job.runnerName))) return false;
         const available = new Set(job.labels.map((label) => label.toLowerCase()));
         return labels.every((label) => available.has(String(label).toLowerCase()));
     });

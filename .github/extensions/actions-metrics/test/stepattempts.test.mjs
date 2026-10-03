@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GhError, RateLimitError } from "../lib/gh.mjs";
+import { GhError, RateLimitError, isRateLimitError, statusFromStderr } from "../lib/gh.mjs";
+import { matchRunnerPattern } from "../lib/runnerkit.mjs";
 import { collectEarlierAttempts, filterAttemptRows, mergeAttemptRows, timelineRows } from "../lib/stepattempts.mjs";
 import { aggregateSteps } from "../shared/steps.mjs";
 
@@ -88,6 +89,33 @@ test("earlier attempt rows honour collection kind, runner, exclusions and subset
     assert.deepEqual(filtered.jobs, []);
     assert.deepEqual(filtered.steps, []);
     assert.equal(filtered.historicalAttemptsWithJobs, 1);
+});
+
+// Expected values were produced by Go's path.Match, which the CLI applies to --runner
+// and --exclude-runner.
+const PATH_MATCH_CASES = [
+    ["box\\[1\\]*", "box[1]-linux", true], ["box[1]*", "box[1]-linux", false], ["box[1]*", "box1-linux", true],
+    ["a*", "a/b", false], ["a?c", "a/c", false], ["a?c", "abc", true], ["[^a]x", "bx", true], ["[^a]x", "ax", false],
+    ["[!a]x", "!x", true], ["[!a]x", "bx", false], ["[a-c]*", "b-runner", true], ["[\\]]x", "]x", true],
+    ["ab\\", "ab\\", false], ["[a", "a", false], ["[]a]", "a", false], ["*x", "yx\n", false], ["日?本", "日本本", true],
+    ["日?本", "日x本", true], ["*", "GitHub Actions", true], ["GitHub*", "GitHub Actions", true], ["Git*Act*", "GitHub Actions", true],
+    ["a*b*c", "acb", false], ["", "x", false], ["", "", true], ["[a-]", "a", false], ["x[", "x", false], ["*[", "nope", false],
+    ["linux-??", "linux-01", true], ["a*\\*", "ab*", true], ["*-[0-9]", "r-7", true],
+];
+
+test("runner patterns of earlier attempts follow the CLI's path.Match semantics", () => {
+    for (const [pattern, name, expected] of PATH_MATCH_CASES) {
+        assert.equal(matchRunnerPattern(pattern, name), expected, `${JSON.stringify(pattern)} against ${JSON.stringify(name)}`);
+    }
+    const raw = timeline();
+    raw.Jobs[0] = { ...raw.Jobs[0], Kind: "self-hosted", RunnerName: "box[1]-linux", Labels: ["self-hosted"] };
+    const rows = timelineRows(raw, "owner/repo");
+    assert.equal(filterAttemptRows(rows, { runner: "box\\[1\\]*" }).jobs.length, 1);
+    assert.equal(filterAttemptRows(rows, { runner: "box\\[1\\]*" }).steps.length, 3);
+    assert.equal(filterAttemptRows(rows, { runner: "box[1]*" }).jobs.length, 0);
+    assert.equal(filterAttemptRows(rows, { excludeRunners: ["box?[0-9]?-*"] }).jobs.length, 0);
+    assert.equal(filterAttemptRows(rows, { excludeRunners: ["box\\[[^1]\\]*"] }).jobs.length, 1);
+    assert.equal(filterAttemptRows(rows, { runner: "box*", excludeRunners: ["[box"] }).jobs.length, 1);
 });
 
 test("collects every earlier attempt from sampled runs with bounded concurrency and exact attempt inputs", async () => {
@@ -182,4 +210,14 @@ test("aborted collections send no historical request and runs without retries ne
     const result = await collectEarlierAttempts({ runs: [{ ...run, RunAttempt: 1 }], jobs: [], steps: [], fetchTimeline });
     assert.equal(result.historicalAttemptsRequested, 0);
     assert.deepEqual(result.jobs, []);
+});
+
+test("HTTP statuses are read from gh api and from go-github errors forwarded by gh runner-kit", () => {
+    assert.equal(statusFromStderr("gh: Not Found (HTTP 404)"), 404);
+    assert.equal(statusFromStderr("failed to get attempt 1 of workflow run 42: GET https://api.github.com/repos/owner/repo/actions/runs/42/attempts/1: 404 Not Found []"), 404);
+    assert.equal(statusFromStderr("failed to list the jobs: GET https://ghe.example.com/api/v3/repos/o/r/actions/runs/1/attempts/1/jobs?per_page=100: 502 Bad Gateway []"), 502);
+    const limited = statusFromStderr("GET https://api.github.com/repos/o/r/actions/runs/1: 429 Too Many Requests []");
+    assert.equal(limited, 429);
+    assert.equal(isRateLimitError(new GhError("limited", { status: limited })), true);
+    assert.equal(statusFromStderr("unknown flag: --attempt"), null);
 });

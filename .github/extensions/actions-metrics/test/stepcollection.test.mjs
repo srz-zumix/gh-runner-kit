@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 test("collection switches attempt scope, caches matching rows and reports historical coverage without GitHub requests", async (t) => {
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-attempt-test-"));
-    const previous = { PATH: process.env.PATH, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY };
+    const previous = { PATH: process.env.PATH, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404 };
     t.after(async () => {
         for (const [key, value] of Object.entries(previous)) {
             if (value === undefined) delete process.env[key];
@@ -47,6 +47,9 @@ if (args.join(" ") === "runner-kit metrics --help") {
         StepStatus: "completed", StepConclusion: "success", StartedAt: at(103), CompletedAt: at(108), Duration: 5000000000, Offset: 1000000000 });
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "runs" && args.includes("--input")) {
     output({ Repository: "owner/repo", RunID: "42", RunAttempt: 2 });
+} else if (args[0] === "runner-kit" && args[1] === "job" && args[2] === "timeline" && process.env.FAKE_TIMELINE_404) {
+    process.stderr.write("failed to get attempt 1 of workflow run 42: GET https://api.github.com/repos/owner/repo/actions/runs/42/attempts/1: 404 Not Found []\\n");
+    process.exitCode = 1;
 } else if (args[0] === "runner-kit" && args[1] === "job" && args[2] === "timeline" && args[args.indexOf("--attempt") + 1] === "1") {
     output({ Repo: "owner/repo", RunID: "42", RunAttempt: 1, Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", StartedAt: at(0),
         Jobs: process.env.FAKE_TIMELINE_EMPTY ? [] : [{ JobID: "101", Name: "build", Status: "completed", Conclusion: "timed_out",
@@ -100,4 +103,13 @@ if (args.join(" ") === "runner-kit metrics --help") {
     assert.equal(missing.meta.historicalAttemptsWithJobs, 0);
     assert.equal(missing.meta.warnings.length, 1);
     assert.equal(missing.meta.totalJobs, 1);
+    delete process.env.FAKE_TIMELINE_EMPTY;
+    process.env.FAKE_TIMELINE_404 = "1";
+    const gone = await collectStepMetrics({ ...options, includeAllAttempts: true });
+    assert.equal(gone.available, true, gone.reason);
+    assert.equal(gone.meta.historicalAttemptsRequested, 1);
+    assert.equal(gone.meta.historicalAttemptsWithJobs, 0);
+    assert.equal(gone.meta.totalJobs, 1);
+    assert.equal(gone.meta.warnings.length, 1);
+    assert.match(gone.meta.warnings[0], /attempt 1: .*404 Not Found/);
 });

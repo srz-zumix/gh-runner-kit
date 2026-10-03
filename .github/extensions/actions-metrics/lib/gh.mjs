@@ -24,8 +24,11 @@ function firstLine(text) {
         .find((line) => line.length > 0);
 }
 
-function statusFromStderr(stderr) {
-    const match = /HTTP (\d{3})/.exec(String(stderr ?? ""));
+// `gh api` reports `HTTP 404`, while gh runner-kit forwards go-github's
+// `GET https://…: 404 Not Found []`.
+export function statusFromStderr(stderr) {
+    const text = String(stderr ?? "");
+    const match = /HTTP (\d{3})/.exec(text) ?? /\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) \S+: (\d{3})\b/.exec(text);
     return match ? Number(match[1]) : null;
 }
 

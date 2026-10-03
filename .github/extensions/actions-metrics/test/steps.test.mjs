@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aggregateSteps, displayStepName, downsampleNewest, filterTimelineJobs, formatDuration, formatLabelSet, labelSetKey, matchJobStatus, matchRunner, matchWildcard, matrixMergeMap, normalizeJobStatus, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
+import { aggregateSteps, displayStepName, downsampleNewest, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, labelSetKey, matchJobStatus, matchRunner, matchWildcard, matrixMergeMap, normalizeJobStatus, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
 
 test("timelineMatchesWorkflow compares workflow file names", () => {
     const timeline = { Workflow: "Labeler", WorkflowPath: ".github/workflows/labeler.yml" };
@@ -547,4 +547,14 @@ test("snapshotCommand collects once and the reports read it through --input", ()
     const jobs = jobRowsCommand({ target, filters, limits: {}, kind: "all", input: "/tmp/s.json.gz" });
     assert.deepEqual(jobs.args.slice(0, 7), ["runner-kit", "metrics", "jobs", "--input", "/tmp/s.json.gz", "--format", "ndjson"]);
     assert(!jobs.args.includes("--days"));
+});
+
+test("effectiveStepSettings keeps the in-flight selection of the same target only", () => {
+    const received = { workflow: "ci.yml", includeAllAttempts: false, jobStatus: "" };
+    const pending = { seq: 2, identity: "owner/repo", settings: { workflow: "ci.yml", includeAllAttempts: true, jobStatus: "" } };
+    assert.equal(effectiveStepSettings(received, pending, "owner/repo").includeAllAttempts, true);
+    assert.equal(effectiveStepSettings(received, pending, "owner/other").includeAllAttempts, false);
+    assert.deepEqual(effectiveStepSettings(received, null, "owner/repo"), received);
+    assert.equal(effectiveStepSettings(undefined, pending, "owner/repo").includeAllAttempts, true);
+    assert.deepEqual(effectiveStepSettings(undefined, null, "owner/repo"), {});
 });
