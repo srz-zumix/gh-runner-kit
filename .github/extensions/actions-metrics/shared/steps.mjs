@@ -499,7 +499,7 @@ function outranksConclusion(candidate, current) {
     return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
 }
 
-export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "" } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", includeAllAttempts = false } = {}) {
     const runnerFilter = normalizeRunnerFilter(runner);
     const statusFilter = normalizeJobStatus(jobStatus);
     const allJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
@@ -561,10 +561,10 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         const failures = jobFailures.get(key);
         if (isDecided(row.conclusion)) failures.total += 1;
         if (row.failed) failures.failed += 1;
-        // Carried-over jobs keep the attempt they ran in, so key by run and keep the
-        // highest attempt, which is also the number of attempts the run has had.
-        // Without a job filter, all jobs of a run collapse into one row.
-        const runKey = selectedJob ? keyOf(row.repo, workflowIdentity(row), jobName, row.runId) : keyOf(row.repo, workflowIdentity(row), row.runId);
+        // Latest mode collapses carried-over jobs into one run row. All-attempt mode
+        // keeps each attempt's jobs and outcome together so an earlier timeout stays
+        // selectable even when a later attempt succeeded.
+        const runKey = keyOf(row.repo, workflowIdentity(row), selectedJob ? jobName : "", row.runId, includeAllAttempts ? row.runAttempt : "");
         const current = runList.get(runKey) ?? { repo: row.repo, workflow: row.workflow, job: jobName, runId: row.runId, runAttempt: row.runAttempt, branch: row.branch, conclusion: row.conclusion, durationMs: 0, url: row.runUrl, jobs: 0, runners: [], labelSets: [] };
         if (row.runnerName && !current.runners.includes(row.runnerName)) current.runners.push(row.runnerName);
         const labels = formatLabelSet(row.labels);
@@ -752,10 +752,12 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         runners: runnerPools(poolRows),
         runnerFacets: facets,
         jobStatus: statusFilter,
+        includeAllAttempts,
         jobStatusFacets: jobStatusFacets(allJobRows),
-        runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId))).slice(0, 100),
+        runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId)) || b.runAttempt - a.runAttempt).slice(0, 100),
         meta: {
             analysedRuns: runIds.size,
+            analysedAttempts: new Set([...jobRows, ...stepRows].filter((row) => row.runId).map((row) => keyOf(row.repo, row.runId, row.runAttempt))).size,
             maxRunsPerRepo,
             oldest: oldest === null ? null : new Date(oldest).toISOString(),
             newest: newest === null ? null : new Date(newest).toISOString(),
@@ -765,7 +767,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             jobStatus: statusFilter,
             totalStepRows: stepRows.length,
             totalSteps,
-            latestAttemptBasis: true,
+            latestAttemptBasis: !includeAllAttempts,
         },
     };
 }

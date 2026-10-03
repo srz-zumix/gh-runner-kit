@@ -105,6 +105,7 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         workflow,
         job: document.getElementById("steps-job")?.value?.trim() ?? "",
         jobStatus: normalizeJobStatus(document.getElementById("steps-job-status")?.value),
+        includeAllAttempts: document.getElementById("steps-all-attempts")?.checked === true,
         mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
         showInfra: document.getElementById("steps-infra")?.checked !== false,
         runBudget: Number(document.getElementById("steps-budget")?.value) || 500,
@@ -212,6 +213,7 @@ function controlPanel(state) {
                     ]),
                 ]),
                 el("label", { class: "inline-field" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "1", max: "5000", value: String(settings.runBudget ?? 500) })]),
+                el("label", { class: "inline-field inline-field--check", title: "Fetch every attempt of sampled runs; changing this option collects again" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: () => void loadSteps(state, { reuseRows: true }) }), el("span", { text: "Include all attempts" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false }), el("span", { text: "Merge matrix" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-infra", type: "checkbox", checked: settings.showInfra !== false }), el("span", { text: "Show infra" })]),
                 el("button", { type: "button", class: "button button--primary", disabled: loading, text: loading ? "Loading…" : "Load steps", onclick: () => void loadSteps(state) }),
@@ -318,7 +320,10 @@ function footnote(result) {
     const meta = result.meta;
     const range = meta.oldest && meta.newest ? `${new Date(meta.oldest).toLocaleString()} – ${new Date(meta.newest).toLocaleString()}` : "no timestamp range";
     const filtered = isRunnerFilterActive(meta.runnerFilter) || meta.jobStatus ? ` The job filters${meta.jobStatus ? ` (status: ${meta.jobStatus})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
-    return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached."} Job lists use GitHub's latest-attempt basis, including carried-over jobs.${filtered}` });
+    const basis = meta.latestAttemptBasis === false
+        ? `Attempt scope: all; ${number(meta.analysedAttempts)} attempts have matching rows. Earlier attempts with jobs: ${number(meta.historicalAttemptsWithJobs)} of ${number(meta.historicalAttemptsRequested)} requested.`
+        : "Job lists use GitHub's latest-attempt basis, including carried-over jobs.";
+    return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached."} ${basis}${filtered}` });
 }
 
 // The CLI reports skipped repositories and job lists on stderr; without them a partial
@@ -458,13 +463,13 @@ function runList(result, state) {
     if (rows.length === 0) return el("p", { class: "empty", text: "No run list for this job yet." });
     const open = state?.steps?.timeline;
     return el("table", { class: "runs-table" }, [
-        el("thead", {}, [el("tr", {}, [el("th", { text: "Run" }), el("th", { class: "num", text: "Attempts" }), el("th", { text: "Result" }), el("th", { text: "Runner" }), el("th", { class: "num", text: "Total" }), el("th", { text: "Open" })])]),
+        el("thead", {}, [el("tr", {}, [el("th", { text: "Run" }), el("th", { class: "num", text: result?.includeAllAttempts ? "Attempt" : "Attempts" }), el("th", { text: "Result" }), el("th", { text: "Runner" }), el("th", { class: "num", text: "Total" }), el("th", { text: "Open" })])]),
         el("tbody", {}, rows.slice(0, 30).map((row) => {
             const show = () => void openRunTimeline(state, row.runId, row.repo ?? "", row.runAttempt);
             const active = open && String(open.RunID) === String(row.runId) && Number(open.RunAttempt) === Number(row.runAttempt);
             return el("tr", { class: active ? "row--selected" : "" }, [
                 el("td", {}, [el("button", { type: "button", class: "link-button", title: "Show this run's Gantt", text: row.runId, onclick: show })]),
-                el("td", { class: `num${row.runAttempt > 1 ? " runs-table__retried" : ""}`, title: row.runAttempt > 1 ? `Re-run ${row.runAttempt - 1} time(s); statistics use attempt ${row.runAttempt}` : null, text: number(row.runAttempt) }),
+                el("td", { class: `num${row.runAttempt > 1 ? " runs-table__retried" : ""}`, title: result?.includeAllAttempts ? `Statistics for attempt ${row.runAttempt}; click Gantt to open this attempt` : row.runAttempt > 1 ? `Re-run ${row.runAttempt - 1} time(s); statistics use attempt ${row.runAttempt}` : null, text: number(row.runAttempt) }),
                 el("td", { text: row.conclusion ?? "–" }),
                 (() => {
                     const summary = listSummary(row.runners);

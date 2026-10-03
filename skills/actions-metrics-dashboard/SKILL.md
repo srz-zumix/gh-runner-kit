@@ -64,7 +64,7 @@ before paging; their single-column sort toggles between two directions.
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
 | `show_run_timeline` | Show one workflow run ID or URL as a job/step Gantt in the Step timeline tab. Inputs: required `run`, optional `repo`, optional `attempt`. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 
@@ -86,6 +86,24 @@ name or ID (`ci.yml`, not the display name `Build and Test`). Prefer the
 workflow path already present in dashboard workflow rows; use its basename for
 collection. The tab samples newest runs with `--max-runs`, so always mention
 the reported run count, observed range and truncation flag when summarising.
+
+**Include all attempts** / `includeAllAttempts: true` collects every attempt
+of each sampled run. False (the default) uses GitHub's latest-attempt job
+listing, including carried-over jobs. Earlier failures and timeouts replaced
+by a successful rerun are only available in the all-attempt scope. The panel
+reads earlier attempts with `job timeline --attempt <N>`, reusing the CLI's
+completed-attempt cache and preserving their own timeline origins.
+Carried-over jobs are deduplicated. `runBudget` counts runs, not attempts.
+Changing this option requires collection even with `reuseRows: true`, because
+the row cache is scoped by attempt mode. The UI persists it per target.
+
+All-attempt mode gives the run list one row per attempt; selecting a row opens
+that attempt's Gantt. `meta.latestAttemptBasis` is false,
+`meta.analysedAttempts` counts attempts with matching rows, and
+`meta.historicalAttemptsRequested` / `meta.historicalAttemptsWithJobs` report
+historical coverage. Surface `meta.warnings`: empty or unreadable earlier
+attempts mean incomplete history, not success or no timeout. This mode needs
+`metrics collect`, `metrics runs` and `job timeline` in the installed CLI.
 
 `get_step_metrics` returns the aggregated data and updates the tab selection.
 The `section` input controls whether the response focuses `steps`, `jobs`,

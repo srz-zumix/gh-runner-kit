@@ -9,6 +9,7 @@ import { assertRateBudget, ghRaw, isRateLimitError, noteRateLimit } from "./gh.m
 import { runLines } from "./jobs.mjs";
 import { jobRowsCommand, probeRunnerKit, snapshotCommand, stepRowsCommand } from "./runnerkit.mjs";
 import { aggregateSteps, normalizeRunnerFilter } from "../shared/steps.mjs";
+import { collectEarlierAttempts } from "./stepattempts.mjs";
 
 const DEFAULT_STEP_RUN_BUDGET = 500;
 const MAX_STEP_RUN_BUDGET = 5000;
@@ -105,7 +106,7 @@ async function streamCommand({ args, env, cwd, target, signal, onProgress, label
 
 // Reads the step and job listings from one `metrics collect` snapshot, so both describe
 // exactly the same runs even when a run starts or finishes between the two reports.
-async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress }) {
+async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress, includeAllAttempts }) {
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-steps-"));
     try {
         const input = join(dir, "snapshot.json.gz");
@@ -114,6 +115,23 @@ async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, s
         await ghRaw(collect.args, { cwd, env: collect.env, host: target?.host ?? null, signal });
         const steps = await streamCommand({ ...stepRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading the steps of ${workflowFile}`, gated: false });
         const jobs = await streamCommand({ ...jobRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}`, gated: false });
+        if (includeAllAttempts) {
+            const runs = await streamCommand({ args: ["runner-kit", "metrics", "runs", "--input", input, "--format", "ndjson"], cwd, target, signal, onProgress, label: "Reading sampled run attempts", gated: false });
+            if (runs.malformed) throw new Error("The sampled run listing contains malformed rows; cannot collect every attempt reliably");
+            const history = await collectEarlierAttempts({
+                runs: runs.rows,
+                jobs: jobs.rows,
+                steps: steps.rows,
+                cwd, target, signal, onProgress,
+                concurrency: common.limits?.jobConcurrency ?? 6,
+                rowFilters: { kind: common.kind, runner: common.pattern, excludeRunners: common.exclusions, labels: common.filters?.labels ?? [] },
+            });
+            jobs.rows = history.jobs;
+            steps.rows = history.steps;
+            jobs.warnings.push(...runs.warnings, ...history.warnings);
+            jobs.historicalAttemptsRequested = history.historicalAttemptsRequested;
+            jobs.historicalAttemptsWithJobs = history.historicalAttemptsWithJobs;
+        }
         return { steps, jobs };
     } finally {
         await rm(dir, { recursive: true, force: true });
@@ -128,6 +146,7 @@ export async function collectStepMetrics({
     workflow,
     job = "",
     jobStatus = "",
+    includeAllAttempts = false,
     mergeMatrix = true,
     showInfra = true,
     runBudget = DEFAULT_STEP_RUN_BUDGET,
@@ -152,6 +171,9 @@ export async function collectStepMetrics({
     if (!probe.subcommands.has("jobs")) {
         return { available: false, reason: "gh runner-kit metrics jobs is not available in the installed version. Update gh runner-kit to use the Step timeline tab." };
     }
+    if (includeAllAttempts && (!probe.subcommands.has("collect") || !probe.subcommands.has("runs") || !probe.jobSubcommands?.has("timeline"))) {
+        return { available: false, reason: "Including all attempts requires gh runner-kit metrics collect, metrics runs and job timeline. Update gh runner-kit to use this option." };
+    }
 
     const workflowFile = normalizeWorkflowForCli(workflow || filters?.workflow);
     if (!workflowFile) {
@@ -161,7 +183,7 @@ export async function collectStepMetrics({
     const budget = clampRunBudget(runBudget);
     // Everything that changes which rows the CLI returns is part of the key; the job,
     // status, step, matrix, infra and runner filters only change the aggregation.
-    const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners });
+    const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners, includeAllAttempts });
     const cached = reuseRows && cache?.key === rowsKey ? cache : null;
     if (!cached) {
         await assertRateBudget(target?.host ?? null, { cwd });
@@ -183,7 +205,7 @@ export async function collectStepMetrics({
         // The step filter is applied in aggregateSteps rather than by the CLI, because
         // the jobs that never ran the filtered step still count toward its presence.
         if (!cached && probe.subcommands.has("collect")) {
-            ({ steps, jobs } = await streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress }));
+            ({ steps, jobs } = await streamFromSnapshot({ common, budget, workflowFile, cwd, target, signal, onProgress, includeAllAttempts }));
         } else if (!cached) {
             // A CLI without metrics collect lists the runs once per report, so a run that
             // arrives between the two can still make the listings differ slightly.
@@ -200,6 +222,7 @@ export async function collectStepMetrics({
             showInfra,
             selectedJob: job,
             jobStatus,
+            includeAllAttempts,
             stepPattern: step,
             limit,
             runner: runnerSelection,
@@ -232,6 +255,8 @@ export async function collectStepMetrics({
                 malformedRows: steps.malformed + jobs.malformed,
                 warnings,
                 reusedRows: Boolean(cached),
+                historicalAttemptsRequested: jobs.historicalAttemptsRequested ?? 0,
+                historicalAttemptsWithJobs: jobs.historicalAttemptsWithJobs ?? 0,
             },
         };
     } catch (error) {

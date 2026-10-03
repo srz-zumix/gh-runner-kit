@@ -47,8 +47,24 @@ and streams `metrics jobs --format ndjson` over the same slice for job
 denominators. The workflow selector uses workflow file names, such as `ci.yml`;
 GitHub display names like `Build and Test` are not accepted by the CLI. The
 footnote always reports how many runs were analysed, the observed time range,
-whether the run budget truncated the sample, and that GitHub's latest-attempt
-job listing is the basis.
+whether the run budget truncated the sample, and the attempt scope.
+
+**Include all attempts** is off by default, preserving GitHub's latest-attempt
+job listing (including carried-over jobs). Turn it on to include every attempt
+of each sampled run, including failures or timeouts later replaced by a
+successful rerun. The panel reads earlier attempts through
+`gh runner-kit job timeline --attempt <N>` and reuses the CLI's completed-attempt
+cache. Carried-over jobs are counted once, not duplicated. The run budget
+still counts workflow runs, not attempts.
+
+Changing the option collects again; subsequent status and runner filter
+changes reuse those rows. The option is saved per target. In all-attempt mode,
+the run list has one row per attempt, and its **Gantt** button opens that
+specific attempt. The footnote reports the number of attempts with matching
+rows and how many requested historical attempts returned jobs. Missing,
+unreadable or empty historical job lists produce a collection warning,
+not a claim that the run succeeded. This option requires `metrics collect`,
+`metrics runs` and `job timeline` in the installed `gh runner-kit`.
 
 The tab groups matrix jobs by their base name only when at least two variants
 share that base. Infrastructure steps (`Set up job`, `Complete job`, and names starting with `Post` followed by a space) can be hidden. Durations come from GitHub's
@@ -117,7 +133,7 @@ The panel stops sending requests to a host as soon as one of them is refused for
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally including all attempts (`includeAllAttempts`, default false), focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
 | `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as Prometheus text or JSON. |
 
