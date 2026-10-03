@@ -64,7 +64,7 @@ before paging; their single-column sort toggles between two directions.
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
 | `show_run_timeline` | Show one workflow run ID or URL as a job/step Gantt in the Step timeline tab. Inputs: required `run`, optional `repo`, optional `attempt`. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 
@@ -94,6 +94,15 @@ The runner inputs filter jobs after collection; pass `reuseRows: true` to
 re-aggregate the rows already collected without calling the CLI again. Use
 `section: "runners"` to compare `runs-on` pools (wait/run percentiles, failure
 rate) and mention `meta.unfilteredJobs` when a runner filter is active.
+`jobStatus` matches a job lifecycle status (`queued`, `in_progress`,
+`completed`, etc.) or conclusion (`success`, `failure`, `cancelled`,
+`skipped`, etc.) and keeps all steps of matching jobs, not only steps with
+that outcome. It combines with runner filters; `reuseRows: true` avoids a
+new collection. The UI **Job status** selector defaults to **All statuses**
+and persists per target. The response echoes `jobStatus` and
+`jobStatusFacets`, whose counts include every sampled job. Statistics,
+trends, runner pools and run samples reflect the filter, as does the
+single-run Gantt; **Copy mermaid** still exports the full run.
 `show_run_timeline` opens a single run, keeps waiting bars, and returns the CLI
 JSON. Use it for a run ID or URL the user names, or after selecting a run from
 the Step timeline run list.

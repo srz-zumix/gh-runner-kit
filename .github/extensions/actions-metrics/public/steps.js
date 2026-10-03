@@ -1,6 +1,6 @@
 import { svg } from "./charts.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
-import { displayStepName, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
+import { displayStepName, filterTimelineJobs, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeJobStatus, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
 
 function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -104,6 +104,7 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
     const body = {
         workflow,
         job: document.getElementById("steps-job")?.value?.trim() ?? "",
+        jobStatus: normalizeJobStatus(document.getElementById("steps-job-status")?.value),
         mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
         showInfra: document.getElementById("steps-infra")?.checked !== false,
         runBudget: Number(document.getElementById("steps-budget")?.value) || 500,
@@ -183,6 +184,14 @@ function controlPanel(state) {
     const options = workflowOptions(state);
     const currentWorkflow = settings.workflow || state?.filters?.workflow || options[0]?.value || "";
     const jobs = state?.steps?.result?.jobStats ?? [];
+    const jobOptions = jobs.map((job) => ({ value: job.job, text: job.variants?.length > 1 ? `${job.job} (${job.variants.length} variants)` : job.job }));
+    if (settings.job && !jobOptions.some((option) => option.value === settings.job)) jobOptions.unshift({ value: settings.job, text: `${settings.job} (0 jobs)` });
+    const jobStatus = normalizeJobStatus(settings.jobStatus);
+    const statusFacets = state?.steps?.result?.jobStatusFacets;
+    const statusOptions = statusFacets
+        ? statusFacets.map((item) => ({ value: item.value, text: `${item.value} (${number(item.count)})` }))
+        : ["success", "failure", "cancelled", "skipped", "timed_out", "completed", "in_progress", "queued", "waiting"].map((value) => ({ value, text: value }));
+    if (jobStatus && !statusOptions.some((option) => option.value === jobStatus)) statusOptions.unshift({ value: jobStatus, text: `${jobStatus} (0)` });
     return el("section", { class: "card" }, [
         el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Step timeline" })]),
         el("div", { class: "card__body" }, [
@@ -193,7 +202,14 @@ function controlPanel(state) {
                 ]),
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Job" }),
-                    el("select", { id: "steps-job" }, [el("option", { value: "", text: "All jobs" }), ...jobs.map((job) => el("option", { value: job.job, text: job.variants?.length > 1 ? `${job.job} (${job.variants.length} variants)` : job.job, selected: settings.job === job.job }))]),
+                    el("select", { id: "steps-job" }, [el("option", { value: "", text: "All jobs" }), ...jobOptions.map((option) => el("option", { value: option.value, text: option.text, selected: settings.job === option.value }))]),
+                ]),
+                el("label", { class: "inline-field" }, [
+                    el("span", { text: "Job status" }),
+                    el("select", { id: "steps-job-status", title: "Filter by job lifecycle status or conclusion, keeping all steps of matching jobs", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
+                        el("option", { value: "", text: "All statuses" }),
+                        ...statusOptions.map((option) => el("option", { value: option.value, text: option.text, selected: jobStatus === option.value })),
+                    ]),
                 ]),
                 el("label", { class: "inline-field" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "1", max: "5000", value: String(settings.runBudget ?? 500) })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false }), el("span", { text: "Merge matrix" })]),
@@ -301,7 +317,7 @@ function footnote(result) {
     if (!result?.meta) return null;
     const meta = result.meta;
     const range = meta.oldest && meta.newest ? `${new Date(meta.oldest).toLocaleString()} – ${new Date(meta.newest).toLocaleString()}` : "no timestamp range";
-    const filtered = isRunnerFilterActive(meta.runnerFilter) ? ` The runner filter keeps ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
+    const filtered = isRunnerFilterActive(meta.runnerFilter) || meta.jobStatus ? ` The job filters${meta.jobStatus ? ` (status: ${meta.jobStatus})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
     return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached."} Job lists use GitHub's latest-attempt basis, including carried-over jobs.${filtered}` });
 }
 
@@ -463,9 +479,9 @@ function runList(result, state) {
     ]);
 }
 
-function runTimeline(timeline, stats, workflow, onClose) {
+function runTimeline(timeline, stats, workflow, onClose, jobStatus = "") {
     if (!timeline) return el("p", { class: "empty", text: "Open a run to show a single-run Gantt." });
-    const jobs = timeline.Jobs ?? [];
+    const jobs = filterTimelineJobs(timeline, jobStatus);
     const sameWorkflow = timelineMatchesWorkflow(timeline, workflow);
     // Keyed by repository, the job name the run reports and the step id: a merged matrix
     // statistic answers for each of its variants, and a step literally named "Upload #2"
@@ -487,6 +503,8 @@ function runTimeline(timeline, stats, workflow, onClose) {
             onClose ? el("button", { type: "button", class: "ghost gantt__close", title: "Close this Gantt", "aria-label": "Close this Gantt", text: "× Close", onclick: onClose }) : null,
         ]),
         sameWorkflow ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.WorkflowPath || timeline.Workflow}, not ${workflow}; slow-step highlighting against p90 is off.` }),
+        jobStatus ? el("p", { class: "notice", text: `Job status: ${jobStatus}; showing ${number(jobs.length)} of ${number(timeline.Jobs?.length ?? 0)} jobs. Copy mermaid exports the full run.` }) : null,
+        jobs.length === 0 ? el("p", { class: "empty", text: "No jobs match the selected status." }) : null,
         ganttAxis(max),
     ].filter(Boolean);
     for (const job of jobs) {
@@ -582,7 +600,7 @@ export function renderSteps(state) {
                 state?.steps?.timeline ? el("button", { type: "button", class: "ghost", text: "Close run", onclick: () => void closeRunTimeline(state) }) : null,
             ]),
             runList(result, state),
-            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state)),
+            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state), state?.steps?.settings?.jobStatus ?? ""),
         ])]),
     ].filter(Boolean);
 }
