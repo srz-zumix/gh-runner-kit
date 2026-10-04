@@ -1,4 +1,5 @@
 import { renderSteps } from "./steps.js";
+import { workflowFileLink } from "./links.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
 import {
     FIELD_GROUPS,
@@ -1422,7 +1423,7 @@ function renderOverview(metrics) {
                                         },
                                     ]
                                   : []),
-                              { label: "Workflow", render: (row) => row.workflow, wrap: true },
+                              { label: "Workflow", render: (row) => workflowFileLink(row, metrics.meta.target?.host), wrap: true },
                               { label: "Runs", num: true, render: (row) => number(row.runs) },
                               { label: "", render: (row) => bar(row.runs, Math.max(1, ...workflowRows.map((item) => item.runs))) },
                               { label: "Jobs", num: true, render: (row) => number(row.jobs) },
@@ -1472,7 +1473,7 @@ function renderOverview(metrics) {
                                         },
                                     ]
                                   : []),
-                              { label: "Workflow", render: (row) => row.name, wrap: true },
+                              { label: "Workflow", render: (row) => workflowFileLink(row, metrics.meta.target?.host), wrap: true },
                               { label: "Runs", num: true, render: (row) => number(row.runs) },
                               { label: "", render: (row) => bar(row.runs, maxWorkflowRuns) },
                               { label: "Success", num: true, sort: (row) => row.successRate, render: (row) => healthPill(row.successRate) },

@@ -745,6 +745,16 @@ a {
     color: var(--text);
 }
 
+.collection-warnings > summary {
+    cursor: pointer;
+}
+
+.collection-warnings > ul {
+    margin: 8px 0 0;
+    padding-left: 24px;
+    overflow-wrap: anywhere;
+}
+
 .control-note {
     align-self: center;
     color: var(--warning);
@@ -1488,6 +1498,12 @@ button.heat__name--pick:hover {
 .runs-table__retried {
     color: var(--true-color-orange, #bc4c00);
     font-weight: var(--font-weight-semibold, 600);
+}
+.runs-table__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
 }
 .gantt__group {
     margin-top: 8px;
