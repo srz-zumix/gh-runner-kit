@@ -725,7 +725,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         };
     }).sort((a, b) => a.repo.localeCompare(b.repo) || a.workflow.localeCompare(b.workflow) || a.job.localeCompare(b.job));
 
-    const typicalTimeline = [...jobTimeline.values()].map((job) => ({
+    const typicalTimeline = [...jobTimeline.entries()].map(([jobKey, job]) => ({
         repo: job.repo,
         workflow: job.workflow,
         workflowPath: job.workflowPath,
@@ -735,6 +735,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         endOffsetMs: percentile(job.endOffsets, 50),
         steps: [...job.steps.values()].map((step) => {
             const duration = summarizeSamples(step.durations);
+            const acc = accs.get(keyOf(jobKey, step.id));
             return {
                 key: step.key,
                 id: step.id,
@@ -745,6 +746,7 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
                 durationMs: duration.p50,
                 durationP90Ms: duration.p90,
                 failed: step.conclusions.some((value) => FAILURE_CONCLUSIONS.has(value)),
+                failureRate: acc.executed > 0 ? acc.failed / acc.executed : 0,
                 infrastructure: isInfrastructureStep(step.name),
             };
         }).sort((a, b) => a.offsetMs - b.offsetMs || a.key.localeCompare(b.key) || a.id.localeCompare(b.id)),

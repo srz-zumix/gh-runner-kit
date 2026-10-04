@@ -87,6 +87,14 @@ if (args.join(" ") === "runner-kit metrics --help") {
     assert.equal(filtered.meta.totalJobs, 1);
     assert.equal(filtered.meta.historicalAttemptsRequested, 1);
     assert.equal((await calls()).length, afterAll);
+    for (const job of ["build", "missing", ""]) {
+        const focused = await collectStepMetrics({ ...options, includeAllAttempts: true, job, reuseRows: true, cache: all.rows });
+        assert.equal(focused.available, true, focused.reason);
+        assert.equal(focused.meta.reusedRows, true);
+        assert.equal(focused.stepStats.length, job === "missing" ? 0 : 1);
+        assert.equal(focused.runs.length, job === "missing" ? 0 : 2);
+        assert.equal((await calls()).length, afterAll);
+    }
     const latest = await collectStepMetrics({ ...options, includeAllAttempts: false, reuseRows: true, cache: all.rows });
     assert.equal(latest.available, true, latest.reason);
     assert.equal(latest.meta.latestAttemptBasis, true);

@@ -100,7 +100,13 @@ reads earlier attempts with `job timeline --attempt <N>`, reusing the CLI's
 completed-attempt cache and preserving their own timeline origins.
 Carried-over jobs are deduplicated. `runBudget` counts runs, not attempts.
 Changing this option requires collection even with `reuseRows: true`, because
-the row cache is scoped by attempt mode. The UI persists it per target.
+the row cache is scoped by attempt mode. In the UI, changing the checkbox only
+edits the next collection; **Load steps** applies it and persists it per target.
+Pending edits survive panel updates. **Job**, **Job status** and runner filters
+immediately re-aggregate the loaded sample without a new collection, using its
+workflow, run budget and attempt mode rather than pending edits to those
+controls. Select **All jobs** to clear the job selection. These filters are
+unavailable until steps are loaded and during a fresh collection.
 
 All-attempt mode gives the run list one row per attempt; selecting a row opens
 that attempt's Gantt. Each run-list row also has a **GitHub** link next to
@@ -133,6 +139,14 @@ single-run Gantt; **Copy mermaid** still exports the full run.
 `show_run_timeline` opens a single run, keeps waiting bars, and returns the CLI
 JSON. Use it for a run ID or URL the user names, or after selecting a run from
 the Step timeline run list.
+
+**Typical timeline** includes `failureRate` for each step, using the same
+failed / executed ratio as **Step statistics**; skipped steps are excluded.
+Bars remain blue for zero failures and gray for infrastructure steps with
+zero failures. A positive failure rate turns the bar red, from pale red near
+0% to solid red at 100%, including infrastructure steps. The tooltip shows
+the percentage. Shading reflects the current job, status, runner and attempt
+filters. Single-run Gantt colors are unchanged.
 
 ## Target and scope
 
