@@ -619,7 +619,10 @@ export class DashboardInstance {
             return null;
         }
         this.stepAbort = null;
-        this.steps = { ...this.steps, status: "error", settings, error: error?.message ?? String(error) };
+        // A retained result keeps the settings that produced it, so cached filters still
+        // re-aggregate the loaded rows instead of recollecting with the failed settings.
+        const retained = this.steps.result && this.steps.result.available !== false;
+        this.steps = { ...this.steps, status: "error", settings: retained ? this.steps.settings : settings, error: error?.message ?? String(error) };
         this.broadcast();
         return this.state();
     }

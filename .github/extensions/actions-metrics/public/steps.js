@@ -58,8 +58,7 @@ function draftStepSettings(state, patch) {
 
 function canFilterSteps(state) {
     const collecting = pendingStepRequest && pendingStepRequest.identity === state?.identity && !pendingStepRequest.reuseRows;
-    return Boolean(state?.steps?.result) && state.steps.result.available !== false && state.steps.status !== "error"
-        && !collecting;
+    return Boolean(state?.steps?.result) && state.steps.result.available !== false && !collecting;
 }
 
 function workflowOptions(state) {

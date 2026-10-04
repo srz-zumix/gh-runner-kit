@@ -314,6 +314,10 @@ test("a failed load retains its draft while filters still use the loaded attempt
     assert.equal(panel.control("steps-all-attempts").checked, true);
     assert.equal(panel.state.steps.settings.includeAllAttempts, false);
     assert.equal(panel.requests.length, 1);
+    // The server broadcasts an error snapshot that keeps the loaded result and settings.
+    panel.state.steps = { ...panel.state.steps, status: "error", error: "Collection failed" };
+    panel.render();
+    assert.equal(Object.hasOwn(panel.control("steps-job").attributes, "disabled"), false);
     change(panel, "steps-job", "test");
     await settled();
     assert.equal(panel.requests.length, 2);
