@@ -601,6 +601,14 @@ export class DashboardInstance {
         if (rows) {
             this.stepRowCache = rows;
         }
+        // An unavailable response is a failed collection like the one setStepError
+        // reports: keep the loaded timeline and the settings that produced it, so the
+        // panel still shows it and cached filters still re-aggregate the loaded rows.
+        if (visible?.available === false && this.steps.result && this.steps.result.available !== false) {
+            this.steps = { ...this.steps, status: "error", error: visible.reason };
+            this.broadcast();
+            return visible;
+        }
         const stale = !timelineMatchesWorkflow(this.steps.timeline, settings?.workflow);
         this.steps = {
             ...this.steps,
@@ -619,7 +627,10 @@ export class DashboardInstance {
             return null;
         }
         this.stepAbort = null;
-        this.steps = { ...this.steps, status: "error", settings, error: error?.message ?? String(error) };
+        // A retained result keeps the settings that produced it, so cached filters still
+        // re-aggregate the loaded rows instead of recollecting with the failed settings.
+        const retained = this.steps.result && this.steps.result.available !== false;
+        this.steps = { ...this.steps, status: "error", settings: retained ? this.steps.settings : settings, error: error?.message ?? String(error) };
         this.broadcast();
         return this.state();
     }

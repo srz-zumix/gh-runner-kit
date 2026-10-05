@@ -55,3 +55,37 @@ test("switching the target drops the step state", () => {
     assert.equal(panel.stepRowCache, null);
     panel.dispose();
 });
+
+test("a failed step request keeps the settings of the retained result", () => {
+    const { instances: [panel] } = panels(1);
+    const failedFirst = panel.beginStepRequest();
+    panel.setStepError({ workflow: "first.yml" }, new Error("boom"), failedFirst.generation);
+    assert.equal(panel.state().steps.settings.workflow, "first.yml");
+    const loaded = panel.beginStepRequest();
+    panel.setStepMetrics({ workflow: "ci.yml", includeAllAttempts: false }, { rows: { key: "rows" }, stepStats: [] }, loaded.generation);
+    const failed = panel.beginStepRequest();
+    panel.setStepError({ workflow: "build.yml", includeAllAttempts: true }, new Error("boom"), failed.generation);
+    const { steps } = panel.state();
+    assert.equal(steps.status, "error");
+    assert.equal(steps.error, "boom");
+    assert.deepEqual(steps.settings, { workflow: "ci.yml", includeAllAttempts: false });
+    assert.ok(steps.result);
+    assert.equal(panel.stepRowCache.key, "rows");
+    panel.dispose();
+});
+
+test("an unavailable step response keeps the retained result and its settings", () => {
+    const { instances: [panel] } = panels(1);
+    const loaded = panel.beginStepRequest();
+    panel.setStepMetrics({ workflow: "ci.yml" }, { rows: { key: "rows" }, stepStats: [] }, loaded.generation);
+    const failed = panel.beginStepRequest();
+    const visible = panel.setStepMetrics({ workflow: "build.yml" }, { available: false, reason: "nope" }, failed.generation);
+    assert.equal(visible.available, false);
+    const { steps } = panel.state();
+    assert.equal(steps.status, "error");
+    assert.equal(steps.error, "nope");
+    assert.deepEqual(steps.settings, { workflow: "ci.yml" });
+    assert.equal(steps.result.available, undefined);
+    assert.equal(panel.stepRowCache.key, "rows");
+    panel.dispose();
+});

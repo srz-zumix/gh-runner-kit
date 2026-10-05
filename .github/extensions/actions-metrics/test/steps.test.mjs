@@ -112,6 +112,7 @@ test("aggregateSteps handles duplicate names and Go step counts", () => {
     assert.equal(compile.duration.p90, 40_000);
     assert.equal(compile.duration.max, 40_000);
     assert.equal(compile.offsetMs, 5_000);
+    assert.equal(result.typicalTimeline.find((row) => row.job === "build").steps.find((row) => row.name === "Compile").failureRate, 1 / 3);
     assert.equal(Math.round(compile.share * 10) / 10, 0.8);
     const upload2 = result.stepStats.find((row) => row.stepKey === "Upload #2");
     assert.equal(upload2.executed, 1);
@@ -122,6 +123,7 @@ test("typical timeline uses median observed offsets", () => {
     const build = result.typicalTimeline.find((row) => row.job === "build");
     assert.equal(build.steps[0].offsetMs, 3_000);
     assert.equal(build.steps[0].durationMs, 6_000);
+    assert.equal(build.steps[0].failureRate, 0);
 });
 
 test("trend and downsampling keep newest points", () => {
@@ -512,6 +514,40 @@ test("a timed out step counts as failed", () => {
     assert.equal(compile.failed, 1);
     assert.equal(compile.failureRate, 0.5);
     assert.equal(result.typicalTimeline[0].steps.find((row) => row.name === "Compile").failed, true);
+    assert.equal(result.typicalTimeline[0].steps.find((row) => row.name === "Compile").failureRate, 0.5);
+});
+
+test("timeline failure rates share step-statistic denominators, filters and job identities", () => {
+    const jobs = [
+        { ...job(1, "build", 1, 51), Kind: "hosted" },
+        { ...job(2, "build", 1, 41, "failure"), Kind: "self-hosted" },
+        { ...job(3, "build", 1, 31), Kind: "hosted" },
+        { ...job(4, "build", 1, 31), Kind: "self-hosted", Conclusion: null, Status: "in_progress" },
+        { ...job(5, "test", 1, 21), Kind: "hosted" },
+    ];
+    const steps = [
+        { ...step(1, "build", 101, 2, "Compile", 6, 36), Kind: "hosted" },
+        { ...step(2, "build", 102, 2, "Compile", 6, 40, "failure"), Kind: "self-hosted" },
+        { ...step(3, "build", 103, 2, "Compile", null, null, "skipped"), Kind: "hosted" },
+        { ...step(4, "build", 104, 2, "Compile", 6, null), Kind: "self-hosted", StepConclusion: null, StepStatus: "in_progress" },
+        { ...step(5, "test", 105, 2, "Compile", 6, 16), Kind: "hosted" },
+    ];
+    for (const [filters, expected] of [
+        [{}, 1 / 3],
+        [{ jobStatus: "failure" }, 1],
+        [{ jobStatus: "success" }, 0],
+        [{ runner: { kind: "self-hosted" } }, 0.5],
+        [{ runner: { kind: "github-hosted" } }, 0],
+    ]) {
+        const result = aggregateSteps({ jobs, steps, ...filters });
+        const timeline = result.typicalTimeline.find((row) => row.job === "build").steps[0];
+        const statistic = result.stepStats.find((row) => row.job === "build");
+        assert.equal(timeline.failureRate, expected);
+        assert.equal(timeline.failureRate, statistic.failureRate);
+    }
+    const limited = aggregateSteps({ jobs, steps, limit: 1 });
+    assert.equal(limited.stepStats.length, 1);
+    assert.equal(limited.typicalTimeline.find((row) => row.job === "test").steps[0].failureRate, 0);
 });
 
 test("matchWildcard mirrors the CLI pattern semantics", () => {

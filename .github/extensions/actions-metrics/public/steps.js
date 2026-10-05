@@ -50,6 +50,16 @@ let runTimelineSeq = 0;
 let closingRunTimeline = Promise.resolve();
 const prefsByIdentity = new Map();
 const prefsLoading = new Set();
+const draftsByIdentity = new Map();
+
+function draftStepSettings(state, patch) {
+    draftsByIdentity.set(state?.identity, { ...draftsByIdentity.get(state?.identity), ...patch });
+}
+
+function canFilterSteps(state) {
+    const collecting = pendingStepRequest && pendingStepRequest.identity === state?.identity && !pendingStepRequest.reuseRows;
+    return Boolean(state?.steps?.result) && state.steps.result.available !== false && !collecting;
+}
 
 function workflowOptions(state) {
     const rows = state?.metrics?.fleet?.workflows?.length ? state.metrics.fleet.workflows : state?.metrics?.overview?.byWorkflow ?? [];
@@ -92,34 +102,38 @@ function runnerFilterFromControls(patch = {}) {
     });
 }
 
-// applyRunnerFilter re-aggregates the rows already collected for this workflow, so it
-// does not call the CLI unless the workflow or run budget changed.
+// Filter changes always use the loaded collection, not edits waiting for Load steps.
 function applyRunnerFilter(state, patch = {}) {
     void loadSteps(state, { reuseRows: true, runnerFilter: runnerFilterFromControls(patch) });
 }
 
 async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilterFromControls() } = {}) {
-    const workflow = document.getElementById("steps-workflow")?.value?.trim() ?? "";
+    if (reuseRows && !canFilterSteps(state)) return;
+    const collection = reuseRows ? state.steps.settings : {
+        workflow: document.getElementById("steps-workflow")?.value?.trim() ?? "",
+        includeAllAttempts: document.getElementById("steps-all-attempts")?.checked === true,
+        mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
+        showInfra: document.getElementById("steps-infra")?.checked !== false,
+        runBudget: Number(document.getElementById("steps-budget")?.value) || 500,
+        kind: "all",
+    };
+    const workflow = collection?.workflow ?? "";
     if (!workflow) {
         error = "Choose a workflow file first.";
         renderSoon();
         return;
     }
     const body = {
+        ...collection,
         workflow,
         job: document.getElementById("steps-job")?.value?.trim() ?? "",
         jobStatus: normalizeJobStatus(document.getElementById("steps-job-status")?.value),
-        includeAllAttempts: document.getElementById("steps-all-attempts")?.checked === true,
-        mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
-        showInfra: document.getElementById("steps-infra")?.checked !== false,
-        runBudget: Number(document.getElementById("steps-budget")?.value) || 500,
-        kind: "all",
         runnerFilter,
         reuseRows,
     };
     const seq = ++stepRequestSeq;
     const { reuseRows: _reuse, ...settings } = body;
-    pendingStepRequest = { seq, identity: state?.identity, settings };
+    pendingStepRequest = { seq, identity: state?.identity, settings, reuseRows };
     loading = true;
     error = null;
     renderSoon();
@@ -131,6 +145,12 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         if (!response.ok) throw new Error(result.reason ?? result.error ?? `Request failed with HTTP ${response.status}`);
         const stale = !timelineMatchesWorkflow(state.steps?.timeline, workflow);
         state.steps = { ...(state.steps ?? {}), ...(stale ? { timeline: null, timelineRequest: null } : {}), status: "ready", settings, result };
+        if (!reuseRows) {
+            const drafts = draftsByIdentity.get(state?.identity);
+            for (const key of Object.keys(drafts ?? {})) {
+                if (String(drafts[key]) === String(settings[key])) delete drafts[key];
+            }
+        }
         if (!reuseRows || !(result.stepStats ?? []).some((row) => row.id === selectedStepId)) {
             selectedStepId = result.stepStats?.[0]?.id ?? "";
         }
@@ -187,7 +207,11 @@ function renderSoon() {
 }
 
 function controlPanel(state) {
-    const settings = effectiveStepSettings(state?.steps?.settings ?? prefsByIdentity.get(state?.identity), pendingStepRequest, state?.identity);
+    const settings = {
+        ...effectiveStepSettings(state?.steps?.settings ?? prefsByIdentity.get(state?.identity), pendingStepRequest, state?.identity),
+        ...draftsByIdentity.get(state?.identity),
+    };
+    const filtersDisabled = !canFilterSteps(state);
     const options = workflowOptions(state);
     const currentWorkflow = settings.workflow || state?.filters?.workflow || options[0]?.value || "";
     const jobs = state?.steps?.result?.jobStats ?? [];
@@ -205,23 +229,23 @@ function controlPanel(state) {
             el("div", { class: "controls" }, [
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Workflow" }),
-                    el("select", { id: "steps-workflow" }, options.length ? options.map((option) => el("option", { value: option.value, text: option.label, selected: option.value === currentWorkflow })) : [el("option", { value: currentWorkflow, text: currentWorkflow || "No workflow rows yet" })]),
+                    el("select", { id: "steps-workflow", onchange: (event) => draftStepSettings(state, { workflow: event.target.value }) }, options.length ? options.map((option) => el("option", { value: option.value, text: option.label, selected: option.value === currentWorkflow })) : [el("option", { value: currentWorkflow, text: currentWorkflow || "No workflow rows yet" })]),
                 ]),
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Job" }),
-                    el("select", { id: "steps-job" }, [el("option", { value: "", text: "All jobs" }), ...jobOptions.map((option) => el("option", { value: option.value, text: option.text, selected: settings.job === option.value }))]),
+                    el("select", { id: "steps-job", disabled: filtersDisabled, onchange: () => void loadSteps(state, { reuseRows: true }) }, [el("option", { value: "", text: "All jobs" }), ...jobOptions.map((option) => el("option", { value: option.value, text: option.text, selected: settings.job === option.value }))]),
                 ]),
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Job status" }),
-                    el("select", { id: "steps-job-status", title: "Filter by job lifecycle status or conclusion, keeping all steps of matching jobs", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
+                    el("select", { id: "steps-job-status", disabled: filtersDisabled, title: "Filter by job lifecycle status or conclusion, keeping all steps of matching jobs", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
                         el("option", { value: "", text: "All statuses" }),
                         ...statusOptions.map((option) => el("option", { value: option.value, text: option.text, selected: jobStatus === option.value })),
                     ]),
                 ]),
-                el("label", { class: "inline-field" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "1", max: "5000", value: String(settings.runBudget ?? 500) })]),
-                el("label", { class: "inline-field inline-field--check", title: "Fetch every attempt of sampled runs; changing this option collects again" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: () => void loadSteps(state, { reuseRows: true }) }), el("span", { text: "Include all attempts" })]),
-                el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false }), el("span", { text: "Merge matrix" })]),
-                el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-infra", type: "checkbox", checked: settings.showInfra !== false }), el("span", { text: "Show infra" })]),
+                el("label", { class: "inline-field" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "1", max: "5000", value: String(settings.runBudget ?? 500), oninput: (event) => draftStepSettings(state, { runBudget: event.target.value }) })]),
+                el("label", { class: "inline-field inline-field--check", title: "Fetch every attempt of sampled runs when you press Load steps" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: (event) => draftStepSettings(state, { includeAllAttempts: event.target.checked }) }), el("span", { text: "Include all attempts" })]),
+                el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false, onchange: (event) => draftStepSettings(state, { mergeMatrix: event.target.checked }) }), el("span", { text: "Merge matrix" })]),
+                el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-infra", type: "checkbox", checked: settings.showInfra !== false, onchange: (event) => draftStepSettings(state, { showInfra: event.target.checked }) }), el("span", { text: "Show infra" })]),
                 el("button", { type: "button", class: "button button--primary", disabled: loading, text: loading ? "Loading…" : "Load steps", onclick: () => void loadSteps(state) }),
             ]),
             runnerControls(state, settings),
@@ -234,6 +258,7 @@ function controlPanel(state) {
 function runnerControls(state, settings) {
     const facets = state?.steps?.result?.runnerFacets;
     if (!facets) return null;
+    const disabled = !canFilterSteps(state);
     const pendingFilter = pendingStepRequest?.identity === state?.identity ? pendingStepRequest.settings.runnerFilter : undefined;
     const filter = normalizeRunnerFilter(pendingFilter ?? state?.steps?.result?.runnerFilter ?? settings.runnerFilter);
     if (filter.labels) {
@@ -250,20 +275,20 @@ function runnerControls(state, settings) {
         el("span", { class: "controls__label", text: "Runner" }),
         el("label", { class: "inline-field" }, [
             el("span", { text: "Kind" }),
-            el("select", { id: "steps-runner-kind", onchange: onChange }, [
+            el("select", { id: "steps-runner-kind", disabled, onchange: onChange }, [
                 ["all", "All kinds"],
                 ["self-hosted", "Self-hosted"],
                 ["github-hosted", "GitHub-hosted"],
             ].map(([value, text]) => el("option", { value, text, selected: filter.kind === value }))),
         ]),
-        el("label", { class: "inline-field" }, [el("span", { text: "Runs-on" }), el("select", { id: "steps-runner-labels", onchange: onChange }, choice(facets.labelSets ?? [], filter.labels, "All label sets", (value) => value || "(no labels)"))]),
-        el("label", { class: "inline-field" }, [el("span", { text: "Group" }), el("select", { id: "steps-runner-group", onchange: onChange }, choice(facets.groups ?? [], filter.group, "All groups"))]),
+        el("label", { class: "inline-field" }, [el("span", { text: "Runs-on" }), el("select", { id: "steps-runner-labels", disabled, onchange: onChange }, choice(facets.labelSets ?? [], filter.labels, "All label sets", (value) => value || "(no labels)"))]),
+        el("label", { class: "inline-field" }, [el("span", { text: "Group" }), el("select", { id: "steps-runner-group", disabled, onchange: onChange }, choice(facets.groups ?? [], filter.group, "All groups"))]),
         el("label", { class: "inline-field" }, [
             el("span", { text: "Name" }),
-            el("input", { id: "steps-runner-name", type: "search", list: "steps-runner-names", placeholder: "runner name, * wildcard", value: filter.name, onchange: onChange }),
+            el("input", { id: "steps-runner-name", disabled, type: "search", list: "steps-runner-names", placeholder: "runner name, * wildcard", value: filter.name, onchange: onChange }),
             el("datalist", { id: "steps-runner-names" }, (facets.names ?? []).map((item) => el("option", { value: item.value }))),
         ]),
-        isRunnerFilterActive(filter) ? el("button", { type: "button", class: "ghost", text: "Clear runner filter", onclick: () => applyRunnerFilter(state, normalizeRunnerFilter()) }) : null,
+        isRunnerFilterActive(filter) ? el("button", { type: "button", class: "ghost", disabled, text: "Clear runner filter", onclick: () => applyRunnerFilter(state, normalizeRunnerFilter()) }) : null,
     ]);
 }
 
@@ -281,7 +306,7 @@ function runnersCard(state) {
                 const active = filterKey !== null && filterKey === pool.key;
                 // A job without runs-on labels cannot be selected, because an empty
                 // label filter means every label set.
-                const selectable = pool.labels !== "";
+                const selectable = pool.labels !== "" && canFilterSteps(state);
                 return el("tr", {
                     class: `${active ? "row--selected" : ""}${selectable ? " runners-table__row--selectable" : ""}`.trim() || null,
                     title: !selectable ? null : active ? "Click to show every runs-on set" : "Click to filter the statistics by this runs-on set",
@@ -383,14 +408,14 @@ function typicalTimeline(result) {
             const start = job.startOffsetMs + step.offsetMs;
             const rangeStart = job.startOffsetMs + step.offsetP25Ms;
             const rangeLength = step.offsetP90Ms - step.offsetP25Ms + step.durationP90Ms;
-            const variant = step.failed ? " gantt__bar--failed" : step.infrastructure ? " gantt__bar--infra" : "";
+            const variant = step.failureRate > 0 ? " gantt__bar--failed gantt__bar--failure-rate" : step.infrastructure ? " gantt__bar--infra" : "";
             rows.push(ganttStepRow({
                 name: step.name,
-                tooltip: `${job.job} / ${step.name}\np50 ${formatDuration(step.durationMs)} · p90 ${formatDuration(step.durationP90Ms)}`,
+                tooltip: `${job.job} / ${step.name}\np50 ${formatDuration(step.durationMs)} · p90 ${formatDuration(step.durationP90Ms)} · failure ${percent(step.failureRate)}`,
                 duration: step.durationMs,
                 segments: [
                     el("span", { class: "gantt__range", style: span(rangeStart, rangeLength, max) }),
-                    el("span", { class: `gantt__bar${variant}`, style: span(start, step.durationMs, max) }),
+                    el("span", { class: `gantt__bar${variant}`, style: `${span(start, step.durationMs, max)};--failure-rate:${pct(step.failureRate, 1)}` }),
                 ],
             }));
         }
@@ -608,7 +633,11 @@ export function renderSteps(state) {
         footnote(result),
         collectionWarnings(result),
         runnersCard(state),
-        el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Typical timeline" })]), el("div", { class: "card__body" }, [typicalTimeline(result)])]),
+        el("section", { class: "card" }, [
+            el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Typical timeline" })]),
+            el("div", { class: "card__body" }, [typicalTimeline(result)]),
+            el("p", { class: "card__note", text: "Blue: no observed failures. Gray: infrastructure. Red: failures; darker red means a higher failure rate. Hover over a step for the percentage." }),
+        ]),
         el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Step statistics" })]), el("div", { class: "card__body" }, [stepsTable(result)])]),
         el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: step ? `Trend · ${step.job} / ${displayStepName(step.stepKey)}` : "Trend" })]), el("div", { class: "card__body" }, [trendChart(step), byRunnerTable(step)])]),
         el("section", { class: "card" }, [el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Runs and single-run Gantt" })]), el("div", { class: "card__body" }, [

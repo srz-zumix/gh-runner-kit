@@ -63,8 +63,11 @@ successful rerun. The panel reads earlier attempts through
 cache. Carried-over jobs are counted once, not duplicated. The run budget
 still counts workflow runs, not attempts.
 
-Changing the option collects again; subsequent status and runner filter
-changes reuse those rows. The option is saved per target. In all-attempt mode,
+Changing the option only edits the next collection; press **Load steps** to
+collect with it. The choice survives panel updates while it is pending.
+Job, status and runner filter changes reuse the loaded rows and do not apply
+pending workflow, run-budget or attempt-mode changes. The option is saved
+per target when loaded. In all-attempt mode,
 the run list has one row per attempt, and its **Gantt** button opens that
 specific attempt. The footnote reports the number of attempts with matching
 rows and how many requested historical attempts returned jobs. Missing,
@@ -84,6 +87,15 @@ A run ID or Actions run URL opens the single-run Gantt through
 `gh runner-kit job timeline`; the **Copy mermaid** button asks the CLI for the
 Mermaid output of the same run.
 
+In **Typical timeline**, bars show median step durations. Blue means no
+observed step failures, gray marks infrastructure steps, and red marks steps
+with failures. Red shading increases with the step failure rate, from pale
+red near 0% to solid red at 100%; failures take precedence over the
+infrastructure color. Hover over a step to see its failure rate, calculated
+as failed executions divided by started, non-skipped executions, matching
+the **Fail** column in **Step statistics**. Job, status, runner and attempt
+filters also affect the shading. Single-run Gantt colors are unchanged.
+
 The **Runner** row filters the sampled jobs by runner kind (self-hosted or
 GitHub-hosted), `runs-on` label set, runner group and runner name (`*`
 wildcards). Filter changes re-aggregate the rows already collected instead of
@@ -93,6 +105,10 @@ percentiles and the failure rate, and clicking a row toggles that label set as
 the filter. The selected step is also broken down by label set, the run list
 shows the runners of each run, and the single-run Gantt shows each job's
 runner name and group.
+
+The **Job** selector filters the loaded sample immediately, without collecting
+again. Select **All jobs** to widen it again. Job and runner filters are
+unavailable before the first load or while a new collection is in progress.
 
 The **Job status** selector keeps jobs matching a lifecycle status
 (`queued`, `in_progress`, `completed`, etc.) or conclusion (`success`,
