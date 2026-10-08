@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 test("collection switches attempt scope, caches matching rows and reports historical coverage without GitHub requests", async (t) => {
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-attempt-test-"));
-    const previous = { PATH: process.env.PATH, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404 };
+    const previous = { PATH: process.env.PATH, COPILOT_HOME: process.env.COPILOT_HOME, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404 };
     t.after(async () => {
         for (const [key, value] of Object.entries(previous)) {
             if (value === undefined) delete process.env[key];
@@ -15,6 +15,7 @@ test("collection switches attempt scope, caches matching rows and reports histor
         await rm(dir, { recursive: true, force: true });
     });
     process.env.PATH = `${dir}:${process.env.PATH}`;
+    process.env.COPILOT_HOME = dir;
     process.env.FAKE_GH_LOG = join(dir, "calls.jsonl");
     await writeFile(join(dir, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -95,6 +96,16 @@ if (args.join(" ") === "runner-kit metrics --help") {
         assert.equal(focused.runs.length, job === "missing" ? 0 : 2);
         assert.equal((await calls()).length, afterAll);
     }
+    for (const repository of ["owner/repo", "owner/missing", ""]) {
+        const scoped = await collectStepMetrics({ ...options, includeAllAttempts: true, repository, reuseRows: true, cache: all.rows });
+        assert.equal(scoped.available, true, scoped.reason);
+        assert.equal(scoped.repository, repository);
+        assert.equal(scoped.meta.reusedRows, true);
+        assert.equal(scoped.stepStats.length, repository === "owner/missing" ? 0 : 1);
+        assert.equal(scoped.runs.length, repository === "owner/missing" ? 0 : 2);
+        assert.deepEqual(scoped.repositoryFacets, all.repositoryFacets);
+        assert.equal((await calls()).length, afterAll);
+    }
     const latest = await collectStepMetrics({ ...options, includeAllAttempts: false, reuseRows: true, cache: all.rows });
     assert.equal(latest.available, true, latest.reason);
     assert.equal(latest.meta.latestAttemptBasis, true);
@@ -120,4 +131,38 @@ if (args.join(" ") === "runner-kit metrics --help") {
     assert.equal(gone.meta.totalJobs, 1);
     assert.equal(gone.meta.warnings.length, 1);
     assert.match(gone.meta.warnings[0], /attempt 1: .*404 Not Found/);
+    const { normalizeQuery, targetOf, filtersOf, limitsOf } = await import("../lib/query.mjs");
+    const { DashboardStore } = await import("../lib/store.mjs");
+    const { DashboardInstance } = await import("../lib/instance.mjs");
+    const { startInstanceServer } = await import("../lib/server.mjs");
+    const query = normalizeQuery({ owner: "owner", days: 7, jobConcurrency: 1 });
+    const settings = { workflow: "ci.yml", runBudget: 2, kind: "all", includeAllAttempts: false };
+    const snapshot = await collectStepMetrics({ cwd: dir, target: targetOf(query), filters: filtersOf(query), limits: limitsOf(query), ...settings });
+    assert.equal(snapshot.available, true, snapshot.reason);
+    const panel = new DashboardInstance({ instanceId: "repository-filter", store: new DashboardStore({ cwd: dir }), query });
+    const { generation } = panel.beginStepRequest();
+    panel.setStepMetrics(settings, snapshot, generation);
+    const { server, url } = await startInstanceServer(panel);
+    try {
+        const beforeFilters = (await calls()).length;
+        for (const repository of ["owner/missing", "owner/repo", ""]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, repository, reuseRows: true }),
+            });
+            const result = await response.json();
+            assert.equal(response.status, 200, result.reason);
+            assert.equal(result.repository, repository);
+            assert.equal(result.meta.reusedRows, true);
+            assert.equal(result.meta.totalJobs, repository === "owner/missing" ? 0 : 1);
+            assert.deepEqual(result.repositoryFacets, snapshot.repositoryFacets);
+            assert.equal(panel.state().steps.settings.repository, repository);
+            assert.equal((await (await fetch(`${url}api/step-prefs`)).json()).repository, repository);
+            assert.equal((await calls()).length, beforeFilters);
+        }
+    } finally {
+        await new Promise((resolve) => server.close(resolve));
+        panel.dispose();
+    }
 });

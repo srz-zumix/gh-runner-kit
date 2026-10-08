@@ -69,7 +69,7 @@ function stepPanels(result, state = {}) {
         createTextNode: (text) => Object.assign(new TestNode("#text"), { textContent: text }),
     };
     try {
-        return renderSteps({ ...state, steps: { result } });
+        return renderSteps({ ...state, steps: { ...state.steps, result } });
     } finally {
         for (const [key, descriptor] of globals) {
             if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -174,7 +174,7 @@ test("every run-list row keeps its Gantt controls and links to its exact GitHub 
     }
 });
 
-function interactivePanel(t, steps = {}) {
+function interactivePanel(t, steps = {}, statePatch = {}) {
     const globals = ["document", "Node", "CustomEvent", "fetch"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
     t.after(() => {
         for (const [key, descriptor] of globals) {
@@ -185,6 +185,7 @@ function interactivePanel(t, steps = {}) {
     const state = {
         identity: t.name,
         metrics: { fleet: { workflows: [{ workflow: "CI", workflowPath: ".github/workflows/ci.yml" }, { workflow: "Build", workflowPath: ".github/workflows/build.yml" }] } },
+        ...statePatch,
         steps: {
             status: "ready",
             settings: { workflow: "ci.yml", job: "", jobStatus: "", includeAllAttempts: false, runBudget: 500, mergeMatrix: true, showInfra: true, kind: "all", runnerFilter: { kind: "all" } },
@@ -197,10 +198,12 @@ function interactivePanel(t, steps = {}) {
     const panel = {
         state,
         requests,
+        runRequests: [],
         render: () => { nodes = renderSteps(state).flatMap(descendants); },
         control: (id) => nodes.find((node) => node.attributes.id === id),
+        node: (predicate) => nodes.find(predicate),
         load: () => nodes.find((node) => node.tag === "button" && ["Load steps", "Loading…"].includes(node.textContent)),
-        reply: (body) => ({ ok: true, json: async () => ({ ...state.steps.result, job: body.job, includeAllAttempts: body.includeAllAttempts }) }),
+        reply: (body) => ({ ok: true, json: async () => ({ ...state.steps.result, repository: body.repository, job: body.job, includeAllAttempts: body.includeAllAttempts }) }),
     };
     globalThis.Node = TestNode;
     globalThis.CustomEvent = class { constructor(type) { this.type = type; } };
@@ -213,6 +216,10 @@ function interactivePanel(t, steps = {}) {
     };
     globalThis.fetch = async (url, options) => {
         if (url === "./api/step-prefs") return { json: async () => ({}) };
+        if (url.startsWith("./api/run-timeline?")) {
+            panel.runRequests.push(url);
+            return { ok: true, json: async () => ({ timeline: { Repo: state.steps.settings.repository, Jobs: [] } }) };
+        }
         assert.equal(url, "./api/steps");
         const body = JSON.parse(options.body);
         requests.push(body);
@@ -229,6 +236,108 @@ function change(panel, id, value, property = "value", event = "change") {
     control[property] = value;
     control.listeners[event]({ target: control });
 }
+
+test("workflow choices use names from either report and respect the selected repository", () => {
+    const rows = [
+        { name: "App CI", repository: "owner/app", workflowPath: ".github/workflows/ci.yml" },
+        { name: "Other CI", repository: "owner/other", workflowPath: ".github/workflows/ci.yml" },
+        { repository: "owner/other", workflowPath: ".github/workflows/build.yml" },
+    ];
+    const select = (metrics, repository) => stepPanels({}, { scope: "org", metrics, steps: { settings: { repository } } }).flatMap(descendants).find((node) => node.attributes.id === "steps-workflow");
+    const overview = { overview: { byWorkflow: rows } };
+    assert.deepEqual(select(overview, "").children.map((node) => node.textContent), ["App CI · ci.yml", "build.yml"]);
+    assert.deepEqual(select(overview, "owner/other").children.map((node) => node.textContent), ["Other CI · ci.yml", "build.yml"]);
+    const fleet = { fleet: { workflows: rows.map(({ name, ...row }) => ({ ...row, workflow: name })) } };
+    assert.deepEqual(select(fleet, "owner/other").children.map((node) => node.textContent), ["Other CI · ci.yml", "build.yml"]);
+});
+
+test("org repository selection reuses the loaded rows, keeps other filters and preserves pending collection edits", async (t) => {
+    const panel = interactivePanel(t, {
+        result: { available: true, stepStats: [], jobStats: [{ job: "build" }], repositoryFacets: [{ value: "owner/app", count: 2 }, { value: "owner/other", count: 1 }] },
+    }, {
+        scope: "org",
+        metrics: { overview: { byWorkflow: [
+            { name: "App CI", repository: "owner/app", workflowPath: ".github/workflows/ci.yml" },
+            { name: "App build", repository: "owner/app", workflowPath: ".github/workflows/build.yml" },
+            { name: "Other CI", repository: "owner/other", workflowPath: ".github/workflows/ci.yml" },
+        ] } },
+    });
+    await settled();
+    assert.equal(panel.control("steps-repository").value, "");
+    panel.state.steps.settings.job = "build";
+    panel.state.steps.settings.jobStatus = "failure";
+    panel.render();
+    change(panel, "steps-all-attempts", true, "checked");
+    change(panel, "steps-workflow", "build.yml");
+    change(panel, "steps-budget", "25", "value", "input");
+    change(panel, "steps-repository", "owner/other");
+    await settled();
+    assert.equal(panel.requests.length, 1);
+    assert.equal(panel.requests[0].repository, "owner/other");
+    assert.equal(panel.requests[0].reuseRows, true);
+    assert.equal(panel.requests[0].job, "build");
+    assert.equal(panel.requests[0].jobStatus, "failure");
+    assert.equal(panel.requests[0].includeAllAttempts, false);
+    assert.equal(panel.requests[0].workflow, "ci.yml");
+    assert.equal(panel.requests[0].runBudget, 500);
+    assert.equal(panel.control("steps-repository").value, "owner/other");
+    assert.equal(panel.control("steps-all-attempts").checked, true);
+    assert.equal(panel.control("steps-workflow").value, "build.yml");
+    assert.equal(panel.control("steps-budget").value, "25");
+    assert.deepEqual(panel.control("steps-workflow").children.map((node) => node.textContent), ["build.yml", "Other CI · ci.yml"]);
+    assert.deepEqual(panel.control("steps-repository").children.map((node) => node.value), ["", "owner/app", "owner/other"]);
+    change(panel, "steps-repository", "");
+    await settled();
+    assert.equal(panel.requests.length, 2);
+    assert.equal(panel.requests[1].repository, "");
+    assert.equal(panel.requests[1].reuseRows, true);
+    assert.equal(panel.control("steps-all-attempts").checked, true);
+});
+
+test("repository controls are org-only and retain a saved unmatched repository", async (t) => {
+    const panel = interactivePanel(t);
+    await settled();
+    assert.equal(panel.control("steps-repository"), undefined);
+    panel.state.scope = "org";
+    panel.state.steps.settings.repository = "owner/missing";
+    panel.render();
+    assert.equal(panel.control("steps-repository").value, "owner/missing");
+    assert.equal(panel.control("steps-repository").children[1].textContent, "owner/missing (0 jobs)");
+    panel.state.steps.result = null;
+    panel.render();
+    assert.ok(Object.hasOwn(panel.control("steps-repository").attributes, "disabled"));
+    change(panel, "steps-repository", "");
+    await settled();
+    assert.equal(panel.requests.length, 0);
+});
+
+test("a single-run Gantt hides jobs outside the selected repository without discarding the run", () => {
+    const timeline = { Repo: "owner/other", Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", Jobs: [{ Name: "build", Steps: [] }] };
+    const result = { stepStats: [] };
+    const state = { scope: "org", steps: { settings: { repository: "owner/app", workflow: "ci.yml" }, timeline } };
+    const nodes = stepPanels(result, state).flatMap(descendants);
+    assert.equal(nodes.filter((node) => node.className === "gantt__row gantt__row--job").length, 0);
+    assert.ok(nodes.some((node) => node.textContent.includes("This run belongs to owner/other, not owner/app.")));
+    state.steps.settings.repository = "";
+    assert.equal(stepPanels(result, state).flatMap(descendants).filter((node) => node.className === "gantt__row gantt__row--job").length, 1);
+    assert.equal(timeline.Jobs.length, 1);
+});
+
+test("opening a bare run ID in an org uses the selected repository", async (t) => {
+    const panel = interactivePanel(t, {}, { scope: "org" });
+    await settled();
+    panel.state.steps.settings.repository = "owner/app";
+    panel.render();
+    const input = panel.node((node) => node.attributes.placeholder === "run ID or URL");
+    input.value = "42";
+    input.listeners.input({ target: input });
+    panel.node((node) => node.tag === "button" && node.textContent === "Open run").listeners.click();
+    await settled();
+    assert.equal(panel.runRequests.length, 1);
+    const params = new URL(panel.runRequests[0], "http://127.0.0.1/").searchParams;
+    assert.equal(params.get("repo"), "owner/app");
+    assert.equal(params.get("run"), "42");
+});
 
 test("attempt mode waits for Load steps and stays drafted through renders and cached filters", async (t) => {
     const panel = interactivePanel(t);

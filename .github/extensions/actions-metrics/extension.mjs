@@ -717,6 +717,7 @@ const canvas = createCanvas({
                 type: "object",
                 properties: {
                     workflow: { type: "string", description: "Workflow file name/path or ID, for example ci.yml. Defaults to the dashboard workflow filter when set." },
+                    repository: { type: "string", description: "Keep only sampled jobs and steps from this exact OWNER/REPO, after collection. Empty or omitted means all repositories. Combine with reuseRows to filter without collecting again." },
                     job: { type: "string", description: "Optional job name or merged matrix base to focus on." },
                     jobStatus: { type: "string", description: "Keep jobs matching this lifecycle status or conclusion, such as in_progress, completed, success, failure or cancelled, and all their steps. Empty or omitted means all statuses." },
                     includeAllAttempts: { type: "boolean", description: "Include jobs and steps from every attempt of each sampled run, fetching earlier attempt timelines as well. Defaults to false (latest-attempt job listing, including carried-over jobs). Changing it requires a new collection." },
@@ -740,6 +741,7 @@ const canvas = createCanvas({
                 const input = ctx.input ?? {};
                 const settings = {
                     workflow: input.workflow ?? query.workflow ?? "",
+                    repository: String(input.repository ?? "").trim(),
                     job: input.job ?? "",
                     jobStatus: normalizeJobStatus(input.jobStatus),
                     includeAllAttempts: input.includeAllAttempts === true,
@@ -781,6 +783,8 @@ const canvas = createCanvas({
                 return {
                     target: state.key,
                     workflow: result.workflow,
+                    repository: result.repository,
+                    repositoryFacets: result.repositoryFacets,
                     job: result.job,
                     jobStatus: result.jobStatus,
                     includeAllAttempts: result.includeAllAttempts,
@@ -808,7 +812,7 @@ const canvas = createCanvas({
                 type: "object",
                 properties: {
                     run: { type: "string", description: "Workflow run ID or URL. Required." },
-                    repo: { type: "string", description: "Repository in [HOST/]OWNER/REPO form. Optional when the dashboard target is a repository or the run is a URL." },
+                    repo: { type: "string", description: "Repository in [HOST/]OWNER/REPO form. Optional when the dashboard target is a repository, a Step timeline repository filter is selected, or the run is a URL." },
                     attempt: { type: "integer", minimum: 1, description: "Run attempt. Defaults to the latest attempt, or the attempt in the URL." },
                 },
                 required: ["run"],
@@ -823,7 +827,7 @@ const canvas = createCanvas({
                     result = await collectRunTimeline({
                         cwd: instance.store.cwd,
                         target: targetOf(query),
-                        repo: ctx.input?.repo ?? "",
+                        repo: ctx.input?.repo ?? (scopeOf(query) === "org" ? instance.steps.settings?.repository ?? "" : ""),
                         run: ctx.input?.run ?? "",
                         attempt: Number(ctx.input?.attempt),
                         format: "json",

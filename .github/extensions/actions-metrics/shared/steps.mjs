@@ -421,8 +421,18 @@ export function matchJobStatus(row, value) {
     return !status || normalizeJobStatus(row.status) === status || normalizeJobStatus(row.conclusion) === status;
 }
 
-export function filterTimelineJobs(timeline, jobStatus = "") {
+export function filterTimelineJobs(timeline, jobStatus = "", repository = "") {
+    if (repository && timeline?.Repo !== repository) return [];
     return (timeline?.Jobs ?? []).filter((job) => matchJobStatus({ status: job.Status, conclusion: job.Conclusion }, jobStatus));
+}
+
+function repositoryFacets(jobs, steps) {
+    const counts = new Map();
+    for (const row of jobs) countInto(counts, row.repo);
+    for (const row of steps) {
+        if (row.repo && !counts.has(row.repo)) counts.set(row.repo, 0);
+    }
+    return countedList(counts);
 }
 
 function jobStatusFacets(rows) {
@@ -508,13 +518,16 @@ function outranksConclusion(candidate, current) {
     return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
 }
 
-export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", includeAllAttempts = false } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", includeAllAttempts = false } = {}) {
+    const repositoryFilter = String(repository ?? "").trim();
     const runnerFilter = normalizeRunnerFilter(runner);
     const statusFilter = normalizeJobStatus(jobStatus);
-    const allJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
-    const allStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
-    // The matrix merge map and the runner facets come from every row, so narrowing
-    // filters neither renames jobs nor hides the choices needed to widen them again.
+    const collectedJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
+    const collectedStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
+    const allJobRows = repositoryFilter ? collectedJobRows.filter((row) => row.repo === repositoryFilter) : collectedJobRows;
+    const allStepRows = repositoryFilter ? collectedStepRows.filter((row) => row.repo === repositoryFilter) : collectedStepRows;
+    // Matrix names and runner facets use every row in the selected repository,
+    // so other filters do not rename jobs or hide choices needed to widen them.
     const mergeMap = matrixMergeMap(allJobRows.map((row) => ({ repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, jobName: row.jobName })));
     const facets = runnerFacets(allJobRows);
     const statusRows = allJobRows.filter((row) => matchJobStatus(row, statusFilter));
@@ -525,10 +538,10 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
     // successful or skipped steps. Match the job listing, not JobConclusion.
     const stepRows = allStepRows.filter((row) => matchRunner(row, runnerFilter) && (!statusFilter || matchingJobs.has(jobRowKey(row))));
     const runIds = new Set([...jobRows, ...stepRows].map((row) => row.runId).filter(Boolean));
-    // The run budget caps every repository on its own and applies before the runner
-    // filter, so whether it was reached is read from the unfiltered rows per repository.
+    // The run budget caps each repository before any aggregation filters, so
+    // whether it was reached is read from the unfiltered rows per repository.
     const collectedRuns = new Map();
-    for (const row of [...allJobRows, ...allStepRows]) {
+    for (const row of [...collectedJobRows, ...collectedStepRows]) {
         if (!row.runId) continue;
         if (!collectedRuns.has(row.repo)) collectedRuns.set(row.repo, new Set());
         collectedRuns.get(row.repo).add(row.runId);
@@ -762,6 +775,8 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
         typicalTimeline,
         runners: runnerPools(poolRows),
         runnerFacets: facets,
+        repository: repositoryFilter,
+        repositoryFacets: repositoryFacets(collectedJobRows, collectedStepRows),
         jobStatus: statusFilter,
         includeAllAttempts,
         jobStatusFacets: jobStatusFacets(allJobRows),
@@ -773,7 +788,8 @@ export function aggregateSteps({ jobs = [], steps = [], mergeMatrix = true, show
             oldest: oldest === null ? null : new Date(oldest).toISOString(),
             newest: newest === null ? null : new Date(newest).toISOString(),
             totalJobs: jobRows.length,
-            unfilteredJobs: allJobRows.length,
+            unfilteredJobs: collectedJobRows.length,
+            repository: repositoryFilter,
             runnerFilter,
             jobStatus: statusFilter,
             totalStepRows: stepRows.length,

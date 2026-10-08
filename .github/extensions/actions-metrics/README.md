@@ -93,8 +93,21 @@ with failures. Red shading increases with the step failure rate, from pale
 red near 0% to solid red at 100%; failures take precedence over the
 infrastructure color. Hover over a step to see its failure rate, calculated
 as failed executions divided by started, non-skipped executions, matching
-the **Fail** column in **Step statistics**. Job, status, runner and attempt
+the **Fail** column in **Step statistics**. Repository, job, status, runner and attempt
 filters also affect the shading. Single-run Gantt colors are unchanged.
+
+For organization targets, **Repository** filters the loaded workflow sample
+by an exact `OWNER/REPO`. It defaults to **All repositories** and applies
+immediately without collecting again. Repository choices and job counts come
+from the whole loaded sample and remain available after other filters narrow
+the data; choose **All repositories** to widen it again. The selection is
+saved per target and affects statistics, trends, typical timelines, runner
+pools and run samples. Job, status and runner choices reflect the selected
+repository. The workflow selector also shows that repository's workflow names;
+an existing workflow selection stays selected even if it has no matches.
+A single-run Gantt from another repository hides its jobs and explains why.
+A bare run ID can be opened using the selected repository; **Copy mermaid**
+still exports the full open run.
 
 The **Runner** row filters the sampled jobs by runner kind (self-hosted or
 GitHub-hosted), `runs-on` label set, runner group and runner name (`*`
@@ -107,7 +120,7 @@ shows the runners of each run, and the single-run Gantt shows each job's
 runner name and group.
 
 The **Job** selector filters the loaded sample immediately, without collecting
-again. Select **All jobs** to widen it again. Job and runner filters are
+again. Select **All jobs** to widen it again. Repository, job and runner filters are
 unavailable before the first load or while a new collection is in progress.
 
 The **Job status** selector keeps jobs matching a lifecycle status
@@ -116,7 +129,8 @@ The **Job status** selector keeps jobs matching a lifecycle status
 It defaults to **All statuses**, combines with the runner filters, and
 re-aggregates collected rows without calling the CLI again. Statistics,
 trends, the typical timeline, runner pools and run samples all use the
-matching jobs. Status choices and counts come from all sampled jobs so the
+matching jobs. Status choices and counts come from all sampled jobs in the
+selected repository (or all repositories when none is selected) so the
 filter can always be widened; a selection with no matches stays visible.
 The selection is saved per target. The single-run Gantt also hides jobs that
 do not match; **Copy mermaid** still exports the full run.
@@ -126,7 +140,7 @@ HTTP endpoints used by the tab:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/step-prefs` | Read per-target Step timeline preferences. |
-| `POST /api/steps` | Collect and aggregate step statistics for a workflow file. |
+| `POST /api/steps` | Collect and aggregate step statistics for a workflow file; optional `repository` filters an exact `OWNER/REPO` after collection (empty/default: all). Use `reuseRows: true` to re-aggregate cached rows. |
 | `GET /api/run-timeline?run=<id-or-url>&attempt=<n>` | Return one run's timeline JSON. Add `format=mermaid` for Mermaid text. |
 
 ## Table sorting
@@ -160,7 +174,7 @@ The panel stops sending requests to a host as soon as one of them is refused for
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally including all attempts (`includeAllAttempts`, default false), focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally including all attempts (`includeAllAttempts`, default false), filtering an exact `repository` (`OWNER/REPO`, empty/default: all), focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
 | `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as Prometheus text or JSON. |
 

@@ -144,6 +144,7 @@ export async function collectStepMetrics({
     limits,
     cwd,
     workflow,
+    repository = "",
     job = "",
     jobStatus = "",
     includeAllAttempts = false,
@@ -181,8 +182,8 @@ export async function collectStepMetrics({
     }
 
     const budget = clampRunBudget(runBudget);
-    // Everything that changes which rows the CLI returns is part of the key; the job,
-    // status, step, matrix, infra and runner filters only change the aggregation.
+    // Everything that changes which rows the CLI returns is part of the key; repository,
+    // job, status, step, matrix, infra and runner filters only change the aggregation.
     const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners, includeAllAttempts });
     const cached = reuseRows && cache?.key === rowsKey ? cache : null;
     if (!cached) {
@@ -218,6 +219,7 @@ export async function collectStepMetrics({
         const aggregate = aggregateSteps({
             jobs: jobs.rows,
             steps: steps.rows,
+            repository,
             mergeMatrix,
             showInfra,
             selectedJob: job,
