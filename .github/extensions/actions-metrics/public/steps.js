@@ -61,13 +61,15 @@ function canFilterSteps(state) {
     return Boolean(state?.steps?.result) && state.steps.result.available !== false && !collecting;
 }
 
-function workflowOptions(state) {
+function workflowOptions(state, repository = "") {
     const rows = state?.metrics?.fleet?.workflows?.length ? state.metrics.fleet.workflows : state?.metrics?.overview?.byWorkflow ?? [];
     const seen = new Map();
     for (const row of rows) {
+        if (repository && row.repository !== repository) continue;
         const value = workflowFile(row.workflowPath || row.workflow || row.name);
         if (!value) continue;
-        const label = row.workflowPath ? `${row.workflow} · ${value}` : row.workflow || row.name || value;
+        const name = row.workflow || row.name || value;
+        const label = row.workflowPath && name !== value ? `${name} · ${value}` : name;
         if (!seen.has(value)) seen.set(value, label);
     }
     return [...seen.entries()].map(([value, label]) => ({ value, label }));
@@ -126,6 +128,7 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
     const body = {
         ...collection,
         workflow,
+        repository: state?.scope === "org" ? document.getElementById("steps-repository")?.value?.trim() ?? "" : "",
         job: document.getElementById("steps-job")?.value?.trim() ?? "",
         jobStatus: normalizeJobStatus(document.getElementById("steps-job-status")?.value),
         runnerFilter,
@@ -168,6 +171,7 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
 async function openRunTimeline(state, run, repo = "", attemptValue = attemptInput) {
     const value = String(run ?? runInput ?? "").trim();
     if (!value) return;
+    if (state?.scope === "org" && !repo && !/^https?:\/\//i.test(value)) repo = state.steps?.settings?.repository ?? "";
     // An organization target names no repository, so a bare run ID cannot be resolved.
     if (state?.scope === "org" && !repo && !/^https?:\/\//i.test(value)) {
         error = "This dashboard targets an organization; paste the run URL to open a run by hand.";
@@ -212,8 +216,12 @@ function controlPanel(state) {
         ...draftsByIdentity.get(state?.identity),
     };
     const filtersDisabled = !canFilterSteps(state);
-    const options = workflowOptions(state);
+    const repository = state?.scope === "org" ? settings.repository ?? "" : "";
+    const repositories = (state?.steps?.result?.repositoryFacets ?? []).map((item) => ({ value: item.value, text: `${item.value} (${number(item.count)} jobs)` }));
+    if (repository && !repositories.some((item) => item.value === repository)) repositories.unshift({ value: repository, text: `${repository} (0 jobs)` });
+    const options = workflowOptions(state, repository);
     const currentWorkflow = settings.workflow || state?.filters?.workflow || options[0]?.value || "";
+    if (currentWorkflow && !options.some((item) => item.value === currentWorkflow)) options.unshift({ value: currentWorkflow, label: currentWorkflow });
     const jobs = state?.steps?.result?.jobStats ?? [];
     const jobOptions = jobs.map((job) => ({ value: job.job, text: job.variants?.length > 1 ? `${job.job} (${job.variants.length} variants)` : job.job }));
     if (settings.job && !jobOptions.some((option) => option.value === settings.job)) jobOptions.unshift({ value: settings.job, text: `${settings.job} (0 jobs)` });
@@ -227,6 +235,13 @@ function controlPanel(state) {
         el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Step timeline" })]),
         el("div", { class: "card__body" }, [
             el("div", { class: "controls" }, [
+                state?.scope === "org" ? el("label", { class: "inline-field" }, [
+                    el("span", { text: "Repository" }),
+                    el("select", { id: "steps-repository", disabled: filtersDisabled, title: "Filter the loaded sample without collecting again", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
+                        el("option", { value: "", text: "All repositories" }),
+                        ...repositories.map((item) => el("option", { value: item.value, text: item.text, selected: repository === item.value })),
+                    ]),
+                ]) : null,
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Workflow" }),
                     el("select", { id: "steps-workflow", onchange: (event) => draftStepSettings(state, { workflow: event.target.value }) }, options.length ? options.map((option) => el("option", { value: option.value, text: option.label, selected: option.value === currentWorkflow })) : [el("option", { value: currentWorkflow, text: currentWorkflow || "No workflow rows yet" })]),
@@ -351,7 +366,8 @@ function footnote(result) {
     if (!result?.meta) return null;
     const meta = result.meta;
     const range = meta.oldest && meta.newest ? `${new Date(meta.oldest).toLocaleString()} – ${new Date(meta.newest).toLocaleString()}` : "no timestamp range";
-    const filtered = isRunnerFilterActive(meta.runnerFilter) || meta.jobStatus ? ` The job filters${meta.jobStatus ? ` (status: ${meta.jobStatus})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
+    const selections = [meta.repository ? `repository: ${meta.repository}` : "", meta.jobStatus ? `status: ${meta.jobStatus}` : ""].filter(Boolean);
+    const filtered = isRunnerFilterActive(meta.runnerFilter) || selections.length ? ` The job filters${selections.length ? ` (${selections.join("; ")})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
     const basis = meta.latestAttemptBasis === false
         ? `Attempt scope: all; ${number(meta.analysedAttempts)} attempts have matching rows. Earlier attempts with jobs: ${number(meta.historicalAttemptsWithJobs)} of ${number(meta.historicalAttemptsRequested)} requested.`
         : "Job lists use GitHub's latest-attempt basis, including carried-over jobs.";
@@ -524,9 +540,10 @@ function runList(result, state) {
     ]);
 }
 
-function runTimeline(timeline, stats, workflow, onClose, jobStatus = "") {
+function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", repository = "") {
     if (!timeline) return el("p", { class: "empty", text: "Open a run to show a single-run Gantt." });
-    const jobs = filterTimelineJobs(timeline, jobStatus);
+    const jobs = filterTimelineJobs(timeline, jobStatus, repository);
+    const sameRepository = !repository || timeline.Repo === repository;
     const sameWorkflow = timelineMatchesWorkflow(timeline, workflow);
     // Keyed by repository, the job name the run reports and the step id: a merged matrix
     // statistic answers for each of its variants, and a step literally named "Upload #2"
@@ -548,8 +565,9 @@ function runTimeline(timeline, stats, workflow, onClose, jobStatus = "") {
             onClose ? el("button", { type: "button", class: "ghost gantt__close", title: "Close this Gantt", "aria-label": "Close this Gantt", text: "× Close", onclick: onClose }) : null,
         ]),
         sameWorkflow ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.WorkflowPath || timeline.Workflow}, not ${workflow}; slow-step highlighting against p90 is off.` }),
+        sameRepository ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.Repo || "an unknown repository"}, not ${repository}. Clear the repository filter to show its jobs. Copy mermaid exports the full run.` }),
         jobStatus ? el("p", { class: "notice", text: `Job status: ${jobStatus}; showing ${number(jobs.length)} of ${number(timeline.Jobs?.length ?? 0)} jobs. Copy mermaid exports the full run.` }) : null,
-        jobs.length === 0 ? el("p", { class: "empty", text: "No jobs match the selected status." }) : null,
+        jobs.length === 0 ? el("p", { class: "empty", text: "No jobs match the selected filters." }) : null,
         ganttAxis(max),
     ].filter(Boolean);
     for (const job of jobs) {
@@ -649,7 +667,7 @@ export function renderSteps(state) {
                 state?.steps?.timeline ? el("button", { type: "button", class: "ghost", text: "Close run", onclick: () => void closeRunTimeline(state) }) : null,
             ]),
             runList(result, state),
-            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state), state?.steps?.settings?.jobStatus ?? ""),
+            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state), state?.steps?.settings?.jobStatus ?? "", state?.steps?.settings?.repository ?? ""),
         ])]),
     ].filter(Boolean);
 }

@@ -292,6 +292,66 @@ test("job status matches lifecycle status or conclusion and defaults to every jo
     assert.equal(matchJobStatus({ status: "in_progress", conclusion: null }, "success"), false);
 });
 
+test("repository filtering narrows every statistical surface and preserves repository choices", () => {
+    const jobs = [
+        onRunner(job(1, "build", 1, 51), ["ubuntu-latest"], "hosted", "GitHub Actions"),
+        onRunner({ ...job(2, "build", 1, 41, "failure"), Repo: "owner/other" }, ["self-hosted", "linux"], "self-hosted", "box-1"),
+        onRunner({ ...job(3, "build", 1, 31, "failure"), Repo: "owner/other" }, ["ubuntu-latest"], "hosted", "GitHub Actions"),
+    ];
+    const steps = jobs.map((row, index) => ({ ...onRunner(step(index + 1, "build", row.RunID, 1, "Compile", 1, 11, row.Conclusion), row.Labels, row.Kind, row.RunnerName), Repo: row.Repo }));
+    const all = aggregateSteps({ jobs, steps });
+    assert.deepEqual(aggregateSteps({ jobs, steps, repository: "" }), all);
+    const filtered = aggregateSteps({ jobs, steps, repository: " owner/other ", selectedJob: "build", jobStatus: "failure", runner: { kind: "self-hosted" } });
+    assert.equal(filtered.repository, "owner/other");
+    assert.equal(filtered.meta.repository, "owner/other");
+    assert.equal(filtered.meta.totalJobs, 1);
+    assert.equal(filtered.meta.unfilteredJobs, 3);
+    assert.equal(filtered.meta.totalStepRows, 1);
+    assert.equal(filtered.meta.analysedRuns, 1);
+    assert.equal(filtered.meta.maxRunsPerRepo, 2);
+    for (const key of ["stepStats", "jobStats", "typicalTimeline", "runs"]) {
+        assert.ok(filtered[key].length > 0);
+        assert.ok(filtered[key].every((row) => row.repo === "owner/other"));
+    }
+    assert.deepEqual(filtered.stepStats[0].trend.points.map((point) => point.runId), ["102"]);
+    assert.equal(filtered.typicalTimeline[0].steps[0].failureRate, 1);
+    assert.equal(filtered.runners.reduce((sum, pool) => sum + pool.jobs, 0), 2);
+    assert.deepEqual(filtered.repositoryFacets, [{ value: "owner/other", count: 2 }, { value: "owner/repo", count: 1 }]);
+    assert.deepEqual(filtered.repositoryFacets, all.repositoryFacets);
+    assert.deepEqual(filtered.jobStatusFacets, [{ value: "failure", count: 2 }]);
+
+    const empty = aggregateSteps({ jobs, steps, repository: "owner/missing" });
+    for (const key of ["stepStats", "jobStats", "typicalTimeline", "runs", "runners"]) assert.deepEqual(empty[key], []);
+    assert.equal(empty.meta.totalJobs, 0);
+    assert.equal(empty.meta.unfilteredJobs, 3);
+    assert.deepEqual(empty.repositoryFacets, all.repositoryFacets);
+    assert.deepEqual(empty.jobStatusFacets, []);
+    assert.deepEqual(empty.runnerFacets.names, []);
+    const orphan = aggregateSteps({ jobs: [], steps: [step(1, "build", 101, 1, "Compile", 1, 11)], repository: "owner/repo" });
+    assert.deepEqual(orphan.repositoryFacets, [{ value: "owner/repo", count: 0 }]);
+    assert.equal(orphan.stepStats.length, 1);
+});
+
+test("repository filtering keeps run attempts, matrix variants and sample caps consistent", () => {
+    const jobs = [
+        job(1, "test (linux)", 1, 21),
+        job(2, "test (macos)", 1, 31),
+        { ...job(3, "test (linux)", 1, 41), RunID: "101", RunAttempt: 2 },
+        { ...job(4, "test (linux)", 1, 51), Repo: "owner/other" },
+        { ...job(5, "test (linux)", 1, 51), Repo: "owner/other" },
+        { ...job(6, "test (linux)", 1, 51), Repo: "owner/other" },
+    ];
+    const steps = jobs.map((row, index) => ({ ...step(index + 1, row.JobName, row.RunID, 1, "Test", 1, 11), Repo: row.Repo, RunAttempt: row.RunAttempt }));
+    const result = aggregateSteps({ jobs, steps, repository: "owner/repo", selectedJob: "test", includeAllAttempts: true });
+    assert.equal(result.meta.maxRunsPerRepo, 3);
+    assert.equal(result.meta.analysedRuns, 2);
+    assert.equal(result.meta.analysedAttempts, 3);
+    assert.equal(result.stepStats[0].job, "test");
+    assert.deepEqual(result.stepStats[0].variants, ["test (linux)", "test (macos)"]);
+    assert.equal(result.runs.length, 3);
+    assert.ok(result.runs.every((row) => row.repo === "owner/repo"));
+});
+
 test("job status filters whole jobs, all their steps and every statistical surface", () => {
     const jobs = [
         { ...job(1, "build", 1, 51), Status: "completed" },
@@ -396,6 +456,11 @@ test("single-run Gantt uses the job status filter without dropping steps or muta
     assert.deepEqual(filterTimelineJobs(timeline), timeline.Jobs);
     assert.equal(timeline.Jobs.length, 3);
     assert.deepEqual(filterTimelineJobs(null, "failure"), []);
+    timeline.Repo = "owner/repo";
+    assert.equal(filterTimelineJobs(timeline, "failure", "owner/repo").length, 1);
+    assert.deepEqual(filterTimelineJobs(timeline, "", "owner/other"), []);
+    assert.deepEqual(filterTimelineJobs(timeline, "", ""), timeline.Jobs);
+    assert.equal(timeline.Jobs.length, 3);
 });
 
 test("a step literally named like an occurrence key stays apart", () => {

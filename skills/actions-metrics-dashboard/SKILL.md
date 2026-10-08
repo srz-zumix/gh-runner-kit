@@ -69,7 +69,7 @@ text; they do not identify a repository workflow file.
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `repository` (exact `OWNER/REPO`; empty/omitted means all), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
 | `show_run_timeline` | Show one workflow run ID or URL as a job/step Gantt in the Step timeline tab. Inputs: required `run`, optional `repo`, optional `attempt`. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 
@@ -102,7 +102,7 @@ Carried-over jobs are deduplicated. `runBudget` counts runs, not attempts.
 Changing this option requires collection even with `reuseRows: true`, because
 the row cache is scoped by attempt mode. In the UI, changing the checkbox only
 edits the next collection; **Load steps** applies it and persists it per target.
-Pending edits survive panel updates. **Job**, **Job status** and runner filters
+Pending edits survive panel updates. **Repository**, **Job**, **Job status** and runner filters
 immediately re-aggregate the loaded sample without a new collection, using its
 workflow, run budget and attempt mode rather than pending edits to those
 controls. Select **All jobs** to clear the job selection. These filters are
@@ -123,6 +123,18 @@ or collapse the full messages. This mode needs
 `get_step_metrics` returns the aggregated data and updates the tab selection.
 The `section` input controls whether the response focuses `steps`, `jobs`,
 `timeline`, `trend`, or `runners`; omitted fields inherit the dashboard target and filters.
+`repository` filters the collected rows by an exact `OWNER/REPO`; empty or
+omitted means all repositories. It does not change the dashboard target or
+the collection scope. Pass `reuseRows: true` to switch repositories without
+collecting again. The response echoes `repository`, `repositoryFacets` and
+`meta.repository`. Facets contain all repositories in the loaded workflow
+sample with job counts, regardless of other filters. In the UI, the selector
+appears for organization targets, defaults to **All repositories**, and is
+saved per target. It narrows job, status and runner choices, workflow names,
+statistics, trends, typical timelines, runner pools and run samples.
+An existing workflow selection is preserved even when absent from the chosen
+repository. A single-run Gantt from another repository hides its jobs with
+an explanatory notice. A bare run ID defaults to the selected repository.
 The runner inputs filter jobs after collection; pass `reuseRows: true` to
 re-aggregate the rows already collected without calling the CLI again. Use
 `section: "runners"` to compare `runs-on` pools (wait/run percentiles, failure
@@ -133,7 +145,8 @@ rate) and mention `meta.unfilteredJobs` when a runner filter is active.
 that outcome. It combines with runner filters; `reuseRows: true` avoids a
 new collection. The UI **Job status** selector defaults to **All statuses**
 and persists per target. The response echoes `jobStatus` and
-`jobStatusFacets`, whose counts include every sampled job. Statistics,
+`jobStatusFacets`, whose counts include every sampled job in the selected
+repository, or every repository when the filter is empty. Statistics,
 trends, runner pools and run samples reflect the filter, as does the
 single-run Gantt; **Copy mermaid** still exports the full run.
 `show_run_timeline` opens a single run, keeps waiting bars, and returns the CLI
@@ -145,7 +158,7 @@ failed / executed ratio as **Step statistics**; skipped steps are excluded.
 Bars remain blue for zero failures and gray for infrastructure steps with
 zero failures. A positive failure rate turns the bar red, from pale red near
 0% to solid red at 100%, including infrastructure steps. The tooltip shows
-the percentage. Shading reflects the current job, status, runner and attempt
+the percentage. Shading reflects the current repository, job, status, runner and attempt
 filters. Single-run Gantt colors are unchanged.
 
 ## Target and scope

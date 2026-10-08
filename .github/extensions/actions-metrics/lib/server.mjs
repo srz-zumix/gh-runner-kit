@@ -217,6 +217,7 @@ async function handle(req, res, url, instance) {
         const query = instance.effectiveQuery;
         const settings = {
             workflow: String(body.workflow ?? body.filters?.workflow ?? query.workflow ?? "").trim(),
+            repository: String(body.repository ?? "").trim(),
             job: String(body.job ?? "").trim(),
             jobStatus: normalizeJobStatus(body.jobStatus),
             includeAllAttempts: body.includeAllAttempts === true,
