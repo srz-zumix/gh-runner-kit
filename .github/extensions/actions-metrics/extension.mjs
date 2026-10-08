@@ -822,12 +822,16 @@ const canvas = createCanvas({
                 const { instance } = panelFor(ctx.instanceId);
                 const query = instance.effectiveQuery;
                 const { generation, signal } = instance.beginRunTimeline();
+                // An organization target names no repository, so fall back to the Step timeline
+                // filter. Resolve it once so the recorded request matches what was fetched and
+                // the panel's Copy mermaid action can repeat it.
+                const repo = ctx.input?.repo ?? (scopeOf(query) === "org" ? instance.steps.settings?.repository ?? "" : "");
                 let result;
                 try {
                     result = await collectRunTimeline({
                         cwd: instance.store.cwd,
                         target: targetOf(query),
-                        repo: ctx.input?.repo ?? (scopeOf(query) === "org" ? instance.steps.settings?.repository ?? "" : ""),
+                        repo,
                         run: ctx.input?.run ?? "",
                         attempt: Number(ctx.input?.attempt),
                         format: "json",
@@ -841,7 +845,7 @@ const canvas = createCanvas({
                 }
                 // The response still reflects this request even if a newer one, a close
                 // or a credential change superseded it in the panel.
-                instance.setRunTimeline({ run: ctx.input?.run ?? "", repo: ctx.input?.repo ?? "", attempt: ctx.input?.attempt ?? null }, result.timeline, null, generation);
+                instance.setRunTimeline({ run: ctx.input?.run ?? "", repo, attempt: ctx.input?.attempt ?? null }, result.timeline, null, generation);
                 return result.timeline;
             },
         },
