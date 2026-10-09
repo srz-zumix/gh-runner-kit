@@ -14,22 +14,27 @@ func NewCostCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cost",
 		Short: "Report the billable time GitHub-hosted runners consumed",
-		Long: `Report the billable time of the collected workflow runs, broken down by operating system.
+		Long: `Estimate GitHub-hosted execution costs by billing SKU and machine specification.
 
-GitHub only bills the jobs it hosted, so self-hosted jobs contribute nothing to this
-report. What it shows is therefore both the current hosted spend and what moving the same
-work to self-hosted runners would avoid. Public repositories run on hosted runners for
-free, so their billable time is reported as zero.
+Standard runner labels and organization Larger-runner definitions select current USD
+list prices, including architecture and GPU variants. Each job is rounded up to whole
+minutes. Standard runners are free for public repositories; Larger runners are billed
+even in public repositories. Self-hosted infrastructure costs are excluded.
 
-EST COST multiplies the billable minutes by the per-minute price of the operating system.
-The defaults are the public prices of the standard two core runners, so pass --rate to
-match a plan or a larger runner, for example --rate ubuntu=0.016.
+Unknown hardware, missing permissions or unavailable repository visibility produce
+unknown prices (null in JSON), never an assumed standard rate. A partial report shows
+the known subtotal and unpriced jobs. Current pool definitions cannot prove historical
+specifications. Included minutes, discounts, storage and historical price changes are
+not modelled, so these are estimates, not invoices.
 
-This command reads the usage of every run, which costs one API request per run, so keep
---max-runs in mind. The per run job listing is skipped because the report does not need
-it, and completed runs are cached like they are for the other reports. Per-job durations
-are rounded up to whole minutes when available; otherwise the aggregate duration is used
-and the report warns that the estimate may be low.`,
+Use --rate SKU=PRICE to override a machine price, for example --rate linux_8_core=0.022.
+OS=PRICE remains supported and deliberately applies to every machine of that OS.
+
+Collection reads jobs and usage per run, repository visibility and hosted runner
+definitions, including enterprise pools inherited through organization runner groups.
+Reading pools and groups requires organization administration or runner/runner-group
+read permissions, not enterprise-wide management access. Completed jobs and usage are cached.
+Keep --max-runs in mind; --input uses captured inventory without new API requests.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			priceList, err := metricspkg.ParseRates(rates)
@@ -55,7 +60,7 @@ and the report warns that the estimate may be low.`,
 	}
 
 	flags.Add(cmd)
-	cmd.Flags().StringArrayVar(&rates, "rate", nil, "Override the per-minute price of an operating system, as OS=PRICE such as ubuntu=0.008")
+	cmd.Flags().StringArrayVar(&rates, "rate", nil, "Override a per-minute USD price as SKU=PRICE or OS=PRICE (default: automatic SKU pricing)")
 
 	return cmd
 }

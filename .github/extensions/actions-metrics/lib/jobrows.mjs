@@ -33,9 +33,23 @@ export { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET };
  * `budget + 1` rows are read so that truncation can be told apart from a window
  * that happens to hold exactly `budget` rows. The extra row is dropped.
  */
-export async function collectJobRows({ target, filters, limits, cwd, signal, onProgress } = {}) {
+export async function collectJobRows({ target, filters, limits, cwd, dataset, signal, onProgress } = {}) {
     const budget = filters?.rowBudget ?? DEFAULT_ROW_BUDGET;
     const cap = Math.max(MIN_ROW_BUDGET, Math.min(MAX_ROW_BUDGET, budget));
+    if (dataset) {
+        signal?.throwIfAborted();
+        const collectedAt = Date.parse(dataset.meta.collectedAt);
+        if (!Number.isFinite(collectedAt)) throw new Error("The shared dataset has an invalid collection timestamp");
+        const selected = dataset.select({ workflow: filters?.workflow, labels: filters?.labels ?? [] });
+        return {
+            rows: selected.jobs.slice(0, cap),
+            truncated: dataset.meta.truncated || selected.jobs.length > cap,
+            malformed: 0, budget: cap,
+            collectedAt, durationMs: 0,
+            datasetId: dataset.meta.id,
+            window: dataset.meta.window,
+        };
+    }
     const probe = await probeRunnerKit(cwd);
 
     // The repository filters are applied before collection by a current CLI, but

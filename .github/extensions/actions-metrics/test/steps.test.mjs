@@ -268,6 +268,7 @@ test("runner filter narrows statistics while pools and facets keep every runner"
     assert.equal(linux.wait.samples, 1);
     assert.equal(linux.duration.samples, 1);
     assert.equal(linux.duration.p50, 50_000);
+    assert.equal(linux.duration.total, 50_000);
     assert.deepEqual(linux.runners.map((item) => item.value), ["box-1"]);
 
     const filtered = aggregateSteps({ jobs, steps, runner: { kind: "self-hosted" } });
@@ -276,6 +277,7 @@ test("runner filter narrows statistics while pools and facets keep every runner"
     assert.equal(filtered.meta.totalJobs, 2);
     assert.equal(filtered.meta.unfilteredJobs, 3);
     assert.equal(filtered.runners.length, 2);
+    assert.equal(filtered.runners.find((pool) => pool.key === linux.key).duration.total, 50_000);
     assert.deepEqual(filtered.runnerFacets.kinds.map((item) => item.value).sort(), ["hosted", "self-hosted"]);
     assert.deepEqual(filtered.runs.find((row) => row.runId === "102").runners, ["box-1"]);
 });
@@ -435,11 +437,26 @@ test("queued jobs count without timed samples and an unmatched status stays empt
     assert.equal(queued.meta.totalJobs, 1);
     assert.equal(queued.jobStats[0].runs, 1);
     assert.equal(queued.runners[0].duration.samples, 0);
+    assert.equal(queued.runners[0].duration.total, 0);
     const empty = aggregateSteps({ jobs, steps: [step(2, "build", 102, 1, "Compile", 1, 11)], jobStatus: "failure" });
     assert.equal(empty.meta.totalJobs, 0);
     assert.equal(empty.meta.totalStepRows, 0);
     for (const key of ["stepStats", "jobStats", "typicalTimeline", "runs", "runners"]) assert.deepEqual(empty[key], []);
     assert.deepEqual(empty.jobStatusFacets, [{ value: "queued", count: 1 }]);
+});
+
+test("runner totals sum overlapping jobs and included attempts without adding wait or step times", () => {
+    const first = onRunner(job(1, "build", 1, 51), ["ubuntu-latest"], "hosted", "GitHub Actions");
+    const parallel = onRunner(job(2, "test", 1, 41), ["ubuntu-latest"], "hosted", "GitHub Actions");
+    const retry = { ...first, JobID: "3", RunAttempt: 2, CompletedAt: sec(31), Duration: ns(30) };
+    const jobs = [first, parallel, retry];
+    const steps = [onRunner(step(1, "build", 101, 1, "Compile", 1, 11), ["ubuntu-latest"], "hosted", "GitHub Actions")];
+    const all = aggregateSteps({ jobs, steps, includeAllAttempts: true });
+    assert.equal(all.runners[0].duration.total, 120_000);
+    assert.equal(all.runners[0].duration.samples, 3);
+    const latest = aggregateSteps({ jobs: [parallel, retry], steps: [] });
+    assert.equal(latest.runners[0].duration.total, 70_000);
+    assert.equal(latest.runners[0].duration.samples, 2);
 });
 
 test("single-run Gantt uses the job status filter without dropping steps or mutating the timeline", () => {

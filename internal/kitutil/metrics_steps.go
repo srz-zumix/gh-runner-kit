@@ -18,12 +18,13 @@ func WriteMetricsStepsJSON(w io.Writer, rows []metrics.StepRow) error {
 }
 
 // stepRowNDJSON is the NDJSON wire shape of a StepRow. Its ids are quoted for the same
-// reason as jobRowNDJSON: a run or job id past 2^53 would otherwise be rounded by a
+// reason as jobRowNDJSON: an id past 2^53 would otherwise be rounded by a
 // consumer that reads it as a float64.
 type stepRowNDJSON struct {
 	metrics.StepRow
-	RunID int64 `json:"RunID,string"`
-	JobID int64 `json:"JobID,string"`
+	RunID    int64 `json:"RunID,string"`
+	JobID    int64 `json:"JobID,string"`
+	RunnerID int64 `json:"RunnerID,string"`
 }
 
 // WriteMetricsStepsNDJSON writes one step object per line.
@@ -31,7 +32,7 @@ func WriteMetricsStepsNDJSON(w io.Writer, rows []metrics.StepRow) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	for _, row := range rows {
-		if err := enc.Encode(stepRowNDJSON{StepRow: row, RunID: row.RunID, JobID: row.JobID}); err != nil {
+		if err := enc.Encode(stepRowNDJSON{StepRow: row, RunID: row.RunID, JobID: row.JobID, RunnerID: row.RunnerID}); err != nil {
 			return err
 		}
 	}

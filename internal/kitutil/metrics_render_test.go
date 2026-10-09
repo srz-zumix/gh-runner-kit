@@ -16,18 +16,18 @@ func TestRenderMetricsCostShowsMeasuredBillableDurations(t *testing.T) {
 	r.IO = streams
 
 	rows := []metrics.CostRow{
-		{OS: "RECORDED_WITHOUT_JOBS", Billable: time.Minute},
-		{OS: "ZERO_DURATION"},
+		{OS: "RECORDED_WITHOUT_JOBS", RunnerClass: "recorded", Billable: time.Minute},
+		{OS: "ZERO_DURATION", RunnerClass: "recorded"},
 	}
 	if err := RenderMetricsCost(r, rows); err != nil {
 		t.Fatalf("RenderMetricsCost() error = %v", err)
 	}
 
 	output := stdout.String()
-	if got, want := costRowFields(t, output, "RECORDED_WITHOUT_JOBS")[3], "1m0s"; got != want {
+	if got, want := costRowFields(t, output, "RECORDED_WITHOUT_JOBS")[6], "1m0s"; got != want {
 		t.Errorf("RECORDED_WITHOUT_JOBS billable = %q, want %q", got, want)
 	}
-	if got, want := costRowFields(t, output, "ZERO_DURATION")[3], "0s"; got != want {
+	if got, want := costRowFields(t, output, "ZERO_DURATION")[6], "0s"; got != want {
 		t.Errorf("ZERO_DURATION billable = %q, want %q", got, want)
 	}
 }
@@ -37,7 +37,7 @@ func costRowFields(t *testing.T, output, os string) []string {
 	replacer := strings.NewReplacer("│", " ", "|", " ")
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(replacer.Replace(line))
-		if len(fields) == 6 && fields[0] == os {
+		if len(fields) == 9 && fields[0] == os {
 			return fields
 		}
 	}

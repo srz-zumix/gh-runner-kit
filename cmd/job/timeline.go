@@ -26,6 +26,7 @@ func NewTimelineCmd() *cobra.Command {
 	var showWaiting bool
 	var noCache bool
 	var refresh bool
+	var input string
 	var exporter cmdutil.Exporter
 	format := timelineFormatTable
 
@@ -51,19 +52,25 @@ with durations in nanoseconds and the run and job IDs quoted.
 are shown. --job keeps the jobs whose name matches the pattern, where * stands for any
 sequence of characters. --show-waiting=false hides the runner wait.
 
-The jobs of a completed attempt are cached on disk, like the metrics subcommands do.`,
+The jobs of a completed attempt are cached on disk, like the metrics subcommands do.
+--input reads the run and attempt from a metrics snapshot without API requests.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := opts.Validate(); err != nil {
 				return err
 			}
-			repo, ref, err := kitutil.ResolveRunTarget(args[0], repoFlag, attempt)
-			if err != nil {
-				return err
+			var tl metricspkg.RunTimeline
+			var err error
+			if input != "" {
+				tl, err = kitutil.ReadSnapshotRunTimeline(input, args[0], repoFlag, attempt, opts)
+			} else {
+				repo, ref, resolveErr := kitutil.ResolveRunTarget(args[0], repoFlag, attempt)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				opts.JobID = ref.JobID
+				tl, err = kitutil.FetchRunTimeline(cmd.Context(), repo, ref, opts, noCache, refresh)
 			}
-			opts.JobID = ref.JobID
-
-			tl, err := kitutil.FetchRunTimeline(cmd.Context(), repo, ref, opts, noCache, refresh)
 			if err != nil {
 				return err
 			}
@@ -96,6 +103,9 @@ The jobs of a completed attempt are cached on disk, like the metrics subcommands
 	f.BoolVar(&showWaiting, "show-waiting", true, "Show how long every job waited for a runner")
 	f.BoolVar(&noCache, "no-cache", false, "Do not read or write the cached jobs of the run")
 	f.BoolVar(&refresh, "refresh", false, "Ignore the cached jobs of the run and fetch them again")
+	f.StringVar(&input, "input", "", "Read the run and attempt from a metrics snapshot without API requests")
+	cmd.MarkFlagsMutuallyExclusive("input", "no-cache")
+	cmd.MarkFlagsMutuallyExclusive("input", "refresh")
 	cmdutil.AddFormatFlags(cmd, &exporter)
 	// The setup can only fail when the format flag is missing, which AddFormatFlags registers.
 	cobra.CheckErr(cmdflags.SetupFormatFlagWithNonJSONFormats(cmd, &exporter, &format, timelineFormatTable, []string{timelineFormatMermaid, timelineFormatTable}))

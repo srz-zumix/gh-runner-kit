@@ -381,7 +381,7 @@ Options:
 ### Show when every job and step of a workflow run ran
 
 ```sh
-gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] [--job PATTERN]... [--show-waiting=false] [--no-cache] [--refresh] [--format json|mermaid|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] [--job PATTERN]... [--show-waiting=false] [--no-cache] [--refresh] [--input FILE] [--format json|mermaid|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Show when every job and step of one workflow run attempt ran, on a time axis that starts when the attempt started, like [Kesin11/actions-timeline](https://github.com/Kesin11/actions-timeline) does.
@@ -391,6 +391,8 @@ The `<RUN>` argument is required. It is a run ID or the URL of a run, of one of 
 The default table lists every job with its runner wait and duration, followed by its steps, with `OFFSET` measured from the start of the attempt. `--format mermaid` writes a Mermaid Gantt chart with one section per job, an `active` bar for the time the job waited for a runner and one bar per step, marked `crit` when it failed, which renders directly in a GitHub Markdown file or a job summary. `--format json` writes the whole timeline with durations in nanoseconds and the run and job IDs quoted.
 
 `--attempt` selects an earlier attempt than the latest one, and only the jobs of that attempt are shown. The jobs of a completed attempt are cached on disk, like the `metrics` subcommands do.
+
+Optional `--input FILE` reads a `metrics collect` snapshot without API requests (`-` reads stdin). Earlier attempts require a snapshot collected with `--all-attempts`. A bare run ID uses the snapshot repository; organization snapshots require an unambiguous run or an explicit repository. Missing runs and attempts are errors. `--input` cannot be combined with `--no-cache` or `--refresh`.
 
 ```sh
 gh runner-kit job timeline https://github.com/OWNER/REPO/actions/runs/RUN_ID --format mermaid >> "$GITHUB_STEP_SUMMARY"
@@ -402,6 +404,7 @@ Options:
 | --- | --- | --- |
 | `--attempt` | latest attempt | Show this attempt of the run instead of the latest one. Must agree with the attempt in a `<RUN>` URL |
 | `--format` | `table` | Output format: `{json\|mermaid\|table}` |
+| `--input` | none | Read a metrics snapshot without API requests; `-` reads stdin |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires `--format json` |
 | `--job` | all jobs | Keep only the jobs whose name matches this pattern, which accepts a `*` wildcard (repeatable) |
 | `--no-cache` | `false` | Do not read or write the cached jobs of the run |
@@ -453,14 +456,18 @@ Options:
 ### Collect the workflow activity every other metrics command reports from
 
 ```sh
-gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--usage] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--output PATH]
+gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--output PATH]
 ```
 
 Collect the runner inventory, the workflow runs and their jobs once, and write the result to a snapshot file.
 
 Every other `metrics` command accepts the resulting file through `--input` instead of issuing its own API requests, so a fleet dashboard that runs several reports over the same window pays for the collection only once instead of once per report.
 
-`--usage` additionally reads the billable time of every run, which costs one extra API request per run, so that the resulting snapshot can also serve `metrics cost --input`.
+`--usage` additionally reads per-run billable usage, repository visibility and current hosted-runner definitions, including pools inherited from enterprise runner groups, so that the snapshot can also serve `metrics cost --input`. It costs one extra usage request per run plus inventory requests.
+
+Optional `--all-attempts` (default `false`) retains historical attempt metadata and jobs as well as the latest listing. Carried-over jobs are deduplicated by execution ID; missing historical job lists produce warnings. Run budgets still count workflow runs, not attempts. Optional `--pricing` (default `false`) collects visibility and hosted machine inventory without requesting billable usage.
+
+Run searches are split into nonoverlapping time windows when they reach GitHub's 1,000-result search limit. `--max-runs 0` removes the application budget; a single second that still saturates the API limit is an explicit error rather than silently incomplete data.
 
 The snapshot is written to `--output`, `-` for stdout by default, and gzip-compressed when the name ends in `.gz`.
 
@@ -468,6 +475,7 @@ Options:
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `--all-attempts` | `false` | Retain jobs and metadata from every available run attempt |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
@@ -478,12 +486,13 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--output` | `-` | Write the snapshot to this file instead of stdout |
+| `--pricing` | `false` | Collect repository visibility and hosted machine inventory without billable usage |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
-| `--usage` | `false` | Also collect the billable usage of every run, for `metrics cost --input` |
+| `--usage` | `false` | Also collect billable usage, repository visibility and hosted machine inventory for `metrics cost --input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show how many jobs ran at the same time over the window
@@ -527,16 +536,20 @@ Options:
 ### Report the billable time GitHub-hosted runners consumed
 
 ```sh
-gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
-Report the billable time of the collected workflow runs, broken down by operating system.
+Estimate GitHub-hosted execution costs by billing SKU and machine specification.
 
-GitHub only bills the jobs it hosted, so self-hosted jobs contribute nothing to this report. What it shows is therefore both the current hosted spend and what moving the same work to self-hosted runners would avoid. Public repositories run on hosted runners for free, so their billable time is reported as zero.
+Standard workflow labels and organization Larger-runner definitions select current USD list prices, distinguishing CPU, architecture and GPU variants. The report shows `OS`, `RUNNER CLASS`, `CPU`, `RAM/GB`, `RUNS`, `JOBS`, `BILLABLE`, `RATE/MIN` and `EST COST`. Each job is rounded up to whole minutes; usage durations take precedence over job timestamps. Standard runners are free for public repositories, but Larger runners are billed even there. Self-hosted infrastructure costs are excluded.
 
-`EST COST` multiplies the billable minutes by the per-minute price of the operating system. The defaults are the public prices of the standard two core runners (`UBUNTU` `0.008`, `WINDOWS` `0.016`, `MACOS` `0.08` USD), so pass `--rate` to match a plan or a larger runner, for example `--rate ubuntu=0.016`.
+Unknown hardware, unavailable repository visibility and missing permissions leave prices **unknown**, or `null` in JSON. `KnownCost` and `UnpricedJobs` expose the known subtotal and missing coverage. No standard rate is assumed for custom labels or OS-only usage. `--rate KEY=PRICE` is optional and repeatable: a billing SKU such as `linux_8_core=0.022` overrides one machine price; an OS such as `ubuntu=0.006` deliberately overrides every machine of that OS. The default is automatic SKU pricing.
 
-This command reads the usage of every run, which costs one API request per run, so keep `--max-runs` in mind. The per run job listing is skipped because the report does not need it, and completed runs are cached like they are for the other reports. Per-job durations are rounded up to whole minutes when available; otherwise the aggregate duration is used and the report warns that the estimate may be low.
+Skipped jobs and cancellations before runner allocation or any started step are excluded from execution counts, minutes and unknown-price coverage. Cancellations after execution began remain included. A positive per-job usage duration also establishes execution; job timestamps alone do not.
+
+Collection reads jobs and usage per run, repository visibility and current hosted-runner definitions, including enterprise pools inherited through organization runner groups. Reading pools and groups requires organization administration or runner/runner-group read permissions; enterprise-wide management access is not needed for inherited pools. Completed jobs and usage are cached. Keep `--max-runs` in mind; `--input` reuses captured inventory without API requests. Older snapshots without inventory can still report known standard labels when visibility is available, but cannot infer custom machine prices; recollect to include inherited definitions. OS-only usage without per-job durations is retained with an explicit rounding warning.
+
+Current pool definitions and repository visibility cannot prove historical hardware or visibility. Included minutes, discounts, storage and historical price changes are not modelled; estimates are not invoices. Rates are bundled from [Actions runner pricing](https://docs.github.com/en/billing/reference/actions-runner-pricing).
 
 Options:
 
@@ -555,7 +568,7 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
+| `--rate` | automatic SKU pricing | Override a per-minute USD price as `SKU=PRICE` or `OS=PRICE`. Repeatable |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
@@ -654,11 +667,13 @@ The rows come from the same collection and the same local job cache the other `m
 
 Unlike the aggregated reports the listing keeps the jobs that were skipped and the jobs that have not finished yet, so that it shows every job the workflow-run jobs endpoint returned, including the ones that never occupied a runner.
 
+JSON and NDJSON expose `ExecutionStarted`, based on runner allocation, a started non-skipped step or positive per-job usage. A cancelled job can have start/end timestamps without ever occupying a runner.
+
 `--kind self-hosted` also keeps the jobs whose runner could not be identified, the same way the other reports count them as fleet activity.
 
 `--runner` selects the runner names to keep and `--exclude-runner` the ones to drop, the latter winning when a name matches both.
 
-GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
+Hosted instance IDs are dropped from `RUNNER` only when the suffix matches `RunnerID`: `GitHub Actions 123` becomes `GitHub Actions`, and `ubuntu-latest-large-123` becomes `ubuntu-latest-large`. Listings, aggregation and `--runner` / `--exclude-runner` filters use these stable names. `RunnerID` remains available in job rows, step rows and run timelines. Self-hosted and unidentified runner names are left untouched.
 
 The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`. With `--format json` or `--format ndjson`, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
@@ -769,7 +784,7 @@ Options:
 ### Print several metrics reports from one collection
 
 ```sh
-gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Collect the fleet once and print several of the other metrics reports from it, which is cheaper than running each of them on its own when API rate limits are a concern.
@@ -799,7 +814,7 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system in the cost section, as `OS=PRICE`. Repeatable |
+| `--rate` | automatic SKU pricing | Override a per-minute USD price in the cost section as `SKU=PRICE` or `OS=PRICE`. Repeatable |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--section` | every section except `cost` | Print only this section: `{capacity\|concurrency\|cost\|label\|queue\|repository\|runner\|summary\|workflow}` (repeatable) |
@@ -894,7 +909,7 @@ Unlike `metrics jobs`, the default output is an aggregated table rather than JSO
 
 `--format json` and `--format ndjson` instead write the steps unaggregated, one row each, with the identity of the job that ran them, so a downstream tool can build its own statistics. `StepOccurrence` is N for the Nth step of the job with that name, which tells a repeated step apart from one literally named like its `StepKey`. `--format ndjson` writes one row at a time and quotes the run and job IDs. With these formats, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
-The steps come from the same collection and the same local job cache as `metrics jobs`, so this issues no extra API request when it follows another `metrics` subcommand over the same window. GitHub only records step timestamps to the second, and lists the jobs of the latest attempt of every run.
+The steps come from the same collection and the same local job cache as `metrics jobs`, so this issues no extra API request when it follows another `metrics` subcommand over the same window. GitHub only records step timestamps to the second. Live collection uses the latest attempt; `--input` also includes historical executions retained by `metrics collect --all-attempts`.
 
 `--job` and `--step` keep the jobs and the steps whose name matches the pattern, where `*` stands for any sequence of characters, including a slash. A step filter does not change the `PRESENCE` denominator, which still counts every selected job.
 

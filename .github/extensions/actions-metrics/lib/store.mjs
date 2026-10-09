@@ -9,7 +9,7 @@
 // keyed by its query - because the explorer asks a different question of the
 // CLI than the fleet metrics do.
 
-import { collectSnapshot } from "./collect.mjs";
+import { collectSharedSnapshot } from "./dataset.mjs";
 import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
@@ -35,7 +35,11 @@ export class DashboardStore {
         // Job rows are keyed by their own query rather than by target: the
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
-        this.rows = new RowStore({ cwd, log: this.log });
+        this.rows = new RowStore({
+            cwd, log: this.log,
+            withDataset: (query, callback) => this.withDataset(query, callback),
+            datasetRevision: query => this.entries.get(targetKey(query))?.dataset?.meta.id ?? "pending",
+        });
         // Panels hold data of their own, such as step statistics and run timelines,
         // that a credential change has to drop too.
         this.authListeners = new Set();
@@ -70,6 +74,8 @@ export class DashboardStore {
             entry.abort = null;
             entry.inflight = null;
             entry.metrics = null;
+            if (entry.dataset) void entry.dataset.retire().catch(error => this.log(error.message));
+            entry.dataset = null;
             entry.status = "idle";
             entry.progress = "";
             entry.error = null;
@@ -161,6 +167,31 @@ export class DashboardStore {
         }
     }
 
+    async withDataset(query, callback) {
+        const signature = collectionId(normalizeQuery(query));
+        await this.refresh(query);
+        const entry = this.entry(query);
+        if (entry.status !== "ready" || !entry.dataset || collectionId(entry.query) !== signature) {
+            throw new Error(entry.error ?? "The shared dataset is not ready");
+        }
+        const dataset = entry.dataset.acquire();
+        try {
+            return await callback(dataset);
+        } finally {
+            await dataset.release();
+        }
+    }
+
+    async dispose() {
+        this.rows.invalidateAll();
+        await Promise.all([...this.entries.values()].map(async entry => {
+            entry.abort?.abort();
+            await entry.inflight;
+            await entry.dataset?.retire();
+            entry.dataset = null;
+        }));
+    }
+
     /**
      * Refresh a target's metrics. Concurrent calls share one in-flight
      * collection unless the filters changed or `bypassCache` asks for a hard
@@ -183,6 +214,9 @@ export class DashboardStore {
         const next = normalizeQuery(query ?? entry.query);
         const filtersChanged = collectionId(next) !== collectionId(entry.query);
         const settingsChanged = JSON.stringify(next) !== JSON.stringify(entry.query);
+        const datasetSignature = JSON.stringify(Object.entries(next).filter(([key]) =>
+            !["labels", "groupBy", "bucket", "selfHostedOnly", "targetWait", "targetUtilization", "jobConcurrency", "jobKind", "topRunners", "maxRows", "rowBudget"].includes(key)));
+        const retained = !force && !bypassCache && entry.datasetSignature === datasetSignature ? entry.dataset : null;
         entry.query = next;
 
         if (settingsChanged) {
@@ -223,9 +257,12 @@ export class DashboardStore {
         entry.abort = abort;
 
         entry.inflight = (async () => {
+            let snapshot;
+            let committed = false;
             try {
-                const snapshot = await collectSnapshot({
+                snapshot = await collectSharedSnapshot({
                     target: targetOf(entry.query),
+                    dataset: retained,
                     filters: filtersOf(entry.query),
                     limits,
                     cwd: this.cwd,
@@ -240,14 +277,21 @@ export class DashboardStore {
                     },
                 });
                 if (generation !== entry.generation) {
+                    if (snapshot.dataset !== retained) await snapshot.dataset.retire();
                     return this.snapshot(entry.key);
                 }
                 entry.metrics = buildMetrics(snapshot);
+                const previous = entry.dataset;
+                entry.dataset = snapshot.dataset;
+                entry.datasetSignature = datasetSignature;
+                committed = true;
+                if (previous && previous !== entry.dataset) await previous.retire();
                 entry.status = "ready";
                 entry.progress = "";
                 entry.updatedAt = snapshot.collectedAt;
                 await rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
             } catch (error) {
+                if (snapshot && !committed && snapshot.dataset !== retained) await snapshot.dataset.retire();
                 if (generation !== entry.generation) {
                     return this.snapshot(entry.key);
                 }

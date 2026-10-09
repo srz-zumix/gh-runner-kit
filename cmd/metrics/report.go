@@ -65,9 +65,8 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 			for _, s := range sections {
 				if s == kitutil.ReportSectionCost {
 					wantUsage = true
-				} else {
-					needJobs = true
 				}
+				needJobs = true
 			}
 
 			data, err := flags.CollectReport(cmd, needJobs, wantUsage)
@@ -106,7 +105,7 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 	f.BoolVar(&includeUnused, "include-unused", false, "List the label section's labels no job requested in the window")
 	f.StringVar(&targetWait, "target-wait", metricspkg.DefaultTargetWait.String(), "Mean queue time the capacity section aims for, such as 60s")
 	f.Float64Var(&targetUtilization, "target-utilization", metricspkg.DefaultTargetUtilization, "Highest share of the time a runner may be busy in the capacity section, greater than 0 and at most 1")
-	f.StringArrayVar(&rates, "rate", nil, "Override the per-minute price of an operating system in the cost section, as OS=PRICE such as ubuntu=0.008")
+	f.StringArrayVar(&rates, "rate", nil, "Override a per-minute USD price in the cost section as SKU=PRICE or OS=PRICE (default: automatic SKU pricing)")
 
 	return cmd
 }

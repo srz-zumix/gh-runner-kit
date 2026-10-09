@@ -111,12 +111,14 @@ function applyRunnerFilter(state, patch = {}) {
 
 async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilterFromControls() } = {}) {
     if (reuseRows && !canFilterSteps(state)) return;
+    const budgetInput = document.getElementById("steps-budget")?.value?.trim() ?? "";
+    const budget = budgetInput === "" ? 500 : Number(budgetInput);
     const collection = reuseRows ? state.steps.settings : {
         workflow: document.getElementById("steps-workflow")?.value?.trim() ?? "",
         includeAllAttempts: document.getElementById("steps-all-attempts")?.checked === true,
         mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
         showInfra: document.getElementById("steps-infra")?.checked !== false,
-        runBudget: Number(document.getElementById("steps-budget")?.value) || 500,
+        runBudget: Number.isFinite(budget) ? budget : 500,
         kind: "all",
     };
     const workflow = collection?.workflow ?? "";
@@ -257,8 +259,8 @@ function controlPanel(state) {
                         ...statusOptions.map((option) => el("option", { value: option.value, text: option.text, selected: jobStatus === option.value })),
                     ]),
                 ]),
-                el("label", { class: "inline-field" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "1", max: "5000", value: String(settings.runBudget ?? 500), oninput: (event) => draftStepSettings(state, { runBudget: event.target.value }) })]),
-                el("label", { class: "inline-field inline-field--check", title: "Fetch every attempt of sampled runs when you press Load steps" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: (event) => draftStepSettings(state, { includeAllAttempts: event.target.checked }) }), el("span", { text: "Include all attempts" })]),
+                el("label", { class: "inline-field", title: "0 reads every run in the selected window when you press Load steps" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "0", max: "5000", value: String(settings.runBudget ?? 500), oninput: (event) => draftStepSettings(state, { runBudget: event.target.value }) })]),
+                el("label", { class: "inline-field inline-field--check", title: "Include every retained attempt when you press Load steps; no API collection" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: (event) => draftStepSettings(state, { includeAllAttempts: event.target.checked }) }), el("span", { text: "Include all attempts" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false, onchange: (event) => draftStepSettings(state, { mergeMatrix: event.target.checked }) }), el("span", { text: "Merge matrix" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-infra", type: "checkbox", checked: settings.showInfra !== false, onchange: (event) => draftStepSettings(state, { showInfra: event.target.checked }) }), el("span", { text: "Show infra" })]),
                 el("button", { type: "button", class: "button button--primary", disabled: loading, text: loading ? "Loading…" : "Load steps", onclick: () => void loadSteps(state) }),
@@ -266,7 +268,7 @@ function controlPanel(state) {
             runnerControls(state, settings),
             error ? el("p", { class: "notice notice--warn", text: error }) : null,
         ]),
-        el("p", { class: "card__note", text: "Statistics are sampled by newest runs of one workflow file with --max-runs. Workflow display names are not accepted by the CLI; use the file name such as ci.yml." }),
+        el("p", { class: "card__note", text: "Runs defaults to 500 newest runs per repository; 0 removes the run-count limit within the selected window. Changes apply when you press Load steps. Workflow display names are not accepted by the CLI; use the file name such as ci.yml." }),
     ]);
 }
 
@@ -316,7 +318,7 @@ function runnersCard(state) {
     const body = pools.length === 0
         ? el("p", { class: "empty", text: "No jobs to group by runner." })
         : el("table", { class: "runners-table" }, [
-            el("thead", {}, [el("tr", {}, [el("th", { text: "Runs-on" }), el("th", { text: "Kind" }), el("th", { text: "Group" }), el("th", { text: "Runners" }), el("th", { class: "num", text: "Jobs" }), el("th", { class: "num", text: "Wait p50" }), el("th", { class: "num", text: "Wait p90" }), el("th", { class: "num", text: "Run p50" }), el("th", { class: "num", text: "Run p90" }), el("th", { class: "num", text: "Fail" })])]),
+            el("thead", {}, [el("tr", {}, [el("th", { text: "Runs-on" }), el("th", { text: "Kind" }), el("th", { text: "Group" }), el("th", { text: "Runners" }), el("th", { class: "num", text: "Jobs" }), el("th", { class: "num", text: "Wait p50" }), el("th", { class: "num", text: "Wait p90" }), el("th", { class: "num", text: "Run p50" }), el("th", { class: "num", text: "Run p90" }), el("th", { class: "num", text: "Total run" }), el("th", { class: "num", text: "Fail" })])]),
             el("tbody", {}, pools.map((pool) => {
                 const active = filterKey !== null && filterKey === pool.key;
                 // A job without runs-on labels cannot be selected, because an empty
@@ -336,6 +338,13 @@ function runnersCard(state) {
                     el("td", { class: "num", text: pool.wait.samples ? formatDuration(pool.wait.p90) : "–" }),
                     el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p50) : "–" }),
                     el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p90) : "–" }),
+                    el("td", {
+                        class: "num",
+                        text: pool.duration.samples ? formatDuration(pool.duration.total) : "–",
+                        title: pool.duration.samples && Number.isFinite(pool.duration.total)
+                            ? `${(pool.duration.total / 60000).toLocaleString(undefined, { maximumFractionDigits: 2 })} min`
+                            : null,
+                    }),
                     el("td", { class: "num", text: percent(pool.failureRate) }),
                 ]);
             })),
@@ -343,7 +352,7 @@ function runnersCard(state) {
     return el("section", { class: "card" }, [
         el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Runners" })]),
         el("div", { class: "card__body" }, [body]),
-        el("p", { class: "card__note", text: "Jobs grouped by their runs-on label set, before the runner filter is applied. Hosted runners are reported as GitHub Actions. Wait and run percentiles only use jobs that started or finished." }),
+        el("p", { class: "card__note", text: "Jobs grouped by their runs-on label set, before the runner filter is applied. Hosted runners are reported as GitHub Actions. Wait and run statistics only use jobs that started or finished. Total run sums completed job execution times, excluding wait; parallel jobs and included attempts are added separately, not measured as elapsed wall-clock time." }),
     ]);
 }
 
@@ -371,7 +380,10 @@ function footnote(result) {
     const basis = meta.latestAttemptBasis === false
         ? `Attempt scope: all; ${number(meta.analysedAttempts)} attempts have matching rows. Earlier attempts with jobs: ${number(meta.historicalAttemptsWithJobs)} of ${number(meta.historicalAttemptsRequested)} requested.`
         : "Job lists use GitHub's latest-attempt basis, including carried-over jobs.";
-    return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached."} ${basis}${filtered}` });
+    const budgetNote = meta.runBudget === 0
+        ? meta.truncated ? "The collection was truncated despite having no run-count limit; see collection warnings." : "No run-count limit was applied."
+        : meta.truncated ? "The run budget was reached, so this is a sample of newest runs." : "The run budget was not reached.";
+    return el("p", { class: `notice${meta.truncated ? " notice--warn" : ""}`, text: `${number(meta.analysedRuns)} runs analysed for ${meta.workflow}; ${range}. ${budgetNote} ${basis}${filtered}` });
 }
 
 // The CLI reports skipped repositories and job lists on stderr; without them a partial

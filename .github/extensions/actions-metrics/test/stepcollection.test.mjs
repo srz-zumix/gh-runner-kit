@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 test("collection switches attempt scope, caches matching rows and reports historical coverage without GitHub requests", async (t) => {
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-attempt-test-"));
-    const previous = { PATH: process.env.PATH, COPILOT_HOME: process.env.COPILOT_HOME, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404 };
+    const previous = { PATH: process.env.PATH, COPILOT_HOME: process.env.COPILOT_HOME, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404, FAKE_STEP_UNLIMITED: process.env.FAKE_STEP_UNLIMITED };
     t.after(async () => {
         for (const [key, value] of Object.entries(previous)) {
             if (value === undefined) delete process.env[key];
@@ -28,6 +28,14 @@ const job = {
     Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", JobName: "build",
     Status: "completed", Conclusion: "success", StartedAt: at(102), CompletedAt: at(112),
 };
+const snapshotJobs = () => {
+    if (!process.env.FAKE_STEP_UNLIMITED) return [job];
+    const { budget } = JSON.parse(fs.readFileSync(args[args.indexOf("--input") + 1], "utf8"));
+    const count = budget === 0 ? 6001 : Math.min(6001, budget);
+    return Array.from({ length: count }, (_, index) => ({
+        ...job, RunID: String(1000 + index), JobID: String(2000 + index), RunAttempt: 1,
+    }));
+};
 if (args.join(" ") === "runner-kit metrics --help") {
     process.stdout.write("Available Commands:\\n  collect Collect\\n  runs Runs\\n  jobs Jobs\\n  steps Steps\\n\\n");
 } else if (args.join(" ") === "runner-kit --version") {
@@ -39,11 +47,11 @@ if (args.join(" ") === "runner-kit metrics --help") {
 } else if (args[0] === "api" && args[1] === "rate_limit") {
     output({ resources: { core: { remaining: 10000, reset: Math.floor(Date.now() / 1000) + 3600 } } });
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "collect") {
-    fs.writeFileSync(args[args.indexOf("--output") + 1], "");
+    fs.writeFileSync(args[args.indexOf("--output") + 1], JSON.stringify({ budget: Number(args[args.indexOf("--max-runs") + 1]) }));
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "jobs" && args.includes("--input")) {
-    output(job);
+    for (const row of snapshotJobs()) output(row);
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "steps" && args.includes("--input")) {
-    output({ ...job, RunStartedAt: at(100), JobStartedAt: job.StartedAt, JobCompletedAt: job.CompletedAt,
+    for (const row of snapshotJobs()) output({ ...row, RunStartedAt: at(100), JobStartedAt: row.StartedAt, JobCompletedAt: row.CompletedAt,
         JobConclusion: "success", StepNumber: 1, StepName: "Compile", StepKey: "Compile", StepOccurrence: 1,
         StepStatus: "completed", StepConclusion: "success", StartedAt: at(103), CompletedAt: at(108), Duration: 5000000000, Offset: 1000000000 });
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "runs" && args.includes("--input")) {
@@ -137,9 +145,20 @@ if (args.join(" ") === "runner-kit metrics --help") {
     const { startInstanceServer } = await import("../lib/server.mjs");
     const query = normalizeQuery({ owner: "owner", days: 7, jobConcurrency: 1 });
     const settings = { workflow: "ci.yml", runBudget: 2, kind: "all", includeAllAttempts: false };
-    const snapshot = await collectStepMetrics({ cwd: dir, target: targetOf(query), filters: filtersOf(query), limits: limitsOf(query), ...settings });
+    const { SharedDataset } = await import("../lib/dataset.mjs");
+    const sharedDir = await mkdtemp(join(dir, "shared-"));
+    const sharedInput = join(sharedDir, "snapshot.json");
+    await writeFile(sharedInput, JSON.stringify({ budget: 2 }));
+    const dataset = new SharedDataset(
+        sharedInput, sharedDir,
+        [{ repository: "owner/repo", id: "42", workflowPath: ".github/workflows/ci.yml", run_attempt: 2, created_at: "2026-01-01T00:00:00Z" }],
+        [{ ...all.rows.jobs.rows.find(row => row.JobID === "102"), Latest: true }],
+        { id: "shared-fixture", collectedAt: "2026-01-01T00:00:00Z", truncated: false, warnings: [] },
+    );
+    const snapshot = await collectStepMetrics({ cwd: dir, target: targetOf(query), filters: filtersOf(query), limits: limitsOf(query), dataset, ...settings });
     assert.equal(snapshot.available, true, snapshot.reason);
     const panel = new DashboardInstance({ instanceId: "repository-filter", store: new DashboardStore({ cwd: dir }), query });
+    Object.assign(panel.store.entry(query), { status: "ready", dataset, metrics: { meta: { dataset: dataset.meta } } });
     const { generation } = panel.beginStepRequest();
     panel.setStepMetrics(settings, snapshot, generation);
     const { server, url } = await startInstanceServer(panel);
@@ -161,8 +180,45 @@ if (args.join(" ") === "runner-kit metrics --help") {
             assert.equal((await (await fetch(`${url}api/step-prefs`)).json()).repository, repository);
             assert.equal((await calls()).length, beforeFilters);
         }
+        const response = await fetch(`${url}api/steps`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...settings, runBudget: 0 }),
+        });
+        const result = await response.json();
+        assert.equal(response.status, 200, result.reason);
+        assert.equal(result.runBudget, 0);
+        assert.equal(result.meta.runBudget, 0);
+        assert.equal(result.meta.truncated, false);
+        assert.equal(panel.state().steps.settings.runBudget, 0);
+        assert.equal((await (await fetch(`${url}api/step-prefs`)).json()).runBudget, 0);
     } finally {
         await new Promise((resolve) => server.close(resolve));
         panel.dispose();
+        await panel.store.dispose();
     }
+    process.env.FAKE_STEP_UNLIMITED = "1";
+    const progress = [];
+    const unlimited = await collectStepMetrics({ ...options, runBudget: 0, onProgress: (message) => progress.push(message) });
+    assert.equal(unlimited.available, true, unlimited.reason);
+    assert.equal(unlimited.runBudget, 0);
+    assert.equal(unlimited.meta.runBudget, 0);
+    assert.equal(unlimited.meta.totalJobs, 6001);
+    assert.equal(unlimited.meta.maxRunsPerRepo, 6001);
+    assert.equal(unlimited.meta.truncated, false);
+    assert.equal(unlimited.stepStats[0].samples, 6001);
+    assert.ok(progress.some((message) => message.startsWith("Collecting all runs")));
+    const collected = (await calls()).filter((args) => args[2] === "collect").at(-1);
+    assert.equal(collected[collected.indexOf("--max-runs") + 1], "0");
+    assert.equal(collected[collected.indexOf("--days") + 1], "7");
+    const afterUnlimited = (await calls()).length;
+    const reused = await collectStepMetrics({ ...options, runBudget: 0, reuseRows: true, cache: unlimited.rows });
+    assert.equal(reused.meta.reusedRows, true);
+    assert.equal(reused.meta.totalJobs, 6001);
+    assert.equal(reused.meta.truncated, false);
+    assert.equal((await calls()).length, afterUnlimited);
+    const limited = await collectStepMetrics({ ...options, reuseRows: true, cache: unlimited.rows });
+    assert.equal(limited.meta.reusedRows, false);
+    assert.equal(limited.meta.totalJobs, 2);
+    assert.equal(limited.meta.truncated, true);
 });

@@ -1,4 +1,4 @@
-import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, parseTime } from "./rows.mjs";
+import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, normalizeRunnerName, parseTime } from "./rows.mjs";
 
 const NS_PER_MS = 1e6;
 const INFRA_STEP_NAMES = new Set(["Set up job", "Complete job"]);
@@ -188,7 +188,8 @@ export function normalizeJobRow(raw = {}, index = 0) {
         branch: text(raw.Branch),
         labels: Array.isArray(raw.Labels) ? raw.Labels.filter((label) => typeof label === "string") : [],
         kind: text(raw.Kind),
-        runnerName: text(raw.RunnerName),
+        runnerId: id(raw.RunnerID),
+        runnerName: normalizeRunnerName(raw.Kind, raw.RunnerName, raw.RunnerID),
         runnerGroup: text(raw.RunnerGroup),
         status: text(raw.Status).toLowerCase(),
         conclusion: text(raw.Conclusion).toLowerCase() || null,
@@ -234,7 +235,8 @@ export function normalizeStepRow(raw = {}, index = 0) {
         branch: text(raw.Branch),
         labels: Array.isArray(raw.Labels) ? raw.Labels.filter((label) => typeof label === "string") : [],
         kind: text(raw.Kind),
-        runnerName: text(raw.RunnerName),
+        runnerId: id(raw.RunnerID),
+        runnerName: normalizeRunnerName(raw.Kind, raw.RunnerName, raw.RunnerID),
         runnerGroup: text(raw.RunnerGroup),
         jobConclusion: text(raw.JobConclusion).toLowerCase() || null,
         jobQueuedAt,
@@ -447,7 +449,7 @@ function jobRowKey(row) {
     return keyOf(row.repo, workflowIdentity(row), row.runId, row.runAttempt, row.jobId || row.jobName);
 }
 
-// runnerPools groups jobs by their runs-on set. Wait and duration percentiles only use
+// runnerPools groups jobs by their runs-on set. Wait and duration statistics only use
 // jobs that recorded the timestamps they need, so queued or skipped jobs do not pull
 // the medians toward zero.
 function runnerPools(rows) {
@@ -475,7 +477,7 @@ function runnerPools(rows) {
         runners: countedList(pool.names),
         jobs: pool.jobs,
         wait: { p50: percentile(pool.waits, 50), p90: percentile(pool.waits, 90), samples: pool.waits.length },
-        duration: { p50: percentile(pool.durations, 50), p90: percentile(pool.durations, 90), samples: pool.durations.length },
+        duration: { p50: percentile(pool.durations, 50), p90: percentile(pool.durations, 90), samples: pool.durations.length, total: pool.durations.reduce((sum, duration) => sum + duration, 0) },
         failureRate: pool.decided > 0 ? pool.failed / pool.decided : 0,
     })).sort((a, b) => b.jobs - a.jobs || a.labels.localeCompare(b.labels));
 }

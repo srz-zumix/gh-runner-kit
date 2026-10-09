@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +62,10 @@ type Options struct {
 	// from the runs alone skip the request and cannot be aborted by a runner API error
 	// they do not need.
 	SkipRunners bool
+	// Pricing reads visibility and current hosted pools, including inherited groups.
+	Pricing bool
+	// AllAttempts includes jobs and metadata from every attempt of the selected runs.
+	AllAttempts bool
 }
 
 // Data holds everything a Collector gathered, together with what it could not gather.
@@ -68,9 +73,11 @@ type Data struct {
 	Window Window
 	// Runners is the runner inventory of the scope the command targets. It reflects the
 	// present, not the aggregation window, because the API keeps no runner history.
-	Runners []*github.Runner
-	Runs    []*github.WorkflowRun
-	Jobs    []*github.WorkflowJob
+	Runners    []*github.Runner
+	Runs       []*github.WorkflowRun
+	Attempts   []*github.WorkflowRun
+	LatestJobs map[int64]bool
+	Jobs       []*github.WorkflowJob
 	// Repos reports what the collection read of every repository it could read, which is
 	// how a quiet repository is told apart from one the run limit cut short.
 	Repos []RepoCoverage
@@ -81,8 +88,10 @@ type Data struct {
 	RunRepositories map[int64]string
 	// Usage holds the billable time of every collected run, keyed by run ID. Only the
 	// commands that ask for it populate this, because it costs one request per run.
-	Usage    map[int64]*github.WorkflowRunUsage
-	Warnings []string
+	Usage            map[int64]*github.WorkflowRunUsage
+	HostedRunners    map[string][]*github.HostedRunner
+	RepositoryPublic map[string]bool
+	Warnings         []string
 	// Truncated reports whether the run limit cut at least one repository short. Repos
 	// names which ones.
 	Truncated bool
@@ -263,11 +272,12 @@ func JobAttempt(job *github.WorkflowJob, runID int64) (int, error) {
 
 // Collector gathers the workflow runs, jobs and runners a metrics command needs.
 type Collector struct {
-	client *gh.GitHubClient
-	repo   repository.Repository
-	opts   Options
-	jobs   JobFetcher
-	usage  UsageFetcher
+	client      *gh.GitHubClient
+	repo        repository.Repository
+	opts        Options
+	jobs        JobFetcher
+	usage       UsageFetcher
+	attemptJobs JobFetcher
 }
 
 // NewCollector builds a Collector for repo. When repo.Name is empty the runner
@@ -286,6 +296,11 @@ func (c *Collector) SetUsageFetcher(usage UsageFetcher) {
 	c.usage = usage
 }
 
+// SetAttemptJobFetcher supplies the attempt-specific job listing for history.
+func (c *Collector) SetAttemptJobFetcher(fetcher JobFetcher) {
+	c.attemptJobs = fetcher
+}
+
 // Collect gathers the runner inventory and the workflow activity of the window.
 // Repositories the token cannot read are recorded in Data.Warnings and skipped rather
 // than aborting the whole command.
@@ -295,9 +310,12 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 	}
 
 	data := &Data{
-		Window:          c.opts.Window,
-		RunRepositories: map[int64]string{},
-		Usage:           map[int64]*github.WorkflowRunUsage{},
+		Window:           c.opts.Window,
+		RunRepositories:  map[int64]string{},
+		Usage:            map[int64]*github.WorkflowRunUsage{},
+		HostedRunners:    map[string][]*github.HostedRunner{},
+		RepositoryPublic: map[string]bool{},
+		LatestJobs:       map[int64]bool{},
 	}
 
 	if !c.opts.SkipRunners {
@@ -335,6 +353,11 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		// Record which repository every run came from so per-workflow aggregation can
 		// tell equally named workflows of different repositories apart.
 		repoName := parser.GetRepositoryFullName(repo)
+		if c.opts.Pricing {
+			if err := c.collectPricing(ctx, repo, data); err != nil {
+				return nil, err
+			}
+		}
 		for _, run := range runs {
 			data.RunRepositories[run.GetID()] = repoName
 		}
@@ -345,7 +368,19 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 				return nil, fmt.Errorf("failed to list the workflow jobs of %s: %w", parser.GetRepositoryFullName(repo), err)
 			}
 			data.Jobs = append(data.Jobs, jobs...)
+			for _, job := range jobs {
+				data.LatestJobs[job.GetID()] = true
+			}
 			data.Warnings = append(data.Warnings, warnings...)
+			if c.opts.AllAttempts {
+				attempts, historical, warnings, err := c.collectHistoricalJobs(ctx, repo, runs)
+				if err != nil {
+					return nil, fmt.Errorf("failed to collect earlier attempts of %s: %w", repoName, err)
+				}
+				data.Attempts = append(data.Attempts, attempts...)
+				data.Jobs = mergeCollectedJobs(data.Jobs, historical)
+				data.Warnings = append(data.Warnings, warnings...)
+			}
 		}
 
 		if c.usage != nil {
@@ -359,6 +394,35 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 	}
 
 	return data, nil
+}
+
+func (c *Collector) collectPricing(ctx context.Context, repo repository.Repository, data *Data) error {
+	target, err := gh.GetRepository(ctx, c.client, repo)
+	if err != nil {
+		if !isSkippableRunRequestError(err) {
+			return fmt.Errorf("failed to read repository visibility for pricing %s: %w", parser.GetRepositoryFullName(repo), err)
+		}
+		data.warnf("repository visibility for pricing %s is unavailable: %v", parser.GetRepositoryFullName(repo), err)
+	} else if target.Private != nil {
+		data.RepositoryPublic[parser.GetRepositoryFullName(repo)] = !target.GetPrivate()
+	}
+	owner := strings.ToLower(repo.Owner)
+	if _, read := data.HostedRunners[owner]; read {
+		return nil
+	}
+	if target != nil && target.GetOwner().GetType() == "User" {
+		data.HostedRunners[owner] = nil
+		return nil
+	}
+	runners, err := gh.ListOrgHostedRunnersWithInherited(ctx, c.client, repo)
+	if err != nil {
+		if !isSkippableRunRequestError(err) {
+			return fmt.Errorf("failed to read hosted runner pools of %s: %w", repo.Owner, err)
+		}
+		data.warnf("hosted runner pools of %s are unavailable; custom machine prices may be unknown: %v", repo.Owner, err)
+	}
+	data.HostedRunners[owner] = runners
+	return nil
 }
 
 // targetRepositories resolves which repositories the runs are collected from.
@@ -466,22 +530,21 @@ func matchesRepositoryPattern(pattern string, repo repository.Repository) bool {
 // collectRuns lists the workflow runs of repo that started inside the window, reporting
 // whether limit stopped the listing before the window did.
 func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository, limit int) ([]*github.WorkflowRun, bool, error) {
-	options := &gh.ListWorkflowRunsOptions{
-		Branch:  c.opts.Branch,
-		Event:   c.opts.Event,
-		Created: c.opts.Window.Created(),
-		Limit:   limit,
-	}
-
-	var runs []*github.WorkflowRun
-	err := withRetry(ctx, func() error {
-		var err error
-		if c.opts.Workflow != "" {
-			runs, err = gh.ListWorkflowRunsByFileName(ctx, c.client, repo, c.opts.Workflow, options)
-		} else {
-			runs, err = gh.ListRepositoryWorkflowRuns(ctx, c.client, repo, options)
+	runs, err := collectWindowRuns(ctx, c.opts.Window, limit, func(created string, cap int) ([]*github.WorkflowRun, error) {
+		options := &gh.ListWorkflowRunsOptions{
+			Branch: c.opts.Branch, Event: c.opts.Event, Created: created, Limit: cap,
 		}
-		return err
+		var rows []*github.WorkflowRun
+		err := withRetry(ctx, func() error {
+			var err error
+			if c.opts.Workflow != "" {
+				rows, err = gh.ListWorkflowRunsByFileName(ctx, c.client, repo, c.opts.Workflow, options)
+			} else {
+				rows, err = gh.ListRepositoryWorkflowRuns(ctx, c.client, repo, options)
+			}
+			return err
+		})
+		return rows, err
 	})
 	if err != nil {
 		return nil, false, err

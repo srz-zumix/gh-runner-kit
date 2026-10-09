@@ -30,6 +30,7 @@ type StepRow struct {
 	Branch         string
 	Labels         []string
 	Kind           JobKind
+	RunnerID       int64
 	RunnerName     string
 	RunnerGroup    string
 	JobConclusion  string
@@ -180,7 +181,7 @@ func BuildStepRows(data *Data, opts StepRowOptions) []StepRow {
 
 	rows := make([]StepRow, 0)
 	for _, entry := range jobs {
-		runStarted := runAttemptStartedAt(b.run(entry.job.RunID), entry.job.RunAttempt)
+		runStarted := runAttemptStartedAt(b.run(entry.job.RunID, entry.job.RunAttempt), entry.job.RunAttempt)
 		for _, row := range stepRowsOf(entry.job, entry.raw.Steps, runStarted) {
 			if !opts.matchStep(row.StepName) {
 				continue
@@ -233,6 +234,7 @@ func stepRowsOf(job JobRow, steps []*github.TaskStep, runStarted *time.Time) []S
 			Branch:         job.Branch,
 			Labels:         job.Labels,
 			Kind:           job.Kind,
+			RunnerID:       job.RunnerID,
 			RunnerName:     job.RunnerName,
 			RunnerGroup:    job.RunnerGroup,
 			JobConclusion:  job.Conclusion,

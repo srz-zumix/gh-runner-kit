@@ -318,11 +318,15 @@ function summarize(metrics, section = "all", limit = 10) {
         },
         usage: repoOnly(() => ({
             rates: usage.rates,
+            pricing: usage.pricing,
             window: {
                 totalMinutes: usage.window.totalMinutes,
                 billableMinutes: usage.window.billableMinutes,
                 selfHostedMinutes: usage.window.selfHostedMinutes,
                 estimatedCost: round(usage.window.estimatedCost),
+                knownCost: round(usage.window.knownCost),
+                unpricedJobs: usage.window.unpricedJobs,
+                unpricedMinutes: usage.window.unpricedMinutes,
                 byRunnerClass: usage.window.byRunnerClass.map((row) => ({ ...row, cost: round(row.cost) })),
                 byWorkflow: head(usage.window.byWorkflow.map((row) => ({ ...row, cost: round(row.cost) }))),
             },
@@ -330,6 +334,7 @@ function summarize(metrics, section = "all", limit = 10) {
                 available: usage.reported.available,
                 totalMinutes: usage.reported.totalMinutes,
                 estimatedCost: round(usage.reported.estimatedCost),
+                reason: usage.reported.reason,
                 byWorkflow: head(usage.reported.byWorkflow.map((row) => ({ ...row, cost: round(row.cost) }))),
             },
         })),
@@ -485,11 +490,14 @@ function summarize(metrics, section = "all", limit = 10) {
                   cost: fleet.billable
                       ? {
                             requested: true,
+                            available: fleet.costAvailable,
                             totalBillableMinutes: Math.round(
                                 fleet.cost.reduce((sum, row) => sum + (row.billableMs ?? 0), 0) / 60000,
                             ),
-                            totalCost: round(fleet.cost.reduce((sum, row) => sum + (row.cost ?? 0), 0)),
-                            note: "GitHub bills only the jobs it hosted, and public repositories run for free, so a zero here is also what moving this work to self-hosted runners would avoid.",
+                            totalCost: !fleet.costAvailable || fleet.cost.some((row) => row.cost === null) ? null : round(fleet.cost.reduce((sum, row) => sum + row.cost, 0)),
+                            knownCost: round(fleet.cost.reduce((sum, row) => sum + row.knownCost, 0)),
+                            unpricedJobs: fleet.cost.reduce((sum, row) => sum + row.unpricedJobs, 0),
+                            note: "Current list-price estimates by machine SKU. Public standard runners are free; Larger runners are billed. Unknown prices are null, and current pool specifications do not prove historical hardware.",
                             rows: fleet.cost.map((row) => ({
                                 os: row.os,
                                 runs: row.runs,
@@ -497,6 +505,17 @@ function summarize(metrics, section = "all", limit = 10) {
                                 billableMinutes: Math.round((row.billableMs ?? 0) / 60000),
                                 ratePerMinute: row.rate,
                                 cost: round(row.cost),
+                                knownCost: round(row.knownCost),
+                                unpricedJobs: row.unpricedJobs,
+                                runnerClass: row.runnerClass,
+                                runnerKind: row.runnerKind,
+                                sku: row.sku,
+                                cpuCores: row.cpuCores,
+                                memoryGB: row.memoryGB,
+                                architecture: row.architecture,
+                                source: row.source,
+                                reason: row.reason,
+                                priceVersion: row.priceVersion,
                             })),
                         }
                       : {
@@ -515,7 +534,7 @@ function summarize(metrics, section = "all", limit = 10) {
         jobCoverageRuns: meta.jobCoverageRuns,
         warnings: meta.warnings,
         costEstimateNote:
-            "Cost is estimated from job durations at GitHub-hosted list prices; included free minutes and larger-runner surcharges are not modelled.",
+            "Cost uses current GitHub-hosted billing SKU prices and current pool specifications, including Larger runners, arm64 and GPU variants. Public standard runners are free; Larger runners are billed. Unknown prices are null with a known subtotal. Included minutes, discounts, storage and historical price/specification changes are not modelled.",
         ...(section === "all" ? sections : { [section]: sections[section] }),
     };
 }
@@ -712,7 +731,7 @@ const canvas = createCanvas({
         {
             name: "get_step_metrics",
             description:
-                "Collect and read the Step timeline statistics for one workflow file across many recent runs. Uses `gh runner-kit metrics steps --format ndjson` plus `metrics jobs` for denominators, so `workflow` must be a workflow file name such as ci.yml or an ID, not the display name.",
+                "Read Step timeline statistics for one workflow from the shared all-attempts dataset without another API collection. Uses metrics steps --input and retained job denominators; workflow must be a file name such as ci.yml or an ID.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -720,12 +739,12 @@ const canvas = createCanvas({
                     repository: { type: "string", description: "Keep only sampled jobs and steps from this exact OWNER/REPO, after collection. Empty or omitted means all repositories. Combine with reuseRows to filter without collecting again." },
                     job: { type: "string", description: "Optional job name or merged matrix base to focus on." },
                     jobStatus: { type: "string", description: "Keep jobs matching this lifecycle status or conclusion, such as in_progress, completed, success, failure or cancelled, and all their steps. Empty or omitted means all statuses." },
-                    includeAllAttempts: { type: "boolean", description: "Include jobs and steps from every attempt of each sampled run, fetching earlier attempt timelines as well. Defaults to false (latest-attempt job listing, including carried-over jobs). Changing it requires a new collection." },
-                    section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns per runs-on pool job counts, wait, duration and failure rate." },
+                    includeAllAttempts: { type: "boolean", description: "Include every retained attempt of sampled runs without collecting again. Defaults to false (latest-attempt job listing, including carried-over jobs)." },
+                    section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns per runs-on pool job counts, wait, duration percentiles, cumulative execution time in duration.total (milliseconds) and failure rate." },
                     limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum rows returned in the requested section. Defaults to 50." },
                     mergeMatrix: { type: "boolean", description: "Merge matrix job variants when at least two variants share a base name. Defaults to true." },
                     showInfra: { type: "boolean", description: "Include Set up job, Complete job and Post-* steps. Defaults to true." },
-                    runBudget: { type: "integer", minimum: 1, maximum: 5000, description: "Newest runs per repository to sample with --max-runs. Defaults to 500." },
+                    runBudget: { type: "integer", minimum: 0, maximum: 5000, description: "Newest retained runs per repository in this view. Defaults to 500; 0 selects every retained run. Does not expand the global dataset." },
                     runnerKind: { type: "string", enum: ["all", "self-hosted", "github-hosted"], description: "Keep only the jobs of this runner kind. Defaults to all." },
                     runsOn: { type: "string", description: "Keep only the jobs whose runs-on label set equals this comma-separated set, ignoring order and case, for example self-hosted,linux." },
                     runnerGroup: { type: "string", description: "Keep only the jobs that ran in this runner group." },
@@ -754,7 +773,8 @@ const canvas = createCanvas({
                 const { generation, signal } = instance.beginStepRequest();
                 let result;
                 try {
-                    result = await collectStepMetrics({
+                    result = await instance.store.withDataset(query, dataset => collectStepMetrics({
+                        dataset,
                         target: targetOf(query),
                         filters: filtersOf(query),
                         limits: limitsOf(query),
@@ -763,7 +783,7 @@ const canvas = createCanvas({
                         reuseRows: input.reuseRows === true,
                         cache: instance.stepRowCache,
                         signal,
-                    });
+                    }));
                 } catch (error) {
                     instance.setStepError(settings, error, generation);
                     throw new CanvasError("step_metrics_failed", error?.message ?? String(error));
@@ -828,7 +848,8 @@ const canvas = createCanvas({
                 const repo = ctx.input?.repo ?? (scopeOf(query) === "org" ? instance.steps.settings?.repository ?? "" : "");
                 let result;
                 try {
-                    result = await collectRunTimeline({
+                    result = await instance.store.withDataset(query, dataset => collectRunTimeline({
+                        input: dataset.input,
                         cwd: instance.store.cwd,
                         target: targetOf(query),
                         repo,
@@ -836,7 +857,7 @@ const canvas = createCanvas({
                         attempt: Number(ctx.input?.attempt),
                         format: "json",
                         signal,
-                    });
+                    }));
                 } catch (error) {
                     throw new CanvasError("run_timeline_failed", error?.message ?? String(error));
                 }
@@ -918,7 +939,30 @@ const canvas = createCanvas({
         panels.delete(ctx.instanceId);
         panel.instance.dispose();
         await new Promise((resolve) => panel.server.close(() => resolve()));
+        if (panels.size === 0 && store) {
+            await store.dispose();
+            store = null;
+        }
     },
 });
 
 session = await joinSession({ canvases: [canvas] });
+
+async function shutdown() {
+    for (const panel of panels.values()) {
+        panel.instance.dispose();
+        panel.server.closeAllConnections();
+        panel.server.close();
+    }
+    panels.clear();
+    await store?.dispose();
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+        void shutdown().then(() => process.exit(0), error => {
+            process.stderr.write(`Actions metrics shutdown failed: ${error.message}\n`);
+            process.exit(1);
+        });
+    });
+}

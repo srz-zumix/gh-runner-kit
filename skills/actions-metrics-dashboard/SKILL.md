@@ -78,7 +78,75 @@ carrying `*`), `all` (every runner, the expensive path) or `clear` (restore the
 fleet-wide chart). `exclude` is not one of the three; it narrows whichever of
 the first two runs.
 
+## Hosted runner names
+
+Listings, aggregation and runner filters group hosted instances by a stable
+name: `ubuntu-latest-large-123` becomes `ubuntu-latest-large` only when
+`RunnerID` is `123`. The same rule maps `GitHub Actions 123` to `GitHub Actions`.
+Self-hosted and unidentified names remain unchanged; never strip an arbitrary
+numeric suffix. The instance ID remains in job/step rows and run timelines,
+and the Job explorer job table shows it in the runner tooltip.
+Name grouping does not establish a machine specification or billing SKU.
+
+## Usage and cost
+
+Cost estimates distinguish standard, Larger, arm64 and GPU billing SKUs,
+using exact standard labels and current hosted-pool specifications, including
+enterprise pools inherited through organization runner groups. A custom pool
+label matches its configured name, never the job's ephemeral runner ID.
+Organization administration or runner/runner-group read permissions are needed;
+inherited pools do not require enterprise-wide management access.
+
+Standard runners are free for public repositories; Larger runners are billed
+even there. Self-hosted infrastructure costs are excluded. Each completed job
+is rounded up to whole minutes. `usage.pricing` carries the catalog source,
+version and currency; `usage.window.knownCost`, `unpricedJobs` and
+`unpricedMinutes` describe coverage. Unknown prices remain null, including
+workflow totals; do not convert them to zero or present a known subtotal as a
+complete total. Machine rows expose CPU, RAM, architecture, rate, source and
+the reason a price is missing.
+
+Skipped jobs and cancellations without runner allocation, a started
+non-skipped step or positive per-job usage are excluded from cost counts,
+minutes and unknown coverage.
+Started cancellations remain included. Preserve `ExecutionStarted` from the
+shared job rows; job timestamps or requested labels alone do not prove execution.
+
+Machine rows also expose `runnerKind` independently of price availability.
+The UI shows **Unknown (self-hosted)** for unknown values on positively
+identified self-hosted rows. Unidentified jobs remain **Unknown**; inclusion
+in the self-hosted fleet filter is not evidence of a self-hosted runner.
+Self-hosted infrastructure costs remain excluded.
+
+Repository targets estimate from their collected job sample. Organization
+targets use `fleet.cost` when the `billable` filter is enabled. Older CLI
+OS-only reports remain unpriced and require an updated `gh runner-kit` build.
+The current-billing-cycle timing API has no machine SKUs, so its estimated
+cost is null and the UI displays minutes only. Current pool definitions and
+repository visibility cannot prove historical hardware or visibility;
+included minutes, discounts, storage and historical price changes are
+excluded. These are list-price estimates, not invoices.
+
 ## Step timeline
+
+All tabs share one `metrics collect --all-attempts --pricing` snapshot;
+`billable: true` additionally enables `--usage`. Native summaries and costs,
+fleet reports, Explorer, Step, runner projections, exports and single-run
+timelines read this dataset rather than collecting independently. Inspect
+`metrics.meta.dataset` for identity, window, attempt scope, counts, truncation
+and historical-data warnings. Saturated searches split the period to avoid
+GitHub's 1,000-result cap. Refresh replaces the dataset and invalidates views.
+Report grouping and capacity settings re-render the retained snapshot.
+Current-billing-cycle workflow totals are outside this dataset and are
+explicitly marked not collected, not mistaken for permission failures.
+Cost minutes sum rounded-up minutes per completed job; Step total run sums
+unrounded durations. Parallel jobs and reruns count separately; neither is
+workflow wall-clock elapsed time.
+
+**Partial data** is collapsed by default with a warning count. Expand it to
+read all warnings; the choice survives panel updates. Errors are not collapsed.
+**Load job rows** reads the current dataset revision, reports loading/ready
+through the panel stream, and never independently collects from GitHub.
 
 Use the **Step timeline** tab when the user asks which steps are slow, flaky,
 skipped, moving later in time, or consuming most of a job. It requires a
@@ -92,16 +160,23 @@ workflow path already present in dashboard workflow rows; use its basename for
 collection. The tab samples newest runs with `--max-runs`, so always mention
 the reported run count, observed range and truncation flag when summarising.
 
-**Include all attempts** / `includeAllAttempts: true` collects every attempt
+`runBudget` / **Runs** defaults to 500 and accepts 0–5000. **0** passes
+no run-count cap to select every retained run within the shared window,
+without a run-count limit; positive values limit newest runs per repository.
+The UI keeps edits pending until **Load steps**. Preserve zero when reusing
+rows or restoring settings, and do not mistake it for an exhausted budget.
+This is a local view budget: it makes no independent API requests and cannot
+recover runs excluded by the global budget, period or missing GitHub history.
+
+**Include all attempts** / `includeAllAttempts: true` selects every retained attempt
 of each sampled run. False (the default) uses GitHub's latest-attempt job
 listing, including carried-over jobs. Earlier failures and timeouts replaced
 by a successful rerun are only available in the all-attempt scope. The panel
-reads earlier attempts with `job timeline --attempt <N>`, reusing the CLI's
-completed-attempt cache and preserving their own timeline origins.
+reads earlier attempts from the same snapshot, preserving their own timeline origins.
 Carried-over jobs are deduplicated. `runBudget` counts runs, not attempts.
-Changing this option requires collection even with `reuseRows: true`, because
-the row cache is scoped by attempt mode. In the UI, changing the checkbox only
-edits the next collection; **Load steps** applies it and persists it per target.
+Changing this option reads snapshot rows locally, never collects from GitHub.
+In the UI, changing the checkbox only edits the next view; **Load steps**
+applies it and persists it per target.
 Pending edits survive panel updates. **Repository**, **Job**, **Job status** and runner filters
 immediately re-aggregate the loaded sample without a new collection, using its
 workflow, run budget and attempt mode rather than pending edits to those
@@ -137,8 +212,15 @@ repository. A single-run Gantt from another repository hides its jobs with
 an explanatory notice. A bare run ID defaults to the selected repository.
 The runner inputs filter jobs after collection; pass `reuseRows: true` to
 re-aggregate the rows already collected without calling the CLI again. Use
-`section: "runners"` to compare `runs-on` pools (wait/run percentiles, failure
-rate) and mention `meta.unfilteredJobs` when a runner filter is active.
+`section: "runners"` to compare `runs-on` pools (wait/run percentiles,
+cumulative run time and failure rate) and mention `meta.unfilteredJobs`
+when a runner filter is active. Each pool's `duration.total` is the sum of
+completed job execution times in milliseconds, excluding wait. The UI
+shows it as **Total run**, or a dash when `duration.samples` is zero.
+Hovering over **Total run** shows minutes with up to two decimal places;
+missing timing samples have no minute tooltip.
+Parallel jobs and included attempts add their durations separately;
+this is cumulative runner time, not elapsed wall-clock time.
 `jobStatus` matches a job lifecycle status (`queued`, `in_progress`,
 `completed`, etc.) or conclusion (`success`, `failure`, `cancelled`,
 `skipped`, etc.) and keeps all steps of matching jobs, not only steps with
@@ -156,8 +238,9 @@ the Step timeline run list.
 **Typical timeline** includes `failureRate` for each step, using the same
 failed / executed ratio as **Step statistics**; skipped steps are excluded.
 Bars remain blue for zero failures and gray for infrastructure steps with
-zero failures. A positive failure rate turns the bar red, from pale red near
-0% to solid red at 100%, including infrastructure steps. The tooltip shows
+zero failures. A positive failure rate turns the bar red, using at least a
+30% red blend and increasing continuously to solid red at 100%, including
+infrastructure steps. The tooltip shows
 the percentage. Shading reflects the current repository, job, status, runner and attempt
 filters. Single-run Gantt colors are unchanged.
 
@@ -206,7 +289,7 @@ for ephemeral runners), `bucket` (`auto`, `15m` … `24h`), `runnerType` (`auto`
 request per run).
 
 **Limits** — `maxRuns` (**per repository**; 0, the default, means every run in
-the window, so an organization collects 0 × every repository it owns),
+the window, so an organization collects all retained runs of its repositories),
 `jobConcurrency` (1-20, default 6), `jobKind` (`all`, `self-hosted` (default),
 `github-hosted`), `topRunners` (default 40), `maxRows` (default 400000),
 `rowBudget` (Job explorer rows held in the browser, default 20000).
@@ -247,7 +330,7 @@ a real answer meaning "this repository put no job on the fleet", not a failure.
 | Symptom | Cause / Resolution |
 | --- | --- |
 | Every card is empty and the panel names an include filter | A repository filter matched nothing. Clear `includeRepos`, or widen it to the owner now targeted. |
-| Queue time, cost or the slowest runs are missing | The target is an organization, where the job-derived reports are not collected. Switch to a repository to see them. |
+| Queue time, cost or the slowest runs are missing | Inspect the shared dataset and coverage warnings. Some native cards remain repository-only; organization fleet reports still use the same retained jobs. |
 | `fleet.repositories` is an unavailable object | The per-repository report only runs for an organization target. |
 | A workflow appears twice with the same name | Two repositories of the organization share the workflow name. Read the `repository` field; the rows are grouped by repository and workflow path. |
 | The runner inventory is missing and a 403 is reported | The token lacks the runner scopes. Everything derived from runs and jobs is still reported; only the inventory is skipped. |

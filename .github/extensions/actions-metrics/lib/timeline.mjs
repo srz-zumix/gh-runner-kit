@@ -27,7 +27,7 @@ export function runTimelineHost({ target = null, repo = "", run = "" } = {}) {
     return target?.host ?? null;
 }
 
-export async function collectRunTimeline({ cwd, target, repo = "", run, attempt, format = "json", refresh = false, signal } = {}) {
+export async function collectRunTimeline({ cwd, target, repo = "", run, attempt, format = "json", refresh = false, input = "", signal } = {}) {
     if (!(await hasRunTimeline(cwd))) {
         return { available: false, reason: "gh runner-kit job timeline is not available in the installed version. Update gh runner-kit to use single-run step timelines." };
     }
@@ -40,8 +40,8 @@ export async function collectRunTimeline({ cwd, target, repo = "", run, attempt,
         return { available: false, reason: "A run ID needs a repository when the dashboard targets an organization. Pass the run URL or the repository as [HOST/]OWNER/REPO." };
     }
     const wanted = format === "mermaid" ? "mermaid" : "json";
-    const { args, env } = runTimelineCommand({ repo, run: value, attempt: Number(attempt), format: wanted, target, refresh });
-    const body = await ghRaw(args, { cwd, env, host: runTimelineHost({ target, repo, run: value }), signal });
+    const { args, env } = runTimelineCommand({ repo, run: value, attempt: Number(attempt), format: wanted, target, refresh, input });
+    const body = await ghRaw(args, { cwd, env, host: input ? undefined : runTimelineHost({ target, repo, run: value }), signal });
     if (wanted === "mermaid") {
         return { available: true, format: "mermaid", body };
     }

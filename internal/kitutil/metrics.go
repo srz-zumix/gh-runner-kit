@@ -36,6 +36,8 @@ type MetricsFlags struct {
 	NoCache      bool
 	Refresh      bool
 	Input        string
+	AllAttempts  bool
+	Pricing      bool
 	Exporter     cmdutil.Exporter
 
 	// snapshot memoizes the --input file across the Window and collect calls of a
@@ -240,9 +242,7 @@ func (m *MetricsFlags) CollectWithWindow(cmd *cobra.Command, window metrics.Wind
 	return m.collect(cmd, window, collectFull)
 }
 
-// CollectUsage gathers the workflow runs together with the billable time GitHub charges
-// for them. The per run job listing is skipped because the cost report works from the
-// usage alone, which keeps the command at one request per run rather than two.
+// CollectUsage gathers jobs, usage and hosted machine inventory for SKU-aware pricing.
 func (m *MetricsFlags) CollectUsage(cmd *cobra.Command) (*metrics.Data, error) {
 	window, err := m.Window()
 	if err != nil {
@@ -264,11 +264,11 @@ func (m *MetricsFlags) CollectRuns(cmd *cobra.Command) (*metrics.Data, error) {
 
 // CollectReport gathers what `metrics report` needs: the runner inventory, the
 // workflow runs, their jobs when needJobs is set, plus the billable usage of every
-// run when withUsage is set. A cost-only report needs neither the jobs nor a job
-// listing request per run, so the caller passes needJobs=false to skip them. --input
+// run when withUsage is set. Pricing also requires job labels and hosted inventory. --input
 // is honoured like the other Collect* methods, requiring the snapshot to carry jobs
 // and usage only when the corresponding flag is set.
 func (m *MetricsFlags) CollectReport(cmd *cobra.Command, needJobs, withUsage bool) (*metrics.Data, error) {
+	needJobs = needJobs || withUsage
 	if m.Input != "" {
 		snap, err := m.loadSnapshot()
 		if err != nil {
@@ -297,7 +297,7 @@ type collectMode int
 const (
 	// collectFull fetches the per run jobs the timeline and other reports need.
 	collectFull collectMode = iota
-	// collectUsage skips the jobs and fetches the billable usage instead.
+	// collectUsage fetches jobs, usage and pricing inventory.
 	collectUsage
 	// collectRunsOnly fetches neither, because the run listing needs only the runs.
 	collectRunsOnly
@@ -309,13 +309,13 @@ func (m *MetricsFlags) collect(cmd *cobra.Command, window metrics.Window, mode c
 		if err != nil {
 			return nil, err
 		}
-		if err := snap.Require(mode == collectFull, mode == collectUsage); err != nil {
+		if err := snap.Require(mode != collectRunsOnly, mode == collectUsage); err != nil {
 			return nil, err
 		}
 		return snap.Data, nil
 	}
 
-	collector, _, err := m.buildCollector(cmd, window, mode != collectFull, mode == collectRunsOnly, mode == collectUsage)
+	collector, _, err := m.buildCollector(cmd, window, mode == collectRunsOnly, mode == collectRunsOnly, mode == collectUsage)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func (m *MetricsFlags) CollectSnapshot(cmd *cobra.Command, withUsage bool) (*met
 		Version:   metrics.CurrentSnapshotVersion,
 		CreatedAt: time.Now().UTC(),
 		Repo:      scope,
-		Contents:  metrics.SnapshotContents{Jobs: true, Usage: withUsage, Runners: true},
+		Contents:  metrics.SnapshotContents{Jobs: true, Usage: withUsage, Runners: true, AllAttempts: m.AllAttempts},
 		Data:      data,
 	}, nil
 }
@@ -397,8 +397,17 @@ func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window,
 		ExcludeRepos: m.ExcludeRepos,
 		SkipJobs:     skipJobs,
 		SkipRunners:  skipRunners,
+		Pricing:      wantUsage || m.Pricing,
+		AllAttempts:  m.AllAttempts,
 	}, jobs)
 
+	if m.AllAttempts {
+		fetcher := metrics.JobFetcher(metrics.NewAPIAttemptJobFetcher(client))
+		if cache, ok := m.cache(); ok {
+			fetcher = metrics.NewCachedAttemptJobFetcher(fetcher, cache, m.Refresh)
+		}
+		collector.SetAttemptJobFetcher(fetcher)
+	}
 	if wantUsage {
 		collector.SetUsageFetcher(m.usageFetcher(client))
 	}

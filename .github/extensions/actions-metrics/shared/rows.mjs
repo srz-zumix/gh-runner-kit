@@ -82,6 +82,23 @@ export function isDecided(conclusion) {
 /** The label a job with no runner name is grouped under. Matches the projection. */
 export const UNIDENTIFIED = "(unidentified)";
 
+/** Remove only the matching instance ID of a positively identified hosted runner. */
+export function normalizeRunnerName(kind, name, runnerID) {
+    const value = text(name);
+    if (!["hosted", "github-hosted"].includes(text(kind).toLowerCase())) {
+        return value;
+    }
+    const identifier = id(runnerID);
+    if (!/^[1-9]\d*$/.test(identifier)) {
+        return value;
+    }
+    if (value === `GitHub Actions ${identifier}`) {
+        return "GitHub Actions";
+    }
+    const suffix = `-${identifier}`;
+    return value.length > suffix.length && value.endsWith(suffix) ? value.slice(0, -suffix.length) : value;
+}
+
 /** Normalize one raw NDJSON row into the shape the explorer works with. */
 export function normalizeRow(raw, index) {
     const queuedAt = parseTime(raw.QueuedAt);
@@ -114,8 +131,8 @@ export function normalizeRow(raw, index) {
     const branch = text(raw.Branch);
     const conclusionRaw = text(raw.Conclusion).toLowerCase();
     const conclusion = conclusionRaw === "" ? null : conclusionRaw;
-    const runnerName = text(raw.RunnerName).trim();
     const kind = text(raw.Kind).toLowerCase() || "unknown";
+    const runnerName = normalizeRunnerName(kind, text(raw.RunnerName).trim(), raw.RunnerID);
     const labels = Array.isArray(raw.Labels) ? raw.Labels.filter((label) => typeof label === "string" && label !== "") : [];
 
     return {
