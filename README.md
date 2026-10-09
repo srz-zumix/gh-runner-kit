@@ -1,6 +1,8 @@
 # gh-runner-kit
 
-`gh-runner-kit` is a GitHub CLI extension for managing GitHub Actions self-hosted runners.
+`gh-runner-kit` is a GitHub CLI extension for managing GitHub Actions
+self-hosted runners and listing organization and enterprise GitHub-hosted
+runner pools.
 
 It provides commands to list runners, cordon/uncordon them to control job scheduling without deleting the registration, and to download, register, and run the runner agent itself.
 
@@ -205,6 +207,49 @@ Options:
 | `--version` | `latest` | `actions/runner` version to download |
 | `--work` | `_work` | Working directory used by the runner agent |
 
+### List GitHub-hosted runners
+
+```sh
+gh runner-kit hosted list [--repo [HOST/]OWNER/REPO] [--owner OWNER] \
+  [--exclude-inherited] [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit hosted list --enterprise [HOST/]ENTERPRISE \
+  [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List the GitHub-hosted runner pools configured in an organization or enterprise,
+including larger runners.
+
+The organization is taken from `--owner`, or from the owner of `--repo` or of the
+current repository. Organization listing also includes the pools of runner
+groups inherited from the enterprise, which only needs organization admin
+permission; use `--exclude-inherited` to list only the organization pools.
+Use `--enterprise [HOST/]ENTERPRISE` to list pools configured
+in an enterprise instead. It cannot be combined with `--owner` or `--repo`.
+Enterprise listing requires the `manage_runners:enterprise` scope for classic
+personal access tokens. This does not list standard hosted runner labels such as
+`ubuntu-latest`. Reading organization hosted runners requires organization
+administration read permission. Use `--fields` to choose the table columns.
+
+All options are optional. When `--enterprise` is used, its enterprise slug is
+required and its host prefix is optional. Table output is used by default; JSON
+output includes the full API runner objects, regardless of `--fields`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; mutually exclusive with `--owner` and `--repo` |
+| `--exclude-inherited` | `false` | Do not list the pools of runner groups inherited from the enterprise; mutually exclusive with `--enterprise` |
+| `--fields` | `ID,NAME,PLATFORM,STATUS,GROUP,MAXIMUM_RUNNERS,PUBLIC_IP_ENABLED` | Table columns to display: `{GROUP\|ID\|MAXIMUM_RUNNERS\|NAME\|PLATFORM\|PUBLIC_IP_ENABLED\|STATUS}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format; its owner is the target organization |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
 ### List organization runner groups
 
 ```sh
@@ -230,19 +275,35 @@ Options:
 ### List self-hosted runners
 
 ```sh
-gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--exclude-inherited] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit list --enterprise [HOST/]ENTERPRISE [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List self-hosted runners, including their cordon status.
 
 Organization-level runners are listed by default. Use `--type repo` to list the runners registered to a repository instead; passing `--repo` explicitly implies `--type repo`. Use `--status` to keep only the runners in one status, and `--fields` to choose the table columns. The runner APIs only report `online` and `offline`, so `--status active` and `--status idle` match the online runners that are respectively running a job and waiting for one.
 
-The runner list APIs do not report the runner group of each runner, so use `gh runner-kit group runner list` to list the runners of a runner group.
+Organization listing also includes the runners of runner groups inherited from
+the enterprise, which only needs organization admin permission. Use
+`--exclude-inherited` to list only the runners registered to the organization.
+
+Use `--enterprise [HOST/]ENTERPRISE` to list the self-hosted runners registered
+to an enterprise instead. The enterprise slug is required when this option is
+used; the host prefix is optional. This requires enterprise runner management
+permission (`manage_runners:enterprise` for a classic personal access token).
+It cannot be combined with `--owner`, `--repo` or `--type`. The remaining options
+are optional and work the same way for enterprise runners. This does not list
+GitHub-hosted runner pools or every runner registered to the enterprise's
+organizations and repositories.
+
+The runner list APIs do not report the runner group of each runner, so use `gh runner-kit group runner list` to list the runners of an organization runner group.
 
 Options:
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; mutually exclusive with `--owner`, `--repo` and `--type` |
+| `--exclude-inherited` | `false` | Do not list the runners of runner groups inherited from the enterprise; mutually exclusive with `--enterprise` |
 | `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display: `{BUSY\|CORDONED\|ID\|LABELS\|NAME\|OS\|STATUS}` |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
