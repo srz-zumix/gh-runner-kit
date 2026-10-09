@@ -1,6 +1,8 @@
 # gh-runner-kit
 
-`gh-runner-kit` is a GitHub CLI extension for managing GitHub Actions self-hosted runners.
+`gh-runner-kit` is a GitHub CLI extension for managing GitHub Actions
+self-hosted runners and listing organization and enterprise GitHub-hosted
+runner pools.
 
 It provides commands to list runners, cordon/uncordon them to control job scheduling without deleting the registration, and to download, register, and run the runner agent itself.
 
@@ -205,6 +207,49 @@ Options:
 | `--version` | `latest` | `actions/runner` version to download |
 | `--work` | `_work` | Working directory used by the runner agent |
 
+### List GitHub-hosted runners
+
+```sh
+gh runner-kit hosted list [--repo [HOST/]OWNER/REPO] [--owner OWNER] \
+  [--exclude-inherited] [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit hosted list --enterprise [HOST/]ENTERPRISE \
+  [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+List the GitHub-hosted runner pools configured in an organization or enterprise,
+including larger runners.
+
+The organization is taken from `--owner`, or from the owner of `--repo` or of the
+current repository. Organization listing also includes the pools of runner
+groups inherited from the enterprise, which only needs organization admin
+permission; use `--exclude-inherited` to list only the organization pools.
+Use `--enterprise [HOST/]ENTERPRISE` to list pools configured
+in an enterprise instead. It cannot be combined with `--owner` or `--repo`.
+Enterprise listing requires the `manage_runners:enterprise` scope for classic
+personal access tokens. This does not list standard hosted runner labels such as
+`ubuntu-latest`. Reading organization hosted runners requires organization
+administration read permission. Use `--fields` to choose the table columns.
+
+All options are optional. When `--enterprise` is used, its enterprise slug is
+required and its host prefix is optional. Table output is used by default; JSON
+output includes the full API runner objects, regardless of `--fields`.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; mutually exclusive with `--owner` and `--repo` |
+| `--exclude-inherited` | `false` | Do not list the pools of runner groups inherited from the enterprise; mutually exclusive with `--enterprise` |
+| `--fields` | `ID,NAME,PLATFORM,STATUS,GROUP,MAXIMUM_RUNNERS,PUBLIC_IP_ENABLED` | Table columns to display: `{GROUP\|ID\|MAXIMUM_RUNNERS\|NAME\|PLATFORM\|PUBLIC_IP_ENABLED\|STATUS}` |
+| `--format` | - | Output format: `{json}`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format; its owner is the target organization |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
 ### List organization runner groups
 
 ```sh
@@ -230,19 +275,35 @@ Options:
 ### List self-hosted runners
 
 ```sh
-gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--exclude-inherited] [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit list --enterprise [HOST/]ENTERPRISE [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List self-hosted runners, including their cordon status.
 
 Organization-level runners are listed by default. Use `--type repo` to list the runners registered to a repository instead; passing `--repo` explicitly implies `--type repo`. Use `--status` to keep only the runners in one status, and `--fields` to choose the table columns. The runner APIs only report `online` and `offline`, so `--status active` and `--status idle` match the online runners that are respectively running a job and waiting for one.
 
-The runner list APIs do not report the runner group of each runner, so use `gh runner-kit group runner list` to list the runners of a runner group.
+Organization listing also includes the runners of runner groups inherited from
+the enterprise, which only needs organization admin permission. Use
+`--exclude-inherited` to list only the runners registered to the organization.
+
+Use `--enterprise [HOST/]ENTERPRISE` to list the self-hosted runners registered
+to an enterprise instead. The enterprise slug is required when this option is
+used; the host prefix is optional. This requires enterprise runner management
+permission (`manage_runners:enterprise` for a classic personal access token).
+It cannot be combined with `--owner`, `--repo` or `--type`. The remaining options
+are optional and work the same way for enterprise runners. This does not list
+GitHub-hosted runner pools or every runner registered to the enterprise's
+organizations and repositories.
+
+The runner list APIs do not report the runner group of each runner, so use `gh runner-kit group runner list` to list the runners of an organization runner group.
 
 Options:
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; mutually exclusive with `--owner`, `--repo` and `--type` |
+| `--exclude-inherited` | `false` | Do not list the runners of runner groups inherited from the enterprise; mutually exclusive with `--enterprise` |
 | `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display: `{BUSY\|CORDONED\|ID\|LABELS\|NAME\|OS\|STATUS}` |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
@@ -399,7 +460,7 @@ Collect the runner inventory, the workflow runs and their jobs once, and write t
 
 Every other `metrics` command accepts the resulting file through `--input` instead of issuing its own API requests, so a fleet dashboard that runs several reports over the same window pays for the collection only once instead of once per report.
 
-`--usage` additionally reads the billable time of every run, which costs one extra API request per run, so that the resulting snapshot can also serve `metrics cost --input`.
+`--usage` additionally reads per-run billable usage, repository visibility and current hosted-runner definitions, including pools inherited from enterprise runner groups, so that the snapshot can also serve `metrics cost --input`. It costs one extra usage request per run plus inventory requests.
 
 The snapshot is written to `--output`, `-` for stdout by default, and gzip-compressed when the name ends in `.gz`.
 
@@ -422,7 +483,7 @@ Options:
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
-| `--usage` | `false` | Also collect the billable usage of every run, for `metrics cost --input` |
+| `--usage` | `false` | Also collect billable usage, repository visibility and hosted machine inventory for `metrics cost --input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show how many jobs ran at the same time over the window
@@ -466,16 +527,18 @@ Options:
 ### Report the billable time GitHub-hosted runners consumed
 
 ```sh
-gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
-Report the billable time of the collected workflow runs, broken down by operating system.
+Estimate GitHub-hosted execution costs by billing SKU and machine specification.
 
-GitHub only bills the jobs it hosted, so self-hosted jobs contribute nothing to this report. What it shows is therefore both the current hosted spend and what moving the same work to self-hosted runners would avoid. Public repositories run on hosted runners for free, so their billable time is reported as zero.
+Standard workflow labels and organization Larger-runner definitions select current USD list prices, distinguishing CPU, architecture and GPU variants. The report shows `OS`, `RUNNER CLASS`, `CPU`, `RAM/GB`, `RUNS`, `JOBS`, `BILLABLE`, `RATE/MIN` and `EST COST`. Each job is rounded up to whole minutes; usage durations take precedence over job timestamps. Standard runners are free for public repositories, but Larger runners are billed even there. Self-hosted infrastructure costs are excluded.
 
-`EST COST` multiplies the billable minutes by the per-minute price of the operating system. The defaults are the public prices of the standard two core runners (`UBUNTU` `0.008`, `WINDOWS` `0.016`, `MACOS` `0.08` USD), so pass `--rate` to match a plan or a larger runner, for example `--rate ubuntu=0.016`.
+Unknown hardware, unavailable repository visibility and missing permissions leave prices **unknown**, or `null` in JSON. `KnownCost` and `UnpricedJobs` expose the known subtotal and missing coverage. No standard rate is assumed for custom labels or OS-only usage. `--rate KEY=PRICE` is optional and repeatable: a billing SKU such as `linux_8_core=0.022` overrides one machine price; an OS such as `ubuntu=0.006` deliberately overrides every machine of that OS. The default is automatic SKU pricing.
 
-This command reads the usage of every run, which costs one API request per run, so keep `--max-runs` in mind. The per run job listing is skipped because the report does not need it, and completed runs are cached like they are for the other reports. Per-job durations are rounded up to whole minutes when available; otherwise the aggregate duration is used and the report warns that the estimate may be low.
+Collection reads jobs and usage per run, repository visibility and current hosted-runner definitions, including enterprise pools inherited through organization runner groups. Reading pools and groups requires organization administration or runner/runner-group read permissions; enterprise-wide management access is not needed for inherited pools. Completed jobs and usage are cached. Keep `--max-runs` in mind; `--input` reuses captured inventory without API requests. Older snapshots without inventory can still report known standard labels when visibility is available, but cannot infer custom machine prices; recollect to include inherited definitions. OS-only usage without per-job durations is retained with an explicit rounding warning.
+
+Current pool definitions and repository visibility cannot prove historical hardware or visibility. Included minutes, discounts, storage and historical price changes are not modelled; estimates are not invoices. Rates are bundled from [Actions runner pricing](https://docs.github.com/en/billing/reference/actions-runner-pricing).
 
 Options:
 
@@ -494,7 +557,7 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system, as `OS=PRICE`. Repeatable |
+| `--rate` | automatic SKU pricing | Override a per-minute USD price as `SKU=PRICE` or `OS=PRICE`. Repeatable |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
@@ -597,7 +660,7 @@ Unlike the aggregated reports the listing keeps the jobs that were skipped and t
 
 `--runner` selects the runner names to keep and `--exclude-runner` the ones to drop, the latter winning when a name matches both.
 
-GitHub names its own hosted runners after their runner ID, such as `GitHub Actions 1000299771`, which would give every hosted job a runner of its own. The ID is dropped from `RUNNER`, leaving every hosted job on `GitHub Actions`, and stays available as `RunnerID`. A self-hosted name that happens to end in a number is left untouched.
+Hosted instance IDs are dropped from `RUNNER` only when the suffix matches `RunnerID`: `GitHub Actions 123` becomes `GitHub Actions`, and `ubuntu-latest-large-123` becomes `ubuntu-latest-large`. Listings, aggregation and `--runner` / `--exclude-runner` filters use these stable names. `RunnerID` remains available in job rows, step rows and run timelines. Self-hosted and unidentified runner names are left untouched.
 
 The output is large: a busy organization produces hundreds of thousands of rows over the default window. Prefer `--format ndjson`, which writes one JSON object per line, and narrow it with `--label`, `--runner`, `--exclude-runner` or `--limit`. With `--format json` or `--format ndjson`, the collection warnings and the number of repositories that reached `--max-runs`, as `truncated_repos=N`, go to stderr.
 
@@ -708,7 +771,7 @@ Options:
 ### Print several metrics reports from one collection
 
 ```sh
-gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate OS=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Collect the fleet once and print several of the other metrics reports from it, which is cheaper than running each of them on its own when API rate limits are a concern.
@@ -738,7 +801,7 @@ Options:
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--rate` | `ubuntu=0.008`, `windows=0.016`, `macos=0.08` | Override the per-minute price of an operating system in the cost section, as `OS=PRICE`. Repeatable |
+| `--rate` | automatic SKU pricing | Override a per-minute USD price in the cost section as `SKU=PRICE` or `OS=PRICE`. Repeatable |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--section` | every section except `cost` | Print only this section: `{capacity\|concurrency\|cost\|label\|queue\|repository\|runner\|summary\|workflow}` (repeatable) |

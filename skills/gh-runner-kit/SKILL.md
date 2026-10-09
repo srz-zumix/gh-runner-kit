@@ -1,12 +1,14 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including the unaggregated job listing, Prometheus and step summary output.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners and listing organization and enterprise GitHub-hosted runner pools — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including the unaggregated job listing, Prometheus and step summary output.
 ---
 
 # gh-runner-kit
 
 Reference for gh-runner-kit — a GitHub CLI extension for GitHub Actions
-self-hosted runner operations: listing runners, controlling whether they receive
+self-hosted runner operations and GitHub-hosted runner pool listing for
+organizations and enterprises:
+listing runners, controlling whether they receive
 new jobs (cordon / uncordon), running the runner agent itself, and reporting how
 the fleet is used.
 
@@ -29,6 +31,10 @@ gh auth login
 Repository-level runner operations require repository admin permission.
 Organization-level runner operations (including the `group` cordon strategy)
 require organization owner permission.
+
+Enterprise-level self-hosted and GitHub-hosted runner listing requires runner
+management permission (`manage_runners:enterprise` for a classic personal access
+token).
 
 ## CLI Structure
 
@@ -53,6 +59,8 @@ gh runner-kit                # Root command
 │   │   └── remove             # Remove a runner from a runner group
 │   ├── update                # Update the settings of a runner group
 │   └── view                  # Show the settings of a runner group
+├── hosted                   # Organization and enterprise GitHub-hosted pools
+│   └── list                  # List configured pools, including larger runners
 ├── job                      # Inspect the jobs of a single workflow run
 │   └── timeline              # When every job and step of a run attempt ran
 ├── list                     # List self-hosted runners (organization by default)
@@ -81,6 +89,22 @@ gh runner-kit                # Root command
   owner of the current repository.
 - `--type repo` — the runners registered to `--repo` (or the current
   repository). Passing `--repo` explicitly implies `--type repo`.
+
+`list` additionally accepts `--enterprise [HOST/]ENTERPRISE` to list self-hosted
+runners registered to an enterprise. It cannot be combined with `--owner`,
+`--repo` or `--type`. Enterprise listing does not include every runner registered
+to its organizations or repositories and does not list GitHub-hosted pools.
+
+Organization listing with `list` and `hosted list` also includes the runners of
+runner groups inherited from the enterprise (`inherited: true`), which only needs
+organization admin permission, so enterprise-shared runners are visible without
+enterprise permission. Pass `--exclude-inherited` to skip them.
+
+`hosted list` targets an organization by default, using `--owner` or the owner of
+`--repo` or the current repository. Use `--enterprise [HOST/]ENTERPRISE` to list
+the pools configured in an enterprise instead; it cannot be combined with
+`--owner` or `--repo`. It lists configured hosted runner pools, not standard
+hosted runner labels such as `ubuntu-latest`.
 
 `available` always targets a repository, and every `group` subcommand always
 targets an organization.
@@ -394,6 +418,40 @@ gh runner-kit group view <group> [--repo [HOST/]OWNER/REPO | --owner OWNER] \
 
 Available `--fields` values are the same as for `group list`.
 
+### hosted list
+
+Lists the GitHub-hosted runner pools configured in an organization or enterprise,
+including larger runners. Reading organization hosted runners requires
+organization administration read permission. Enterprise listing requires the
+`manage_runners:enterprise` scope for classic personal access tokens. This does
+not list standard hosted runner labels such as `ubuntu-latest`.
+
+```bash
+gh runner-kit hosted list [--repo [HOST/]OWNER/REPO] [--owner OWNER] \
+  [--exclude-inherited] [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit hosted list --enterprise [HOST/]ENTERPRISE \
+  [--name-only] [--fields FIELD,...] [--format json] \
+  [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+All options are optional. When `--enterprise` is used, its enterprise slug is
+required and its host prefix is optional. It cannot be combined with `--owner` or
+`--repo`. Table output is used by default. JSON output includes the full API
+runner objects, regardless of `--fields`.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; exclusive with `--owner` and `--repo` |
+| `--exclude-inherited` | `false` | Do not list the pools of runner groups inherited from the enterprise; exclusive with `--enterprise` |
+| `--fields` | `ID,NAME,PLATFORM,STATUS,GROUP,MAXIMUM_RUNNERS,PUBLIC_IP_ENABLED` | Table columns: `GROUP`, `ID`, `MAXIMUM_RUNNERS`, `NAME`, `PLATFORM`, `PUBLIC_IP_ENABLED`, `STATUS` |
+| `--format` | - | Output format: `json`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--name-only` | `false` | Print only the runner names |
+| `--owner` | current repository owner | Select an organization by owner name |
+| `-R`, `--repo` | current repository | Select a repository; its owner is the target organization |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+
 ### job timeline
 
 Shows when every job and step of one workflow run attempt ran, on a time axis
@@ -447,13 +505,23 @@ Organization-level runners are listed by default.
 
 ```bash
 gh runner-kit list [--repo [HOST/]OWNER/REPO | --owner OWNER] \
-  [--type org|repo] [--status online|offline|active|idle] \
+  [--type org|repo] [--exclude-inherited] [--status online|offline|active|idle] \
   [--name-only] [--fields FIELD,...] \
+  [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit list --enterprise [HOST/]ENTERPRISE \
+  [--status online|offline|active|idle] [--name-only] [--fields FIELD,...] \
   [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
+The enterprise slug is required when `--enterprise` is used; the host prefix is
+optional. All other options are optional. Enterprise listing requires enterprise
+runner management permission and cannot be combined with `--owner`, `--repo` or
+`--type`.
+
 | Option | Default | Description |
 | --- | --- | --- |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; exclusive with `--owner`, `--repo` and `--type` |
+| `--exclude-inherited` | `false` | Do not list the runners of runner groups inherited from the enterprise; exclusive with `--enterprise` |
 | `--fields` | `ID,NAME,OS,STATUS,BUSY,CORDONED,LABELS` | Table columns to display |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
