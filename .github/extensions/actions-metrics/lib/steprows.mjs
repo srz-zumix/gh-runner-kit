@@ -41,9 +41,12 @@ function clampRunBudget(value) {
     return Math.min(MAX_STEP_RUN_BUDGET, Math.max(1, Math.floor(number)));
 }
 
-function readJsonLine(line, rows, counters) {
+function readJsonLine(line, rows, counters, acceptRow) {
     try {
-        rows.push(JSON.parse(line));
+        const row = JSON.parse(line);
+        if (!acceptRow || acceptRow(row)) {
+            rows.push(row);
+        }
     } catch {
         counters.malformed += 1;
     }
@@ -104,14 +107,7 @@ async function streamCommand({ args, env, cwd, target, signal, onProgress, label
             warnings.push(warning);
         }
     };
-    const result = await runLines(args, env, cwd, line => {
-        if (acceptRow) {
-            const row = JSON.parse(line);
-            if (acceptRow(row)) rows.push(row);
-            return true;
-        }
-        return readJsonLine(line, rows, counters);
-    }, signal, { host: gated ? target?.host ?? null : undefined, onStderrLine });
+    const result = await runLines(args, env, cwd, line => readJsonLine(line, rows, counters, acceptRow), signal, { host: gated ? target?.host ?? null : undefined, onStderrLine });
     return { rows, malformed: counters.malformed, warnings, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
 }
 
