@@ -6,6 +6,7 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v90/github"
@@ -24,27 +25,28 @@ var JobKindFilters = []string{JobKindFilterAll, JobKindFilterSelfHosted, JobKind
 // JobRow is one collected workflow job, left unaggregated so that a downstream tool can
 // group the jobs on an axis the aggregated reports do not offer.
 type JobRow struct {
-	Repo         string
-	RunID        int64
-	RunAttempt   int64
-	JobID        int64
-	Workflow     string
-	WorkflowPath string
-	JobName      string
-	Event        string
-	Branch       string
-	Labels       []string
-	Kind         JobKind
-	RunnerID     int64
-	RunnerName   string
-	RunnerGroup  string
-	Status       string
-	Conclusion   string
-	QueuedAt     *time.Time
-	StartedAt    *time.Time
-	CompletedAt  *time.Time
-	Wait         time.Duration
-	Duration     time.Duration
+	Repo             string
+	RunID            int64
+	RunAttempt       int64
+	JobID            int64
+	Workflow         string
+	WorkflowPath     string
+	JobName          string
+	Event            string
+	Branch           string
+	Labels           []string
+	Kind             JobKind
+	RunnerID         int64
+	RunnerName       string
+	RunnerGroup      string
+	Status           string
+	Conclusion       string
+	ExecutionStarted bool
+	QueuedAt         *time.Time
+	StartedAt        *time.Time
+	CompletedAt      *time.Time
+	Wait             time.Duration
+	Duration         time.Duration
 }
 
 // LabelSet renders the runs-on set the job requested.
@@ -130,16 +132,18 @@ func matchesAnyRunnerPattern(patterns []string, name string) bool {
 	return false
 }
 
-// normalizeRunnerName drops the runner ID GitHub appends to the name of its own hosted
-// runners, so that every hosted job reports the same runner instead of one name per
-// machine. It only rewrites jobs classified as hosted, so a self-hosted runner that is
-// deliberately named after its own registration ID keeps its name, and the ID is only
-// dropped when the name is exactly the hosted prefix followed by it, which leaves a
-// self-hosted name that happens to end in a number untouched. The ID stays available in
-// RunnerID.
+// normalizeRunnerName removes exact hosted instance ID suffixes. Self-hosted and
+// unknown names stay unchanged; the original instance ID remains in RunnerID.
 func normalizeRunnerName(kind JobKind, name string, id int64) string {
-	if kind == JobKindHosted && id != 0 && name == hostedRunnerGroup+" "+strconv.FormatInt(id, 10) {
+	if kind != JobKindHosted || id <= 0 {
+		return name
+	}
+	identifier := strconv.FormatInt(id, 10)
+	if name == hostedRunnerGroup+" "+identifier {
 		return hostedRunnerGroup
+	}
+	if prefix, ok := strings.CutSuffix(name, "-"+identifier); ok && prefix != "" {
+		return prefix
 	}
 	return name
 }
@@ -169,11 +173,13 @@ func BuildJobRows(data *Data, opts JobRowOptions) []JobRow {
 // jobRowBuilder turns raw jobs into JobRows and applies the JobRowOptions filters, so
 // that the job and the step listings select exactly the same jobs.
 type jobRowBuilder struct {
-	data      *Data
-	opts      JobRowOptions
-	labels    []string
-	runnerIDs map[int64]bool
-	runByID   map[int64]*github.WorkflowRun
+	data         *Data
+	opts         JobRowOptions
+	labels       []string
+	runnerIDs    map[int64]bool
+	runByID      map[int64]*github.WorkflowRun
+	runByAttempt map[[2]int64]*github.WorkflowRun
+	billedJobs   map[int64]billedJob
 }
 
 func newJobRowBuilder(data *Data, opts JobRowOptions) *jobRowBuilder {
@@ -183,17 +189,26 @@ func newJobRowBuilder(data *Data, opts JobRowOptions) *jobRowBuilder {
 	for _, run := range data.Runs {
 		runByID[run.GetID()] = run
 	}
+	runByAttempt := make(map[[2]int64]*github.WorkflowRun, len(data.Runs)+len(data.Attempts))
+	for _, run := range append(slices.Clone(data.Runs), data.Attempts...) {
+		runByAttempt[[2]int64{run.GetID(), int64(run.GetRunAttempt())}] = run
+	}
 	return &jobRowBuilder{
-		data:      data,
-		opts:      opts,
-		labels:    NormalizeLabelSet(opts.Labels),
-		runnerIDs: data.SelfHostedRunnerIDs(),
-		runByID:   runByID,
+		data:         data,
+		opts:         opts,
+		labels:       NormalizeLabelSet(opts.Labels),
+		runnerIDs:    data.SelfHostedRunnerIDs(),
+		runByID:      runByID,
+		runByAttempt: runByAttempt,
+		billedJobs:   jobUsageDurations(data),
 	}
 }
 
 // run returns the collected run a job belongs to, or nil when it is unknown.
-func (b *jobRowBuilder) run(runID int64) *github.WorkflowRun {
+func (b *jobRowBuilder) run(runID, attempt int64) *github.WorkflowRun {
+	if run := b.runByAttempt[[2]int64{runID, attempt}]; run != nil {
+		return run
+	}
 	return b.runByID[runID]
 }
 
@@ -236,11 +251,13 @@ func (b *jobRowBuilder) build(raw *github.WorkflowJob) (JobRow, bool) {
 		RunnerGroup:  raw.GetRunnerGroupName(),
 		Status:       raw.GetStatus(),
 		Conclusion:   raw.GetConclusion(),
-		QueuedAt:     queued,
-		StartedAt:    started,
-		CompletedAt:  completed,
-		Wait:         span(queued, started),
-		Duration:     span(started, completed),
+		ExecutionStarted: raw.GetConclusion() != conclusionSkipped &&
+			(jobExecutionStarted(raw) || b.billedJobs[raw.GetID()].milliseconds > 0),
+		QueuedAt:    queued,
+		StartedAt:   started,
+		CompletedAt: completed,
+		Wait:        span(queued, started),
+		Duration:    span(started, completed),
 	}, true
 }
 

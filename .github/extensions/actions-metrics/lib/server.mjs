@@ -236,7 +236,8 @@ async function handle(req, res, url, instance) {
         const { generation, signal } = instance.beginStepRequest();
         try {
             await rememberStepSettings(targetKey(query), settings, () => !instance.isStaleStepRequest(generation));
-            const result = await collectStepMetrics({
+            const result = await instance.store.withDataset(query, dataset => collectStepMetrics({
+                dataset,
                 target: targetOf(query),
                 filters: { ...filtersOf(query), ...(body.filters ?? {}) },
                 limits: limitsOf(query),
@@ -245,7 +246,7 @@ async function handle(req, res, url, instance) {
                 reuseRows: body.reuseRows === true,
                 cache: instance.stepRowCache,
                 signal,
-            });
+            }));
             const visible = instance.setStepMetrics(settings, result, generation);
             if (visible === null) {
                 sendJson(res, 409, { available: false, superseded: true, reason: "A newer step request replaced this one." });
@@ -275,7 +276,8 @@ async function handle(req, res, url, instance) {
         // A credential change still has to cancel a mermaid copy read under the old token.
         const authSignal = instance.authAbort.signal;
         try {
-            const result = await collectRunTimeline({
+            const result = await instance.store.withDataset(query, dataset => collectRunTimeline({
+                input: dataset.input,
                 cwd: instance.store.cwd,
                 target: targetOf(query),
                 repo: url.searchParams.get("repo") ?? "",
@@ -283,7 +285,7 @@ async function handle(req, res, url, instance) {
                 attempt: Number(url.searchParams.get("attempt")),
                 format,
                 signal: claim?.signal ?? authSignal,
-            });
+            }));
             if (format === "mermaid") {
                 if (authSignal.aborted) {
                     sendJson(res, 409, { available: false, superseded: true, reason: "The credential changed while the timeline was read." });

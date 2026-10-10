@@ -164,6 +164,7 @@ async function fetchTiming({ repo, limits, cwd, signal, onProgress, warnings }) 
     if (!workflows) {
         return { workflows: [], timings: [] };
     }
+
     const enabled = workflows.filter((workflow) => workflow.state === "active");
     const active = limits.maxTimingWorkflows > 0 ? enabled.slice(0, limits.maxTimingWorkflows) : enabled;
     onProgress?.(`Fetching billable timing for ${active.length} workflows`);
@@ -189,6 +190,52 @@ async function fetchTiming({ repo, limits, cwd, signal, onProgress, warnings }) 
         warnings.push("Reported billable timing is unavailable (the token likely lacks billing read access).");
     }
     return { workflows, timings: usable };
+}
+
+async function fetchHostedPoolsWithInherited({ target, cwd, signal, warnings }) {
+    const base = `/orgs/${target.owner}/actions`;
+    const options = { host: target.host, cwd, signal };
+    const readPools = (path) => ghApiPaged(path, {
+        ...options,
+        extract: (payload) => payload?.runners ?? [],
+        onTruncated: () => warnings.push("Hosted runner inventory was capped; unmatched machine prices remain unknown."),
+    });
+    const runners = await readPools(`${base}/hosted-runners`);
+    const groups = await ghApiPaged(`${base}/runner-groups`, {
+        ...options,
+        extract: (payload) => payload?.runner_groups ?? [],
+        onTruncated: () => warnings.push("Runner group inventory was capped; inherited machine prices may be unknown."),
+    });
+    const seen = new Set(runners.map((runner) => `${runner.runner_group_id ?? ""}/${runner.id}`));
+    for (const group of groups) {
+        if (!group.inherited) continue;
+        const inherited = await readPools(`${base}/runner-groups/${group.id}/hosted-runners`);
+        for (const runner of inherited) {
+            const key = `${group.id}/${runner.id}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            runners.push(runner);
+        }
+    }
+    return runners;
+}
+
+/** Read visibility and organization/inherited hosted pool definitions without persisting credentials. */
+export async function fetchHostedPricing({ target, cwd, signal, warnings }) {
+    const repository = target.kind === "repo"
+        ? await optional(warnings, "Repository visibility for pricing", () => ghApi(`/repos/${target.nwo}`, { host: target.host, cwd, signal }))
+        : null;
+    throwIfRateLimited(target.host);
+    const hostedRunners = repository?.owner?.type === "User"
+        ? []
+        : await optional(warnings, "Hosted runner pools (custom machine prices may be unknown)", () =>
+            fetchHostedPoolsWithInherited({ target, cwd, signal, warnings }),
+        );
+    throwIfRateLimited(target.host);
+    return {
+        hostedRunners: hostedRunners ?? [],
+        publicRepository: typeof repository?.private === "boolean" ? !repository.private : null,
+    };
 }
 
 /**
@@ -253,6 +300,8 @@ export async function collectSnapshot({ target, filters, limits = {}, cwd, force
     checkpoint();
     const runners = await fetchRunners({ target, runnerType: filters?.runnerType, cwd, signal, onProgress, warnings });
     checkpoint();
+    const pricing = orgWide ? {} : await fetchHostedPricing({ target, cwd, signal, warnings });
+    checkpoint();
     const { workflows, timings } = orgWide
         ? { workflows: [], timings: [] }
         : await fetchTiming({ repo: target, limits: effective, cwd, signal, onProgress, warnings });
@@ -279,6 +328,7 @@ export async function collectSnapshot({ target, filters, limits = {}, cwd, force
         runsReason: runsResult.reason,
         jobs,
         runners,
+        ...pricing,
         workflows,
         timings,
         fleet,

@@ -25,11 +25,13 @@ const MAX_ENTRIES = 3;
 let nextId = 1;
 
 export class RowStore {
-    constructor({ cwd, log } = {}) {
+    constructor({ cwd, log, withDataset, datasetRevision } = {}) {
         this.cwd = cwd;
         this.log = log ?? (() => {});
         this.entries = new Map();
         this.listeners = new Map();
+        this.withDataset = withDataset;
+        this.datasetRevision = datasetRevision;
     }
 
     entry(signature) {
@@ -171,7 +173,7 @@ export class RowStore {
      * pointed somewhere else entirely.
      */
     request({ query, force = false } = {}) {
-        const signature = rowQueryId(query);
+        const signature = this.signature(query);
         const entry = this.entry(signature);
         this.evict();
 
@@ -205,7 +207,7 @@ export class RowStore {
 
         entry.inflight = (async () => {
             try {
-                const result = await collectJobRows({
+                const options = {
                     target: captured.target,
                     filters: captured.filters,
                     limits: captured.limits,
@@ -218,7 +220,10 @@ export class RowStore {
                         entry.progress = message;
                         this.emit(signature);
                     },
-                });
+                };
+                const result = this.withDataset
+                    ? await this.withDataset(query, dataset => collectJobRows({ ...options, dataset }))
+                    : await collectJobRows(options);
                 if (generation !== entry.generation) {
                     return;
                 }
@@ -235,6 +240,8 @@ export class RowStore {
                         malformed: result.malformed,
                         budget: result.budget,
                         scope: captured.scope,
+                        datasetId: result.datasetId,
+                        window: result.window,
                         rows: result.rows,
                     }),
                     "utf8",
@@ -274,7 +281,9 @@ export class RowStore {
     }
 
     signature(query) {
-        return rowQueryId(query);
+        return this.datasetRevision
+            ? JSON.stringify([rowQueryId(query), this.datasetRevision(query)])
+            : rowQueryId(query);
     }
 
     /**

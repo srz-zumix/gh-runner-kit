@@ -43,7 +43,9 @@ start. The lines of a job are ordered by OFFSET.
 --format json and --format ndjson instead write the steps unaggregated, one row each,
 with the identity of the job that ran them, so a downstream tool can build its own
 statistics. StepOccurrence tells a repeated step apart from one literally named like
-its StepKey. --format ndjson writes one row at a time and quotes the run and job IDs.
+its StepKey. Runner names use the same stable hosted type names as metrics jobs;
+RunnerID preserves the original instance. --format ndjson writes one row at a time
+and quotes the run, job and runner IDs.
 With these formats, the collection warnings and the number of repositories that reached
 --max-runs, as truncated_repos=N, go to stderr.
 

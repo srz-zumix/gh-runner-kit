@@ -10,6 +10,7 @@
 // of the dashboard.
 
 import { ghRaw, GhError, formatTarget, rateLimitCooldown } from "./gh.mjs";
+import { costRunnerKind } from "../shared/cost.mjs";
 
 const NS_PER_MS = 1e6;
 
@@ -290,7 +291,8 @@ export function runnerTypeWarnings(filters, target) {
     ];
 }
 
-function baseArgs(subcommand, { target, filters, limits, force, probe }, format = "json") {
+function baseArgs(subcommand, { target, filters, limits, force, probe, input = "" }, format = "json") {
+    if (input) return inputArgs(subcommand, input, format);
     const args = [
         "runner-kit",
         "metrics",
@@ -358,7 +360,7 @@ async function runMetrics(subcommand, options, extraArgs = []) {
     const stdout = await ghRaw([...baseArgs(subcommand, options), ...extraArgs], {
         cwd: options.cwd,
         env: hostEnv(options.target),
-        host: options.target.host ?? null,
+        host: options.input ? undefined : options.target.host ?? null,
         signal: options.signal,
     });
     return stdout.trim() ? JSON.parse(stdout) : null;
@@ -533,7 +535,7 @@ function normalizeRepositoryRows(raw) {
  * with no runs at all, because fanning out over every repository it owns is
  * exactly the work the CLI already does.
  */
-export async function collectRuns({ target, filters, limits, cwd, signal, onProgress, warnings = [] } = {}) {
+export async function collectRuns({ target, filters, limits, cwd, input = "", signal, onProgress, warnings = [] } = {}) {
     const probe = await probeRunnerKit(cwd);
     const empty = { available: false, rows: [], reason: null };
     if (!probe.available) {
@@ -555,8 +557,8 @@ export async function collectRuns({ target, filters, limits, cwd, signal, onProg
         // let a float64 round two distinct ids onto one value. That id flows
         // into `/actions/runs/<id>/jobs`, so a rounded id would fetch the jobs
         // of the wrong run.
-        const args = baseArgs("runs", { target, filters, limits, force: false, probe }, "ndjson");
-        const stdout = await ghRaw(args, { cwd, env: hostEnv(target), host: target.host ?? null, signal });
+        const args = baseArgs("runs", { target, filters, limits, force: false, probe, input }, "ndjson");
+        const stdout = await ghRaw(args, { cwd, env: hostEnv(target), host: input ? undefined : target.host ?? null, signal });
         const raw = stdout
             .split(/\r?\n/)
             .filter((line) => line.trim())
@@ -595,8 +597,25 @@ function normalizeCostRows(raw) {
         runs: row.Runs ?? 0,
         jobs: row.Jobs ?? 0,
         billableMs: toMs(row.Billable),
-        rate: row.Rate ?? 0,
-        cost: row.Cost ?? 0,
+        runnerClass: row.RunnerClass ?? `${row.OS ?? "UNKNOWN"} (legacy OS-only report)`,
+        runnerKind: costRunnerKind({
+            runnerKind: row.RunnerKind,
+            runnerClass: row.RunnerClass,
+            excluded: row.Excluded,
+            sku: row.SKU,
+            source: row.Source,
+        }),
+        sku: row.SKU ?? "",
+        cpuCores: row.CPUCores ?? null,
+        memoryGB: row.MemoryGB ?? null,
+        architecture: row.Architecture ?? "",
+        rate: Object.hasOwn(row, "UnpricedJobs") ? row.Rate ?? null : null,
+        cost: Object.hasOwn(row, "UnpricedJobs") ? row.Cost ?? null : null,
+        knownCost: Object.hasOwn(row, "UnpricedJobs") ? row.KnownCost ?? 0 : 0,
+        unpricedJobs: row.UnpricedJobs ?? row.Jobs ?? 0,
+        reason: row.Reason ?? "Update gh runner-kit for machine-aware pricing; OS-only reports cannot identify runner SKUs",
+        source: row.Source ?? "legacy CLI",
+        priceVersion: row.PriceVersion ?? null,
     }));
 }
 
@@ -647,6 +666,7 @@ async function collectFleetReport(result, options, warnings) {
         result.repositories = target.kind === "org" ? normalizeRepositoryRows(payload?.repository ?? []) : null;
         result.capacity = normalizeCapacityRows(payload?.capacity ?? []);
         result.cost = result.billable ? normalizeCostRows(payload?.cost ?? []) : [];
+        result.costAvailable = result.billable;
         // BuildMetricsReport records cost-specific warnings (partial usage or a
         // missing per-minute rate) in the top-level warnings field rather than
         // in the summary, so fold the ones the summary does not already carry
@@ -753,6 +773,7 @@ async function collectFleetSteps(result, options, warnings) {
             skip: !result.billable,
             run: async () => {
                 result.cost = normalizeCostRows(await runMetrics("cost", options));
+                result.costAvailable = true;
             },
         },
     ];
@@ -789,7 +810,7 @@ async function collectFleetSteps(result, options, warnings) {
  * `metrics report` call when the installed CLI supports it, or with the
  * older one-subcommand-per-section fallback otherwise.
  */
-export async function collectFleet({ target, filters, limits, cwd, force = false, signal, onProgress, warnings = [] } = {}) {
+export async function collectFleet({ target, filters, limits, cwd, input = "", force = false, signal, onProgress, warnings = [] } = {}) {
     const probe = await probeRunnerKit(cwd);
     const shape = {
         scope: target.kind,
@@ -813,13 +834,14 @@ export async function collectFleet({ target, filters, limits, cwd, force = false
         repositories: null,
         capacity: [],
         cost: [],
+        costAvailable: false,
     };
     if (!probe.available) {
         warnings.push(`${probe.reason}. Install it with \`gh extension install srz-zumix/gh-runner-kit\` to enable the fleet metrics.`);
         return { available: false, reason: probe.reason, version: null, ...shape };
     }
 
-    const options = { target, filters, limits, cwd, force, probe, onProgress, signal };
+    const options = { target, filters, limits, cwd, input, force, probe, onProgress, signal };
     const result = { available: true, reason: null, version: probe.version, ...shape };
 
     if (probe.subcommands.has("report")) {
@@ -845,7 +867,7 @@ export async function collectFleet({ target, filters, limits, cwd, force = false
  * when the user asks for something to feed a monitoring system. `--summary` is
  * deliberately not exposed because it only works inside GitHub Actions.
  */
-export async function exportFleet({ target, filters, limits, cwd, format = "prometheus" } = {}) {
+export async function exportFleet({ target, filters, limits, cwd, input = "", format = "prometheus" } = {}) {
     const probe = await probeRunnerKit(cwd);
     if (!probe.available) {
         throw new Error(`${probe.reason}. Install it with \`gh extension install srz-zumix/gh-runner-kit\`.`);
@@ -855,9 +877,9 @@ export async function exportFleet({ target, filters, limits, cwd, format = "prom
     }
     const wanted = EXPORT_FORMATS.includes(format) ? format : "prometheus";
     // baseArgs always requests JSON, so the format flag is replaced rather than appended.
-    const args = baseArgs("export", { target, filters, limits, force: false, probe });
+    const args = baseArgs("export", { target, filters, limits, force: false, probe, input });
     args[args.indexOf("--format") + 1] = wanted;
-    const body = await ghRaw(args, { cwd, env: hostEnv(target), host: target.host ?? null });
+    const body = await ghRaw(args, { cwd, env: hostEnv(target), host: input ? undefined : target.host ?? null });
     return {
         format: wanted,
         contentType: wanted === "json" ? "application/json; charset=utf-8" : "text/plain; version=0.0.4; charset=utf-8",
@@ -1084,10 +1106,13 @@ function inputArgs(subcommand, input, format) {
  * Command for `gh runner-kit metrics collect`, which writes one snapshot of the runs and
  * their jobs to output so several reports describe exactly the same runs.
  */
-export function snapshotCommand({ target, filters, limits, workflow, runBudget, output, probe = null }) {
+export function snapshotCommand({ target, filters, limits, workflow, runBudget, output, allAttempts = false, pricing = false, usage = false, force = false, probe = null }) {
     const scopedFilters = { ...filters, workflow: workflow || filters?.workflow || "" };
     const scopedLimits = Number.isFinite(runBudget) ? { ...limits, maxRuns: Math.max(0, Math.floor(runBudget)) } : limits;
-    const args = baseArgs("collect", { target, filters: scopedFilters, limits: scopedLimits, force: false, probe }, null);
+    const args = baseArgs("collect", { target, filters: scopedFilters, limits: scopedLimits, force, probe }, null);
+    if (allAttempts) args.push("--all-attempts");
+    if (pricing) args.push("--pricing");
+    if (usage) args.push("--usage");
     args.push("--output", output);
     return { args, env: hostEnv(target) };
 }
@@ -1161,7 +1186,7 @@ export function stepRowsCommand({
 }
 
 /** Command for `gh runner-kit job timeline`. */
-export function runTimelineCommand({ repo, run, attempt, format = "json", target = null, refresh = false } = {}) {
+export function runTimelineCommand({ repo, run, attempt, format = "json", target = null, refresh = false, input = "" } = {}) {
     const args = ["runner-kit", "job", "timeline", String(run ?? ""), "--format", format];
     // A run URL already names its repository, and the CLI rejects a conflicting --repo.
     const isUrl = /^https?:\/\//i.test(String(run ?? "").trim());
@@ -1175,6 +1200,7 @@ export function runTimelineCommand({ repo, run, attempt, format = "json", target
     if (refresh) {
         args.push("--refresh");
     }
+    if (input) args.push("--input", input);
     return { args, env: target ? hostEnv(target) : null };
 }
 

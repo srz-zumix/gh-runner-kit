@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v90/github"
@@ -27,11 +28,29 @@ type Job struct {
 
 // Job conclusions the reports treat specially.
 const (
-	conclusionSuccess  = "success"
-	conclusionFailure  = "failure"
-	conclusionTimedOut = "timed_out"
-	conclusionSkipped  = "skipped"
+	conclusionSuccess   = "success"
+	conclusionFailure   = "failure"
+	conclusionTimedOut  = "timed_out"
+	conclusionSkipped   = "skipped"
+	conclusionCancelled = "cancelled"
 )
+
+// jobExecutionStarted requires runner allocation or a started, non-skipped step,
+// because an unstarted cancellation can still have job start and end timestamps.
+func jobExecutionStarted(job *github.WorkflowJob) bool {
+	if job.GetConclusion() == conclusionSkipped {
+		return false
+	}
+	if job.GetRunnerID() > 0 || strings.TrimSpace(job.GetRunnerName()) != "" {
+		return true
+	}
+	for _, step := range job.Steps {
+		if step != nil && step.GetConclusion() != conclusionSkipped && !step.GetStartedAt().IsZero() {
+			return true
+		}
+	}
+	return false
+}
 
 // NewJobs normalizes the raw jobs of data, dropping the ones that never occupied a
 // runner: jobs that were skipped and jobs that have not finished yet.
@@ -71,12 +90,13 @@ func NewJobs(data *Data) []Job {
 			workflowPath = run.GetPath()
 		}
 
+		kind := ClassifyJob(raw, runnerIDs)
 		jobs = append(jobs, Job{
 			RunID:        runID,
 			Repository:   data.RunRepositories[runID],
-			Kind:         ClassifyJob(raw, runnerIDs),
+			Kind:         kind,
 			RunnerID:     raw.GetRunnerID(),
-			RunnerName:   raw.GetRunnerName(),
+			RunnerName:   normalizeRunnerName(kind, raw.GetRunnerName(), raw.GetRunnerID()),
 			RunnerGroup:  raw.GetRunnerGroupName(),
 			Labels:       raw.Labels,
 			Workflow:     raw.GetWorkflowName(),

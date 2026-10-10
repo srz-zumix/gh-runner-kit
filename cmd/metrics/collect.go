@@ -24,8 +24,16 @@ Every other metrics command accepts the resulting file through --input instead o
 issuing its own API requests, so a fleet dashboard that runs several reports over the
 same window pays for the collection only once instead of once per report.
 
---usage additionally reads the billable time of every run, which costs one extra API
-request per run, so that the resulting snapshot can also serve "metrics cost --input".
+--all-attempts also collects earlier attempts of each selected run, deduplicating
+carried-over jobs by job ID. Unavailable historical jobs are reported as warnings.
+
+--pricing reads repository visibility and current hosted machine inventory without
+requesting per-run billable usage. --usage includes pricing as well.
+
+--usage additionally reads per-run billable usage, repository visibility and current
+hosted-runner definitions, including pools inherited from enterprise runner groups,
+so that the snapshot can also serve "metrics cost --input".
+It costs one extra usage request per run plus inventory requests.
 
 The snapshot is written to --output, "-" for stdout by default, and gzip-compressed
 when the name ends in .gz.`,
@@ -44,7 +52,9 @@ when the name ends in .gz.`,
 	}
 
 	flags.Add(cmd, kitutil.WithoutInputFlag(), kitutil.WithoutFormatFlags())
-	cmd.Flags().BoolVar(&usage, "usage", false, "Also collect the billable usage of every run, for metrics cost --input")
+	cmd.Flags().BoolVar(&usage, "usage", false, "Also collect billable usage, visibility and hosted machine inventory for metrics cost --input")
+	cmd.Flags().BoolVar(&flags.AllAttempts, "all-attempts", false, "Include jobs and metadata from every attempt of the selected runs")
+	cmd.Flags().BoolVar(&flags.Pricing, "pricing", false, "Collect visibility and hosted machine inventory without per-run billable usage")
 	cmd.Flags().StringVar(&output, "output", "-", "Write the snapshot to this file instead of stdout")
 
 	return cmd

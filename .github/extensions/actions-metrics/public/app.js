@@ -1,6 +1,7 @@
 import { renderSteps } from "./steps.js";
 import { workflowFileLink } from "./links.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
+import { renderDataBanner } from "./banner.js";
 import {
     FIELD_GROUPS,
     QUERY_FIELDS,
@@ -11,6 +12,7 @@ import {
     writeFieldValue,
 } from "/shared/fields.mjs";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
+import { costRunnerTypeLabel, unknownCostText } from "/shared/cost.mjs";
 
 const dom = {
     targetToggle: document.getElementById("target-toggle"),
@@ -952,7 +954,7 @@ function runnerTracePrompt(state_) {
     }
     return el("p", {
         class: "empty",
-        text: "Name a runner above and trace it to draw this chart, a heatmap of every runner it matched, and one chart per runner. Per-runner numbers are not part of the dashboard collection because they need a separate pass over every job in the window, so they are read on request.",
+        text: "Name a runner above and trace it to draw this chart, a heatmap of every runner it matched, and one chart per runner. These views use the shared job dataset without collecting again.",
     });
 }
 
@@ -2389,6 +2391,9 @@ function renderUsage(metrics) {
     const fleet = metrics.fleet;
     const costRows = fleet?.cost ?? [];
     const billableMs = costRows.reduce((sum, row) => sum + (row.billableMs ?? 0), 0);
+    const costText = (value, row) => value === null || value === undefined ? unknownCostText(row) : money(value);
+    const rateText = (value, row) => Number.isFinite(value) ? `$${value.toFixed(4)}` : unknownCostText(row);
+    const priceNote = "Current USD list prices by billing SKU; CPU, architecture and GPU variants are distinguished. Standard runners are free for public repositories; Larger runners are billed. Included minutes, discounts, storage and historical price changes are excluded. Pool specifications reflect the present, not historical hardware.";
     const maxWorkflowMinutes = Math.max(1, ...usageWindow.byWorkflow.map((row) => row.minutes));
 
     return [
@@ -2397,40 +2402,46 @@ function renderUsage(metrics) {
             ? null
             : el("div", { class: "kpis" }, [
                   kpi("Billable minutes", number(usageWindow.billableMinutes), "GitHub-hosted, in window"),
-                  kpi("Estimated cost", money(usageWindow.estimatedCost), "list price, in window"),
+                  kpi("Estimated cost", costText(usageWindow.estimatedCost), usageWindow.unpricedJobs ? `${number(usageWindow.unpricedJobs)} unpriced; known subtotal ${money(usageWindow.knownCost)}` : "list price, collected completed jobs"),
                   kpi("Self-hosted minutes", number(usageWindow.selfHostedMinutes), "not billed by GitHub"),
                   kpi("Total job minutes", number(usageWindow.totalMinutes), "rounded up per job"),
               ]),
         fleet?.available
             ? card(
-                  "Billable time reported by GitHub",
+                  "Hosted execution cost (CLI)",
                   [
-                      fleet.billable
+                      fleet.billable && fleet.costAvailable
                           ? table(
                                 [
                                     { label: "OS", render: (row) => row.os },
+                                    { label: "Runner class", wrap: true, render: (row) => row.runnerClass },
+                                    { label: "Type", render: costRunnerTypeLabel },
+                                    { label: "CPU", num: true, render: (row) => row.cpuCores > 0 ? number(row.cpuCores) : "–" },
+                                    { label: "RAM / GB", num: true, render: (row) => row.memoryGB > 0 ? number(row.memoryGB) : "–" },
+                                    { label: "Arch", render: (row) => row.architecture || "–" },
                                     { label: "Runs", num: true, render: (row) => number(row.runs) },
                                     { label: "Jobs", num: true, render: (row) => number(row.jobs) },
                                     { label: "Billable", num: true, render: (row) => duration(row.billableMs) },
-                                    { label: "Rate / min", num: true, render: (row) => money(row.rate) },
-                                    { label: "Est cost", num: true, render: (row) => money(row.cost) },
+                                    { label: "Rate / min", num: true, render: (row) => rateText(row.rate, row) },
+                                    { label: "Est cost", num: true, render: (row) => el("span", { text: costText(row.cost, row), title: row.reason || row.source }) },
+                                    { label: "Unpriced jobs", num: true, render: (row) => number(row.unpricedJobs) },
                                 ],
                                 costRows,
                             )
                           : el("p", {
                                 class: "empty",
-                                text: orgWide
+                                text: fleet.billable
+                                    ? "The requested CLI cost report could not be collected. Cost is unknown; see the collection warnings."
+                                    : orgWide
                                     ? "Billable time is not collected yet. Across a whole organization it costs one extra API request per run of every repository, so switch it on only when you need the breakdown."
                                     : "Billable time is not collected yet. It costs one extra API request per run, so switch it on only when you need the breakdown.",
                             }),
                   ],
-                  fleet.billable
-                      ? `Reported by gh runner-kit metrics cost: ${duration(billableMs)} billable in this window. GitHub bills only the jobs it hosted and public repositories run for free, so a zero is also what moving this work to self-hosted runners would avoid.${
-                            orgWide ? "" : " The numbers above are the dashboard's own estimate from job durations and will differ."
-                        }`
+                  fleet.billable && fleet.costAvailable
+                      ? `Reported by gh runner-kit metrics cost: ${duration(billableMs)} recorded billable time. Known subtotal ${money(costRows.reduce((sum, row) => sum + row.knownCost, 0))}; ${number(costRows.reduce((sum, row) => sum + row.unpricedJobs, 0))} unpriced jobs. ${priceNote} Older CLI OS-only reports are unpriced; update gh runner-kit to enable machine-aware pricing.`
                       : orgWide
-                        ? "Reads the usage GitHub actually billed. It costs one extra API request per run of every repository in the organization, so switch it on deliberately."
-                        : "Reads the usage GitHub actually billed, instead of estimating it from job durations like the tables below.",
+                        ? "Reads per-run usage plus hosted machine inventory across the organization; enable it deliberately."
+                        : "Reads per-run usage plus hosted machine inventory to supplement estimates from job timestamps.",
                   checkboxControl("Read billable time", Boolean(fleet.billable), (checked) => applyFilters({ billable: checked })),
               )
             : null,
@@ -2440,15 +2451,20 @@ function renderUsage(metrics) {
                 table(
                     [
                         { label: "Runner class", render: (row) => row.runnerClass },
+                        { label: "Type", render: costRunnerTypeLabel },
+                        { label: "CPU", num: true, render: (row) => row.cpuCores > 0 ? number(row.cpuCores) : "–" },
+                        { label: "RAM / GB", num: true, render: (row) => row.memoryGB > 0 ? number(row.memoryGB) : "–" },
+                        { label: "Arch", render: (row) => row.architecture || "–" },
                         { label: "Jobs", num: true, render: (row) => number(row.jobs) },
                         { label: "Minutes", num: true, render: (row) => number(row.minutes) },
-                        { label: "Rate / min", num: true, render: (row) => (usage.rates[row.runnerClass] ? money(usage.rates[row.runnerClass]) : "–") },
-                        { label: "Estimated cost", num: true, render: (row) => money(row.cost) },
+                        { label: "Rate / min", num: true, render: (row) => rateText(row.rate, row) },
+                        { label: "Estimated cost", num: true, render: (row) => el("span", { text: costText(row.cost, row), title: row.reason || row.source }) },
+                        { label: "Unpriced jobs", num: true, render: (row) => number(row.unpricedJobs) },
                     ],
                     usageWindow.byRunnerClass,
                 ),
             ],
-            `Estimate uses public list prices (Linux ${money(usage.rates.UBUNTU)}, Windows ${money(usage.rates.WINDOWS)}, macOS ${money(usage.rates.MACOS)} per minute) and ignores included free minutes and larger-runner surcharges.`,
+            priceNote,
         ),
         orgWide ? null : card(
             "Cost by workflow (window)",
@@ -2460,7 +2476,9 @@ function renderUsage(metrics) {
                         { label: "Minutes", num: true, render: (row) => number(row.minutes) },
                         { label: "", render: (row) => bar(row.minutes, maxWorkflowMinutes) },
                         { label: "Self-hosted min", num: true, render: (row) => number(row.selfHostedMinutes) },
-                        { label: "Estimated cost", num: true, render: (row) => money(row.cost) },
+                        { label: "Estimated cost", num: true, render: (row) => costText(row.cost) },
+                        { label: "Known subtotal", num: true, render: (row) => money(row.knownCost) },
+                        { label: "Unpriced jobs", num: true, render: (row) => number(row.unpricedJobs) },
                     ],
                     usageWindow.byWorkflow,
                 ),
@@ -2479,14 +2497,13 @@ function renderUsage(metrics) {
                                   render: (row) => row.perOs.map((entry) => `${entry.os}: ${number(entry.minutes)}m`).join("  ·  "),
                               },
                               { label: "Minutes", num: true, render: (row) => number(row.totalMinutes) },
-                              { label: "Estimated cost", num: true, render: (row) => money(row.cost) },
                           ],
                           usage.reported.byWorkflow,
                       )
-                    : el("p", { class: "empty", text: "GitHub did not report billable timing (billing read access is required)." }),
+                    : el("p", { class: "empty", text: metrics.meta.dataset ? "Not collected: current-billing-cycle workflow totals are outside the shared execution window." : "GitHub did not report billable timing (billing read access is required)." }),
             ],
             usage.reported.available
-                ? `Reported by GitHub for the current billing cycle, which is a different period than the ${metrics.meta.filters.days}-day window above.`
+                ? `Reported by GitHub for the current billing cycle, which is a different period than the ${metrics.meta.filters.days}-day window above. This OS-only API does not identify machine SKUs, so no cost is inferred from it.`
                 : undefined,
         ),
     ];
@@ -2495,34 +2512,7 @@ function renderUsage(metrics) {
 /* ---------- shell ---------- */
 
 function renderBanner() {
-    const messages = [];
-    if (state?.error) {
-        messages.push(state.error);
-    }
-    for (const warning of state?.metrics?.meta?.warnings ?? []) {
-        messages.push(warning);
-    }
-    if (messages.length === 0) {
-        dom.banner.hidden = true;
-        return;
-    }
-    dom.banner.hidden = false;
-    dom.banner.className = `banner${state?.error ? " banner--error" : ""}`;
-    const heading = !state?.error
-        ? "Partial data"
-        : state.errorCode === "rate_limited"
-          ? state.metrics
-              ? `Rate limited - showing the data collected ${state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "earlier"}`
-              : "Rate limited"
-          : "Collection failed";
-    dom.banner.replaceChildren(
-        el("strong", { text: heading }),
-        el(
-            "ul",
-            {},
-            messages.map((message) => el("li", { text: message })),
-        ),
-    );
+    renderDataBanner(dom.banner, state);
 }
 
 function renderStatus() {

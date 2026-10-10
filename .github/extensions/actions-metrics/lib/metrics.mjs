@@ -1,15 +1,13 @@
 // Pure aggregation layer: turns the raw payloads from collect.mjs into the
 // numbers the dashboard renders and the agent analyses. No I/O here.
 
-import { FAILURE_CONCLUSIONS } from "../shared/rows.mjs";
+import { FAILURE_CONCLUSIONS, normalizeRunnerName } from "../shared/rows.mjs";
+import { HOSTED_PRICES, priceHostedJob } from "./pricing.mjs";
 
 /** Whether a run or job conclusion counts as a failure, matching the explorer. */
 function isFailureConclusion(conclusion) {
     return FAILURE_CONCLUSIONS.has(conclusion);
 }
-
-/** Per-minute list price for GitHub-hosted standard runners (USD). */
-export const COST_RATES = { UBUNTU: 0.008, WINDOWS: 0.016, MACOS: 0.08 };
 
 const CONCLUSION_ORDER = [
     "success",
@@ -189,9 +187,15 @@ function billableMinutes(durationMs) {
     return Math.max(1, Math.ceil(durationMs / 60000));
 }
 
-function decorateJobs(jobs, selfHostedNames) {
+function decorateJobs(jobs, selfHostedNames, pricing) {
     return jobs.map((job) => {
-        const classification = classifyJob(job, selfHostedNames);
+        let classification = classifyJob(job, selfHostedNames);
+        const price = priceHostedJob(job, { ...pricing, selfHostedNames });
+        if (price.excluded) {
+            classification = { ...classification, kind: "self-hosted", selfHosted: true };
+        } else if (price.sku || price.source === "current hosted pool") {
+            classification = { ...classification, kind: "github-hosted", selfHosted: false, os: price.os };
+        }
         const queueMs = diff(job.created_at, job.started_at);
         const durationMs = diff(job.started_at, job.completed_at);
         return {
@@ -199,10 +203,11 @@ function decorateJobs(jobs, selfHostedNames) {
             name: job.name,
             workflow: job.workflow_name ?? job.__run?.name ?? "(unknown)",
             conclusion: job.conclusion,
-            runnerName: job.runner_name ?? null,
+            runnerName: job.runner_name == null ? null : normalizeRunnerName(classification.kind, job.runner_name, job.runner_id),
             queueMs,
             durationMs,
             minutes: billableMinutes(durationMs),
+            price: { ...price, runnerKind: classification.kind },
             ...classification,
         };
     });
@@ -473,26 +478,43 @@ function runnerMetrics(runners, jobs) {
     };
 }
 
-function usageMetrics(jobs, timings) {
-    const byOs = new Map();
-    for (const job of jobs) {
-        const key = job.selfHosted ? "SELF_HOSTED" : job.os;
-        const bucket = byOs.get(key) ?? { runnerClass: key, jobs: 0, minutes: 0, cost: 0 };
-        bucket.jobs += 1;
-        bucket.minutes += job.minutes;
-        bucket.cost += job.selfHosted ? 0 : job.minutes * (COST_RATES[job.os] ?? 0);
-        byOs.set(key, bucket);
-    }
+function jobExecutionStarted(job) {
+    if (typeof job.execution_started === "boolean") return job.execution_started;
+    return Number(job.runner_id) > 0 || String(job.runner_name ?? "").trim() !== ""
+        || (job.steps ?? []).some(step => step?.conclusion !== "skipped" && toMs(step?.started_at) !== null);
+}
 
-    const byWorkflow = [...groupBy(jobs, (job) => job.workflow).entries()]
-        .map(([name, group]) => ({
-            name,
-            jobs: group.length,
-            minutes: group.reduce((sum, job) => sum + job.minutes, 0),
-            selfHostedMinutes: group.filter((job) => job.selfHosted).reduce((sum, job) => sum + job.minutes, 0),
-            cost: group.reduce((sum, job) => sum + (job.selfHosted ? 0 : job.minutes * (COST_RATES[job.os] ?? 0)), 0),
+function usageMetrics(jobs, timings) {
+    const executions = jobs.filter((job) => job.conclusion !== "skipped"
+        && (job.conclusion !== "cancelled" || jobExecutionStarted(job.raw))
+        && (job.durationMs !== null || (job.raw.status === "completed" && jobExecutionStarted(job.raw))))
+        .map((job) => {
+            const free = job.price.excluded || (job.price.rate === 0 && job.price.sku.startsWith("actions_"));
+            const rate = job.price.excluded ? 0 : job.price.rate;
+            const cost = job.durationMs === null || rate === null ? null : (free ? 0 : job.minutes * rate);
+            return { ...job, cost, rate, billableMinutes: free ? 0 : job.minutes };
+        });
+    const total = (group) => ({
+        jobs: group.length,
+        minutes: group.reduce((sum, job) => sum + job.minutes, 0),
+        selfHostedMinutes: group.filter((job) => job.price.excluded).reduce((sum, job) => sum + job.minutes, 0),
+        billableMinutes: group.reduce((sum, job) => sum + job.billableMinutes, 0),
+        knownCost: group.reduce((sum, job) => sum + (job.cost ?? 0), 0),
+        unpricedJobs: group.filter((job) => job.cost === null).length,
+        unpricedMinutes: group.filter((job) => job.cost === null).reduce((sum, job) => sum + job.minutes, 0),
+        cost: group.some((job) => job.cost === null) ? null : group.reduce((sum, job) => sum + job.cost, 0),
+    });
+    const byRunnerClass = [...groupBy(executions, (job) => job.price.excluded ? "SELF_HOSTED" : JSON.stringify([job.price.runnerKind, job.price.sku, job.price.os, job.price.cpuCores, job.price.memoryGB, job.rate, job.price.reason])).values()]
+        .map((group) => ({
+            ...group[0].price,
+            runnerClass: group[0].price.excluded ? "SELF_HOSTED" : group[0].price.runnerClass,
+            rate: group[0].rate,
+            ...total(group),
         }))
-        .sort((a, b) => b.cost - a.cost || b.minutes - a.minutes);
+        .sort((a, b) => b.minutes - a.minutes);
+    const byWorkflow = [...groupBy(executions, (job) => job.workflow).entries()]
+        .map(([name, group]) => ({ name, ...total(group) }))
+        .sort((a, b) => b.knownCost - a.knownCost || b.minutes - a.minutes);
 
     const reported = timings
         .map((timing) => {
@@ -504,27 +526,29 @@ function usageMetrics(jobs, timings) {
                 name: timing.name,
                 perOs,
                 totalMinutes: perOs.reduce((sum, entry) => sum + entry.minutes, 0),
-                cost: perOs.reduce((sum, entry) => sum + entry.minutes * (COST_RATES[entry.os] ?? 0), 0),
+                cost: null,
+                reason: "OS-only timing does not identify billing SKUs",
             };
         })
         .filter((entry) => entry.totalMinutes > 0)
         .sort((a, b) => b.totalMinutes - a.totalMinutes);
 
     return {
-        rates: COST_RATES,
+        rates: HOSTED_PRICES.rates,
+        pricing: { source: HOSTED_PRICES.source, version: HOSTED_PRICES.version, currency: HOSTED_PRICES.currency },
         window: {
-            byRunnerClass: [...byOs.values()].sort((a, b) => b.minutes - a.minutes),
-            totalMinutes: jobs.reduce((sum, job) => sum + job.minutes, 0),
-            billableMinutes: jobs.filter((job) => !job.selfHosted).reduce((sum, job) => sum + job.minutes, 0),
-            selfHostedMinutes: jobs.filter((job) => job.selfHosted).reduce((sum, job) => sum + job.minutes, 0),
-            estimatedCost: [...byOs.values()].reduce((sum, bucket) => sum + bucket.cost, 0),
+            ...total(executions),
+            byRunnerClass,
+            totalMinutes: total(executions).minutes,
+            estimatedCost: total(executions).cost,
             byWorkflow,
         },
         reported: {
             available: reported.length > 0,
             byWorkflow: reported,
             totalMinutes: reported.reduce((sum, entry) => sum + entry.totalMinutes, 0),
-            estimatedCost: reported.reduce((sum, entry) => sum + entry.cost, 0),
+            estimatedCost: null,
+            reason: "OS-only timing does not identify billing SKUs",
         },
     };
 }
@@ -532,7 +556,11 @@ function usageMetrics(jobs, timings) {
 /** Build the full metrics document rendered by the canvas and read by the agent. */
 export function buildMetrics(snapshot) {
     const selfHostedNames = new Set((snapshot.runners ?? []).map((runner) => runner.name));
-    const jobs = decorateJobs(snapshot.jobs ?? [], selfHostedNames);
+    const jobs = decorateJobs(snapshot.jobs ?? [], selfHostedNames, {
+        hostedRunners: snapshot.hostedRunners ?? [],
+        publicRepository: snapshot.publicRepository ?? null,
+        selfHostedIds: new Set((snapshot.runners ?? []).map((runner) => runner.id)),
+    });
     const runs = snapshot.runs ?? [];
 
     return {
@@ -543,6 +571,7 @@ export function buildMetrics(snapshot) {
             limits: snapshot.limits,
             collectedAt: snapshot.collectedAt,
             collectionMs: snapshot.durationMs,
+            dataset: snapshot.dataset?.meta ?? null,
             warnings: snapshot.warnings ?? [],
             // Whether the run collection actually ran. Without it a failed
             // `metrics runs` is indistinguishable from a window that genuinely

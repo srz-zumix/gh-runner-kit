@@ -17,7 +17,7 @@ import { jobRowsCommand, probeRunnerKit, runnerPattern, runnerPatternMatcher } f
 // One definition of the interval arithmetic, shared with the browser-side
 // explorer so the two tabs cannot report different concurrency for one window.
 import { peakPerBucket } from "../shared/intervals.mjs";
-import { parseTime } from "../shared/rows.mjs";
+import { normalizeRunnerName, parseTime } from "../shared/rows.mjs";
 
 /**
  * Stop reading rather than aggregate an unbounded stream into memory. The
@@ -306,6 +306,7 @@ export async function collectRunnerTimeline({
     filters,
     limits,
     cwd,
+    dataset,
     buckets,
     query,
     workflow,
@@ -376,7 +377,7 @@ export async function collectRunnerTimeline({
 
     onProgress?.(pattern ? `Reading the jobs of ${pattern}` : "Reading every job in the window");
 
-    const { truncated } = await runLines(args, env, cwd, (line) => {
+    const consume = (line) => {
         rows += 1;
         if (rows > rowCap) {
             return false;
@@ -388,7 +389,7 @@ export async function collectRunnerTimeline({
             malformed += 1;
             return true;
         }
-        const name = String(row.RunnerName ?? "").trim();
+        const name = normalizeRunnerName(row.Kind, String(row.RunnerName ?? "").trim(), row.RunnerID);
         if (excludeMode === "local" && exclusions.test(name)) {
             // Dropped before every other counter, so an excluded runner reaches
             // neither the busy series, the peak sweep, the ranking nor the
@@ -458,7 +459,24 @@ export async function collectRunnerTimeline({
             onProgress?.(`Projected ${matched} jobs onto the timeline`);
         }
         return true;
-    }, signal, { host: target?.host ?? null });
+    };
+    let truncated;
+    if (dataset) {
+        const selection = dataset.select({
+            workflow: workflowScope.value, kind, runner: pattern,
+            excludeRunners: exclusions.patterns, labels: filters?.labels ?? [],
+        });
+        truncated = dataset.meta.truncated;
+        for (const row of selection.jobs) {
+            signal?.throwIfAborted();
+            if (!consume(JSON.stringify(row))) {
+                truncated = true;
+                break;
+            }
+        }
+    } else {
+        ({ truncated } = await runLines(args, env, cwd, consume, signal, { host: target?.host ?? null }));
+    }
 
     const peaks = peakPerBucket(axis, jobStarts, jobEnds);
     // Union-merged occupancy for every runner, not just the ranked ones: the
@@ -711,4 +729,3 @@ function buildRunnerRows({ axis, top, jobStarts, jobEnds, jobOwners, onProgress 
     });
     return { rows, claimed };
 }
-

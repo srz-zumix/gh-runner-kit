@@ -25,9 +25,10 @@ const snapshotFilePerm = 0o600
 // populated, because a nil Jobs or Usage is otherwise indistinguishable from "never
 // collected" and "collected, found none".
 type SnapshotContents struct {
-	Jobs    bool
-	Usage   bool
-	Runners bool
+	Jobs        bool
+	Usage       bool
+	Runners     bool
+	AllAttempts bool
 }
 
 // Snapshot is what `metrics collect` writes and every other metrics command can read

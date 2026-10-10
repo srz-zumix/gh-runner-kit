@@ -168,7 +168,7 @@ export class DashboardInstance {
      * same collection is read, and re-runs the projection instead of ending it.
      */
     baseKey(stored) {
-        return `${this.identity}|${stored?.updatedAt ?? ""}|${collectionId(stored?.query ?? this.query)}`;
+        return `${this.identity}|${stored?.metrics?.meta?.dataset?.id ?? stored?.updatedAt ?? ""}|${collectionId(stored?.query ?? this.query)}`;
     }
 
     dropTimeline() {
@@ -312,13 +312,14 @@ export class DashboardInstance {
      */
     export(format) {
         const query = this.effectiveQuery;
-        return exportFleet({
+        return this.store.withDataset(query, dataset => exportFleet({
+            input: dataset.input,
             target: targetOf(query),
             filters: filtersOf(query),
             limits: limitsOf(query),
             cwd: this.store.cwd,
             format,
-        });
+        }));
     }
 
     /**
@@ -422,7 +423,8 @@ export class DashboardInstance {
                 return this.state();
             }
             const active = filtersOf(stored.query ?? this.query);
-            const timeline = await collectRunnerTimeline({
+            const timeline = await this.store.withDataset(stored.query ?? this.query, async dataset => collectRunnerTimeline({
+                dataset,
                 target: targetOf(stored.query ?? this.query),
                 filters: active,
                 limits: limitsOf(stored.query ?? this.query),
@@ -445,7 +447,7 @@ export class DashboardInstance {
                         this.broadcast();
                     }
                 },
-            });
+            }));
             // A newer query, or a refresh, superseded this one while it ran.
             if (generation !== this.timelineGeneration) {
                 return this.state();
@@ -548,7 +550,7 @@ export class DashboardInstance {
     stepBaseKey() {
         const query = this.effectiveQuery;
         const fields = ROW_FIELDS.filter((name) => name !== "rowBudget").map((name) => [name, query?.[name] ?? null]);
-        return JSON.stringify([this.identity, fields]);
+        return JSON.stringify([this.identity, fields, this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null]);
     }
 
     // resetStepState supersedes every step and run timeline request in flight and drops

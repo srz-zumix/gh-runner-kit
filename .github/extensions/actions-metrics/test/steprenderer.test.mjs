@@ -86,6 +86,32 @@ function warningPanel(result) {
     return stepPanels(result).find((node) => node.className?.includes("collection-warnings"));
 }
 
+test("Runners shows cumulative run time and a dash for missing timing samples", () => {
+    const panels = stepPanels({
+        runnerFacets: {},
+        runners: [2_554_642_000, 123_000, 0, null].map((total, index) => ({
+            key: String(index), labels: `pool-${index}`, kinds: [], groups: [], runners: [], jobs: 1,
+            wait: { samples: 0 },
+            duration: { total, samples: total === null ? 0 : 1, p50: 0, p90: 0 },
+            failureRate: 0,
+        })),
+    }, { identity: "runner-total-test" });
+    const nodes = panels.flatMap(descendants);
+    const table = nodes.find((node) => node.className === "runners-table");
+    const headers = table.children[0].children[0].children.map((node) => node.textContent);
+    const index = headers.indexOf("Total run");
+    assert.ok(index >= 0);
+    const cells = table.children[1].children.map((row) => row.children[index]);
+    assert.deepEqual(cells.map((cell) => cell.textContent), ["709h 37m", "2m 3s", "0s", "–"]);
+    assert.deepEqual(cells.map((cell) => cell.attributes.title ?? null), [
+        `${(42_577.37).toLocaleString(undefined, { maximumFractionDigits: 2 })} min`,
+        `${(2.05).toLocaleString(undefined, { maximumFractionDigits: 2 })} min`,
+        "0 min",
+        null,
+    ]);
+    assert.ok(nodes.some((node) => node.className === "card__note" && node.textContent.includes("excluding wait")));
+});
+
 test("collection warnings use a collapsed native disclosure with the count and full messages", () => {
     const warnings = [
         "No jobs were returned for octo/app run 123 attempt 1; historical jobs may no longer be available from GitHub.",
@@ -142,6 +168,20 @@ test("typical bars shade red by failure rate while zero-failure and infrastructu
     assert.equal(shades[5], "gantt__bar gantt__bar--infra");
     assert.equal(shades[6].includes("gantt__bar--infra"), false);
     assert.ok(nodes.some((node) => node.className === "card__note" && node.textContent.includes("darker red means a higher failure rate")));
+});
+
+test("failure shading stays visible at 1% and increases continuously to solid red", async () => {
+    const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+    const rule = css.match(/\.gantt__bar--failure-rate\s*\{([^}]+)\}/)?.[1];
+    const scale = rule?.match(/calc\((\d+)% \+ var\(--failure-rate,\s*100%\) \* ([\d.]+)\)/);
+    assert.ok(scale);
+    const floor = Number(scale[1]);
+    const slope = Number(scale[2]);
+    const strengths = [0.00001, 0.01, 0.25, 0.5, 1].map(rate => floor + rate * 100 * slope);
+    assert.ok(strengths[0] >= 30);
+    assert.ok(Math.abs(strengths[1] - 30.7) < 1e-9);
+    assert.equal(strengths.at(-1), 100);
+    assert.ok(strengths.every((strength, index) => index === 0 || strength > strengths[index - 1]));
 });
 
 test("every run-list row keeps its Gantt controls and links to its exact GitHub attempt", () => {
@@ -388,6 +428,48 @@ test("attempt mode waits for Load steps and stays drafted through renders and ca
     await settled();
     assert.equal(panel.requests.at(-1).includeAllAttempts, false);
     assert.equal(panel.requests.at(-1).reuseRows, false);
+});
+
+test("zero run budget stays pending until Load steps and survives cached filters", async (t) => {
+    const panel = interactivePanel(t);
+    await settled();
+    assert.equal(panel.control("steps-budget").attributes.min, "0");
+    change(panel, "steps-budget", "0", "value", "input");
+    panel.render();
+    assert.equal(panel.requests.length, 0);
+    assert.equal(panel.control("steps-budget").value, "0");
+    change(panel, "steps-job", "build");
+    await settled();
+    assert.equal(panel.requests[0].reuseRows, true);
+    assert.equal(panel.requests[0].runBudget, 500);
+    assert.equal(panel.control("steps-budget").value, "0");
+    panel.load().listeners.click();
+    await settled();
+    assert.equal(panel.requests[1].reuseRows, false);
+    assert.equal(panel.requests[1].runBudget, 0);
+    assert.equal(panel.state.steps.settings.runBudget, 0);
+    panel.render();
+    assert.equal(panel.control("steps-budget").value, "0");
+    change(panel, "steps-job", "test");
+    await settled();
+    assert.equal(panel.requests[2].reuseRows, true);
+    assert.equal(panel.requests[2].runBudget, 0);
+    change(panel, "steps-budget", "", "value", "input");
+    panel.load().listeners.click();
+    await settled();
+    assert.equal(panel.requests[3].runBudget, 500);
+});
+
+test("unlimited footnotes distinguish no run cap from an incomplete collection", () => {
+    for (const truncated of [false, true]) {
+        const nodes = stepPanels({
+            meta: { workflow: "ci.yml", analysedRuns: 6001, runBudget: 0, truncated },
+        }, { identity: `unlimited-footnote-${truncated}` }).flatMap(descendants);
+        const note = nodes.find((node) => node.tag === "p" && node.textContent.includes("runs analysed"));
+        assert.ok(note.textContent.includes(truncated ? "collection was truncated despite having no run-count limit" : "No run-count limit was applied"));
+        assert.ok(!note.textContent.includes("run budget was reached"));
+        assert.equal(note.className.includes("notice--warn"), truncated);
+    }
 });
 
 test("job filters wait for collected rows and cannot supersede a fresh load", async (t) => {

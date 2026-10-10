@@ -14,7 +14,7 @@ func TestWriteMetricsStepsNDJSONQuotesLargeIDs(t *testing.T) {
 	const id int64 = 9007199254740993 // 2^53 + 1, not representable as a float64
 	b := &strings.Builder{}
 	rows := []metrics.StepRow{
-		{RunID: id, JobID: id, StepName: "Build", StepKey: "Build", Duration: time.Second},
+		{RunID: id, JobID: id, RunnerID: id, StepName: "Build", StepKey: "Build", Duration: time.Second},
 		{RunID: 1, JobID: 2, StepName: "Skipped"},
 	}
 	if err := WriteMetricsStepsNDJSON(b, rows); err != nil {
@@ -24,7 +24,7 @@ func TestWriteMetricsStepsNDJSONQuotesLargeIDs(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("WriteMetricsStepsNDJSON() wrote %d lines, want 2", len(lines))
 	}
-	for _, want := range []string{`"JobID":"9007199254740993"`, `"RunID":"9007199254740993"`, `"Duration":1000000000`, `"StepKey":"Build"`} {
+	for _, want := range []string{`"JobID":"9007199254740993"`, `"RunID":"9007199254740993"`, `"RunnerID":"9007199254740993"`, `"Duration":1000000000`, `"StepKey":"Build"`} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("first line = %q, want it to contain %q", lines[0], want)
 		}

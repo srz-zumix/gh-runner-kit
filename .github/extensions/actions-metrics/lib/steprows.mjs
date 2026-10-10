@@ -30,16 +30,23 @@ export function normalizeWorkflowForCli(workflow) {
 }
 
 function clampRunBudget(value) {
+    if (value === null || String(value).trim() === "") {
+        return DEFAULT_STEP_RUN_BUDGET;
+    }
     const number = Number(value);
     if (!Number.isFinite(number)) {
         return DEFAULT_STEP_RUN_BUDGET;
     }
+    if (number === 0 && (typeof value === "number" || typeof value === "string")) return 0;
     return Math.min(MAX_STEP_RUN_BUDGET, Math.max(1, Math.floor(number)));
 }
 
-function readJsonLine(line, rows, counters) {
+function readJsonLine(line, rows, counters, acceptRow) {
     try {
-        rows.push(JSON.parse(line));
+        const row = JSON.parse(line);
+        if (!acceptRow || acceptRow(row)) {
+            rows.push(row);
+        }
     } catch {
         counters.malformed += 1;
     }
@@ -89,7 +96,7 @@ export function parseCollectionWarning(line) {
 
 // A report reading a local snapshot through --input makes no API request, so it passes
 // gated=false and still renders after metrics collect spent the remaining budget.
-async function streamCommand({ args, env, cwd, target, signal, onProgress, label, gated = true }) {
+async function streamCommand({ args, env, cwd, target, signal, onProgress, label, gated = true, acceptRow }) {
     const rows = [];
     const counters = { malformed: 0 };
     const warnings = [];
@@ -100,7 +107,7 @@ async function streamCommand({ args, env, cwd, target, signal, onProgress, label
             warnings.push(warning);
         }
     };
-    const result = await runLines(args, env, cwd, (line) => readJsonLine(line, rows, counters), signal, { host: gated ? target?.host ?? null : undefined, onStderrLine });
+    const result = await runLines(args, env, cwd, line => readJsonLine(line, rows, counters, acceptRow), signal, { host: gated ? target?.host ?? null : undefined, onStderrLine });
     return { rows, malformed: counters.malformed, warnings, truncated: Boolean(result.truncated) || reportsRunCapReached(result.stderr) };
 }
 
@@ -110,7 +117,7 @@ async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, s
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-steps-"));
     try {
         const input = join(dir, "snapshot.json.gz");
-        onProgress?.(`Collecting up to ${budget} runs of ${workflowFile} with metrics collect`);
+        onProgress?.(`Collecting ${budget === 0 ? "all" : `up to ${budget}`} runs of ${workflowFile} with metrics collect`);
         const collect = snapshotCommand({ ...common, output: input });
         await ghRaw(collect.args, { cwd, env: collect.env, host: target?.host ?? null, signal });
         const steps = await streamCommand({ ...stepRowsCommand({ ...common, input }), cwd, target, signal, onProgress, label: `Reading the steps of ${workflowFile}`, gated: false });
@@ -159,6 +166,7 @@ export async function collectStepMetrics({
     runnerFilter = {},
     reuseRows = false,
     cache = null,
+    dataset = null,
     signal,
     onProgress,
 } = {}) {
@@ -182,6 +190,48 @@ export async function collectStepMetrics({
     }
 
     const budget = clampRunBudget(runBudget);
+    if (dataset) {
+        signal?.throwIfAborted();
+        const selection = dataset.select({ workflow: workflowFile, runBudget: budget, latestOnly: !includeAllAttempts, kind, runner, excludeRunners, labels: filters?.labels ?? [] });
+        const key = JSON.stringify([dataset.meta.id, workflowFile, budget, includeAllAttempts, kind, runner, excludeRunners, filters?.labels]);
+        let steps = reuseRows && cache?.key === key ? cache.steps : null;
+        const jobKeys = new Set(selection.jobs.map(row => JSON.stringify([row.Repo, String(row.JobID)])));
+        if (!steps) {
+            steps = await streamCommand({
+                ...stepRowsCommand({ target, input: dataset.input, kind: "all" }),
+                cwd, target, signal, onProgress, gated: false,
+                label: "Reading steps from the shared dataset",
+                acceptRow: row => jobKeys.has(JSON.stringify([row.Repo, String(row.JobID)])),
+            });
+        }
+        const jobs = { rows: selection.jobs, malformed: 0, warnings: dataset.meta.warnings };
+        const aggregate = aggregateSteps({
+            jobs: jobs.rows, steps: steps.rows, repository, mergeMatrix, showInfra,
+            selectedJob: job, jobStatus, includeAllAttempts, stepPattern: step, limit,
+            runner: normalizeRunnerFilter(runnerFilter),
+        });
+        const truncated = dataset.meta.truncated || selection.sampled || steps.truncated;
+        const sampledRuns = dataset.runs.filter(run => selection.selected.has(JSON.stringify([run.repository, String(run.id)])));
+        const latestAttempts = new Map(sampledRuns.map(run => [JSON.stringify([run.repository, String(run.id)]), run.run_attempt ?? 1]));
+        const historical = new Set(selection.jobs.filter(row => row.RunAttempt < latestAttempts.get(JSON.stringify([row.Repo, String(row.RunID)])))
+            .map(row => JSON.stringify([row.Repo, String(row.RunID), row.RunAttempt])));
+        const reused = Boolean(reuseRows && cache?.key === key);
+        return {
+            available: true, rows: { key, jobs, steps },
+            reusedRows: reused,
+            workflow: workflowFile, job: job || "", mergeMatrix: Boolean(mergeMatrix),
+            showInfra: Boolean(showInfra), runBudget: budget, truncated,
+            malformedRows: steps.malformed, warnings: dataset.meta.warnings,
+            ...aggregate,
+            meta: {
+                ...aggregate.meta, datasetId: dataset.meta.id, allAttemptsCollected: true,
+                runBudget: budget, truncated, workflow: workflowFile, job: job || "",
+                malformedRows: steps.malformed, warnings: dataset.meta.warnings, reusedRows: reused,
+                historicalAttemptsRequested: includeAllAttempts ? sampledRuns.reduce((sum, run) => sum + Math.max(0, (run.run_attempt ?? 1) - 1), 0) : 0,
+                historicalAttemptsWithJobs: includeAllAttempts ? historical.size : 0,
+            },
+        };
+    }
     // Everything that changes which rows the CLI returns is part of the key; repository,
     // job, status, step, matrix, infra and runner filters only change the aggregation.
     const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners, includeAllAttempts });
@@ -211,7 +261,7 @@ export async function collectStepMetrics({
             // A CLI without metrics collect lists the runs once per report, so a run that
             // arrives between the two can still make the listings differ slightly.
             const stepCommand = stepRowsCommand(common);
-            steps = await streamCommand({ ...stepCommand, cwd, target, signal, onProgress, label: `Reading up to ${budget} runs of ${workflowFile} with metrics steps` });
+            steps = await streamCommand({ ...stepCommand, cwd, target, signal, onProgress, label: `Reading ${budget === 0 ? "all" : `up to ${budget}`} runs of ${workflowFile} with metrics steps` });
             const jobCommand = jobRowsCommand({ ...common, filters: { ...filters, workflow: workflowFile }, limits: { ...limits, maxRuns: budget } });
             jobs = await streamCommand({ ...jobCommand, cwd, target, signal, onProgress, label: `Reading job denominators for ${workflowFile}` });
         }
@@ -233,7 +283,7 @@ export async function collectStepMetrics({
         // The CLI reports the repositories that reached the run budget on stderr. The
         // busiest repository of the unfiltered rows is the fallback for a CLI that does
         // not, compared per repository because the budget applies to each of them.
-        const truncated = steps.truncated || jobs.truncated || aggregate.meta.maxRunsPerRepo >= budget;
+        const truncated = steps.truncated || jobs.truncated || (budget > 0 && aggregate.meta.maxRunsPerRepo >= budget);
         return {
             available: true,
             rows: { key: rowsKey, steps, jobs },

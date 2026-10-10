@@ -41,6 +41,7 @@ type TimelineJob struct {
 	URL         string
 	Labels      []string
 	Kind        JobKind
+	RunnerID    int64
 	RunnerName  string
 	RunnerGroup string
 	Status      string
@@ -169,6 +170,7 @@ func BuildRunTimeline(repo repository.Repository, run *github.WorkflowRun, jobs 
 			URL:           e.raw.GetHTMLURL(),
 			Labels:        e.row.Labels,
 			Kind:          e.row.Kind,
+			RunnerID:      e.row.RunnerID,
 			RunnerName:    e.row.RunnerName,
 			RunnerGroup:   e.row.RunnerGroup,
 			Status:        e.row.Status,

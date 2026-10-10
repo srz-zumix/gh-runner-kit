@@ -249,11 +249,10 @@ async function fetchRows(id, revision, identity, state, seq) {
         if (!current()) {
             return;
         }
-        const windowTo = state?.updatedAt ? Date.parse(state.updatedAt) : Date.now();
-        const days = state?.filters?.days ?? 30;
+        const { windowFrom, windowTo } = windowOf(state);
         // Transferred, not copied: at the full row budget the payload is
         // several megabytes and the main thread has no use for it afterwards.
-        const loaded = await ask("load", { buffer, windowFrom: windowTo - days * 86400000, windowTo }, [buffer]);
+        const loaded = await ask("load", { buffer, windowFrom, windowTo }, [buffer]);
         if (!current()) {
             return;
         }
@@ -280,6 +279,8 @@ async function fetchRows(id, revision, identity, state, seq) {
 }
 
 function windowOf(state) {
+    const window = view.snapshot?.window ?? state?.metrics?.meta?.dataset?.window;
+    if (window) return { windowFrom: Date.parse(window.Start), windowTo: Date.parse(window.End) };
     const to = view.snapshot?.collectedAt ?? (state?.updatedAt ? Date.parse(state.updatedAt) : Date.now());
     const days = state?.filters?.days ?? 30;
     return { windowFrom: to - days * 86400000, windowTo: to };
@@ -431,9 +432,9 @@ function percent(ratio) {
 
 function kpi(label, value, hint) {
     return el("div", { class: "kpi" }, [
-        el("span", { class: "kpi__label", text: label }),
-        el("strong", { class: "kpi__value", text: value }),
-        hint ? el("span", { class: "kpi__hint", text: hint }) : null,
+        el("div", { class: "kpi__label", text: label }),
+        el("div", { class: "kpi__value", text: value }),
+        hint ? el("div", { class: "kpi__hint", text: hint }) : null,
     ]);
 }
 
@@ -990,7 +991,7 @@ function tableCard() {
                         : el("span", { text: row.jobName || "–" }),
                 ],
             ),
-            el("td", { title: `${row.runnerName || "unidentified"} · ${row.kind}`, text: row.runnerName || "–" }),
+            el("td", { title: `${row.runnerName || "unidentified"} · ${row.kind}${row.runnerId && row.runnerId !== "0" ? ` · runner ID ${row.runnerId}` : ""}`, text: row.runnerName || "–" }),
             el("td", { class: "num", text: duration(row.waitMs) }),
             el("td", { class: "num", text: duration(row.durationMs) }),
             el("td", {}, [el("span", { class: `pill pill--${row.succeeded ? "ok" : row.failed ? "bad" : "warn"}`, text: row.conclusion || row.state })]),
@@ -1084,7 +1085,7 @@ function budgetControl(state) {
         ]),
         el("p", {
             class: "card__note",
-            text: "Changing this does not collect on its own, because re-reading every job is minutes over a busy organization. Press Re-collect rows when you are ready.",
+            text: "Changing this does not load rows on its own. Press Load rows to read the shared dataset; this never starts a separate API collection.",
         }),
     ]);
 }
@@ -1095,7 +1096,7 @@ function collectButton(state) {
         class: "button button--primary",
         type: "button",
         disabled: busy,
-        text: busy ? "Collecting…" : view.loaded ? "Re-collect rows" : "Collect job rows",
+        text: busy ? "Loading…" : view.loaded ? "Reload rows" : "Load job rows",
         onClick: () => host?.requestRows({ force: Boolean(view.loaded) }),
     });
 }

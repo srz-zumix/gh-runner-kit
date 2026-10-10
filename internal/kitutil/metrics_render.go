@@ -120,21 +120,38 @@ func RenderMetricsLabels(r *render.Renderer, rows []metrics.LabelRow) error {
 	return t.Render()
 }
 
-// RenderMetricsCost prints one line per operating system with its billable time.
+// RenderMetricsCost prints machine classes, keeping unpriced executions explicit.
 func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
 	if r.HasExporter() {
 		return r.RenderExportedData(rows)
 	}
 
-	t := r.NewTableWriter([]string{"OS", "RUNS", "JOBS", "BILLABLE", "RATE/MIN", "EST COST"})
+	t := r.NewTableWriter([]string{"OS", "RUNNER CLASS", "CPU", "RAM/GB", "RUNS", "JOBS", "BILLABLE", "RATE/MIN", "EST COST"})
 	for _, row := range rows {
+		rate, cost := "unknown", "unknown"
+		cpu, memory := "-", "-"
+		if row.CPUCores > 0 {
+			cpu = strconv.Itoa(row.CPUCores)
+		}
+		if row.MemoryGB > 0 {
+			memory = strconv.Itoa(row.MemoryGB)
+		}
+		if row.Rate != nil {
+			rate = fmt.Sprintf("%.4f", *row.Rate)
+		}
+		if row.Cost != nil {
+			cost = FormatCost(*row.Cost)
+		}
 		t.Append([]string{
 			row.OS,
+			row.RunnerClass,
+			cpu,
+			memory,
 			strconv.Itoa(row.Runs),
 			strconv.Itoa(row.Jobs),
 			FormatMeasuredDuration(row.Billable),
-			fmt.Sprintf("%.4f", row.Rate),
-			FormatCost(row.Cost),
+			rate,
+			cost,
 		})
 	}
 	if err := t.Render(); err != nil {
@@ -142,12 +159,20 @@ func RenderMetricsCost(r *render.Renderer, rows []metrics.CostRow) error {
 	}
 
 	billable, cost := metrics.CostTotal(rows)
-	if !r.HasExporter() {
-		// The total is a completed aggregate, so an all-self-hosted window reports a
-		// measured zero rather than the dash used for unmeasured per-row values.
-		r.WriteLine(fmt.Sprintf("Total %s billable, about %s. Self-hosted runners and public repositories are not billed.",
-			FormatMeasuredDuration(billable), FormatCost(cost)))
+	if cost == nil {
+		var subtotal float64
+		var unpriced int
+		for _, row := range rows {
+			subtotal += row.KnownCost
+			unpriced += row.UnpricedJobs
+		}
+		r.WriteLine(fmt.Sprintf("Total cost unknown: %s known subtotal, %d unpriced job(s); %s recorded billable time.",
+			FormatCost(subtotal), unpriced, FormatMeasuredDuration(billable)))
+	} else {
+		r.WriteLine(fmt.Sprintf("Total %s billable, about %s at current list prices.",
+			FormatMeasuredDuration(billable), FormatCost(*cost)))
 	}
+	r.WriteLine("Standard runners are free for public repositories; Larger runners are billed. Included minutes, discounts and storage are excluded; pool specifications reflect the present, not historical hardware.")
 	return nil
 }
 

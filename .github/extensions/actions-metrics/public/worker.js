@@ -48,6 +48,8 @@ function load(buffer) {
         malformed: payload.malformed ?? 0,
         budget: payload.budget ?? 0,
         scope: payload.scope ?? null,
+        datasetId: payload.datasetId ?? null,
+        window: payload.window ?? null,
         raw: payload.rows?.length ?? 0,
     };
     filtered = [];
@@ -79,7 +81,9 @@ self.onmessage = (event) => {
                 payload: {
                     snapshot: meta,
                     rowCount: rows.length,
-                    health: countRowHealth(rows, { windowFrom: payload.windowFrom, windowTo: payload.windowTo }),
+                    health: countRowHealth(rows, meta.window
+                        ? { windowFrom: Date.parse(meta.window.Start), windowTo: Date.parse(meta.window.End) }
+                        : { windowFrom: payload.windowFrom, windowTo: payload.windowTo }),
                     facets: buildExploreFacets(rows),
                 },
             });

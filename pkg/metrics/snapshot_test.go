@@ -61,6 +61,36 @@ func TestSnapshotRoundTripGzip(t *testing.T) {
 	}
 }
 
+func TestSnapshotPreservesHostedPricingInputs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.json.gz")
+	snap := testSnapshot()
+	snap.Data.RunRepositories = map[int64]string{100: "octo/alpha"}
+	snap.Data.RepositoryPublic = map[string]bool{"octo/alpha": false}
+	snap.Data.HostedRunners = map[string][]*github.HostedRunner{
+		"octo": {hostedPool("pool", "linux-x64", "8-core", 8, 32)},
+	}
+	snap.Data.Jobs[0].Labels = []string{"pool"}
+	snap.Data.Usage[100] = usageOf(map[string]*github.WorkflowRunBill{"UBUNTU": {
+		Jobs: github.Ptr(1), TotalMS: github.Ptr(int64(61_000)),
+		JobRuns: []*github.WorkflowRunJobRun{{JobID: github.Ptr(200), DurationMS: github.Ptr(int64(61_000))}},
+	}})
+	if err := WriteSnapshot(path, snap); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public, ok := got.Data.RepositoryPublic["octo/alpha"]; !ok || public {
+		t.Fatal("private repository visibility was not retained")
+	}
+	rows, warnings := BuildCostStats(got.Data, nil)
+	if len(rows) != 1 || len(warnings) != 0 || rows[0].SKU != "linux_8_core" ||
+		rows[0].CPUCores != 8 || rows[0].MemoryGB != 32 || rows[0].Cost == nil || *rows[0].Cost != 0.044 {
+		t.Fatalf("rows = %+v; warnings = %v", rows, warnings)
+	}
+}
+
 func TestReadSnapshotRejectsUnknownVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	snap := testSnapshot()

@@ -1,9 +1,11 @@
 package metrics
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
 )
 
@@ -138,6 +140,14 @@ func TestNormalizeRunnerName(t *testing.T) {
 		want     string
 	}{
 		{"hosted name drops the id", JobKindHosted, "GitHub Actions 1000299771", 1000299771, "GitHub Actions"},
+		{"Larger name drops the instance id", JobKindHosted, "ubuntu-latest-large-1003372588", 1003372588, "ubuntu-latest-large"},
+		{"another hosted type stays distinct", JobKindHosted, "ubuntu-latest-small-42", 42, "ubuntu-latest-small"},
+		{"custom hosted pool keeps its numeric name", JobKindHosted, "build-pool-8-42", 42, "build-pool-8"},
+		{"Larger name with a different id is kept", JobKindHosted, "ubuntu-latest-large-42", 43, "ubuntu-latest-large-42"},
+		{"self-hosted name matching a Larger form is kept", JobKindSelfHosted, "ubuntu-latest-large-42", 42, "ubuntu-latest-large-42"},
+		{"unknown name matching a Larger form is kept", JobKindUnknown, "ubuntu-latest-large-42", 42, "ubuntu-latest-large-42"},
+		{"missing instance id is not guessed", JobKindHosted, "ubuntu-latest-large-42", 0, "ubuntu-latest-large-42"},
+		{"empty type is kept", JobKindHosted, "-42", 42, "-42"},
 		{"a different id is not the hosted form", JobKindHosted, "GitHub Actions 1000299771", 42, "GitHub Actions 1000299771"},
 		{"self-hosted name ending in a number is kept", JobKindSelfHosted, "runner-1", 1, "runner-1"},
 		{"self-hosted runner named after its own id is kept", JobKindSelfHosted, "GitHub Actions 42", 42, "GitHub Actions 42"},
@@ -197,6 +207,41 @@ func TestBuildJobRowsNormalizesHostedRunnerName(t *testing.T) {
 	}
 	if got, want := rows[0].RunnerID, int64(1000299771); got != want {
 		t.Fatalf("RunnerID = %d, want %d (the id stays available)", got, want)
+	}
+}
+
+func TestHostedRunnerNamesAgreeAcrossListingsFiltersAndTimelines(t *testing.T) {
+	data := &Data{
+		Runs: []*github.WorkflowRun{{ID: github.Ptr(int64(1)), RunAttempt: github.Ptr(1)}},
+		Jobs: []*github.WorkflowJob{
+			testStepJob(10, 1, 1, "build", "success", 10, 50, testStep(1, "Compile", "success", 10, 50)),
+			testStepJob(11, 1, 1, "build", "success", 10, 50, testStep(1, "Compile", "success", 10, 50)),
+		},
+	}
+	for i, raw := range data.Jobs {
+		raw.Labels = []string{"ubuntu-latest-large"}
+		raw.RunnerID = github.Ptr(int64(1003372588 + i))
+		raw.RunnerName = github.Ptr("ubuntu-latest-large-" + fmt.Sprint(raw.GetRunnerID()))
+	}
+	opts := JobRowOptions{Runners: []string{"ubuntu-latest-large"}}
+	jobs := BuildJobRows(data, opts)
+	steps := BuildStepRows(data, StepRowOptions{JobRowOptions: opts})
+	timeline := BuildRunTimeline(repository.Repository{Owner: "octo", Name: "app"}, data.Runs[0], data.Jobs, TimelineOptions{})
+	normalized := NewJobs(data)
+	if len(jobs) != 2 || len(steps) != 2 || len(timeline.Jobs) != 2 || len(normalized) != 2 {
+		t.Fatalf("jobs = %d; steps = %d; timeline = %d; normalized = %d", len(jobs), len(steps), len(timeline.Jobs), len(normalized))
+	}
+	for i, job := range jobs {
+		wantID := int64(1003372588 + i)
+		if job.RunnerName != "ubuntu-latest-large" || job.RunnerID != wantID ||
+			steps[i].RunnerName != job.RunnerName || steps[i].RunnerID != wantID ||
+			timeline.Jobs[i].RunnerName != job.RunnerName || timeline.Jobs[i].RunnerID != wantID ||
+			normalized[i].RunnerName != job.RunnerName || normalized[i].RunnerID != wantID {
+			t.Fatalf("job = %+v; step = %+v; timeline = %+v; normalized = %+v", job, steps[i], timeline.Jobs[i], normalized[i])
+		}
+	}
+	if rows := BuildJobRows(data, JobRowOptions{ExcludeRunners: []string{"ubuntu-latest-large"}}); len(rows) != 0 {
+		t.Fatalf("normalized exclusion kept %d jobs", len(rows))
 	}
 }
 
