@@ -50,8 +50,11 @@
                         </form>
                     </div>
                 </div>
-                <button type="button" id="query-toggle" class="button" aria-expanded="false" aria-controls="query-editor">
-                    Query<span class="query-toggle__count" id="query-dirty-count" hidden></span>
+                <button type="button" id="collection-toggle" class="button" aria-expanded="false" aria-controls="collection-editor">
+                    Collection<span class="query-toggle__count" id="collection-dirty-count" hidden></span>
+                </button>
+                <button type="button" id="display-toggle" class="button" aria-expanded="false" aria-controls="display-editor">
+                    Display<span class="query-toggle__count" id="display-dirty-count" hidden></span>
                 </button>
                 <button
                     type="button"
@@ -73,14 +76,27 @@
             <div class="status" id="status"></div>
         </header>
 
-        <section class="query-editor" id="query-editor" aria-label="Query" hidden>
-            <form id="query-form">
-                <div class="query-groups" id="query-groups"></div>
+        <section class="query-editor" id="collection-editor" aria-label="Collection settings" hidden>
+            <form id="collection-form">
+                <div class="query-groups" id="collection-groups"></div>
                 <div class="query-footer">
-                    <p class="query-effect" id="query-effect"></p>
+                    <p class="query-effect" id="collection-effect" role="status"></p>
                     <div class="query-actions">
-                        <button type="button" class="button" id="query-reset">Reset</button>
-                        <button type="submit" class="button button--primary" id="query-apply">Apply</button>
+                        <button type="button" class="button" id="collection-reset">Reset</button>
+                        <button type="submit" class="button button--primary" id="collection-apply">Apply</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <section class="query-editor" id="display-editor" aria-label="Display settings" hidden>
+            <form id="display-form">
+                <div class="query-groups" id="display-groups"></div>
+                <div class="query-footer">
+                    <p class="query-effect" id="display-effect" role="status"></p>
+                    <div class="query-actions">
+                        <button type="button" class="button" id="display-reset">Reset</button>
+                        <button type="submit" class="button button--primary" id="display-apply">Apply</button>
                     </div>
                 </div>
             </form>

@@ -16,6 +16,7 @@ import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
 import {
     collectionId,
+    datasetQueryId,
     filtersOf,
     formatQuery,
     limitsOf,
@@ -214,8 +215,7 @@ export class DashboardStore {
         const next = normalizeQuery(query ?? entry.query);
         const filtersChanged = collectionId(next) !== collectionId(entry.query);
         const settingsChanged = JSON.stringify(next) !== JSON.stringify(entry.query);
-        const datasetSignature = JSON.stringify(Object.entries(next).filter(([key]) =>
-            !["labels", "groupBy", "bucket", "selfHostedOnly", "targetWait", "targetUtilization", "jobConcurrency", "jobKind", "topRunners", "maxRows", "rowBudget"].includes(key)));
+        const datasetSignature = datasetQueryId(next);
         const retained = !force && !bypassCache && entry.datasetSignature === datasetSignature ? entry.dataset : null;
         entry.query = next;
 

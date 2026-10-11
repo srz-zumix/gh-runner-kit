@@ -2,15 +2,7 @@ import { renderSteps } from "./steps.js";
 import { workflowFileLink } from "./links.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
 import { renderDataBanner } from "./banner.js";
-import {
-    FIELD_GROUPS,
-    QUERY_FIELDS,
-    fieldByName,
-    fieldsOfGroup,
-    readFieldValue,
-    sameFieldValue,
-    writeFieldValue,
-} from "/shared/fields.mjs";
+import { initQueryEditors } from "./query.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 import { costRunnerTypeLabel, unknownCostText } from "/shared/cost.mjs";
 
@@ -25,14 +17,6 @@ const dom = {
     scope: document.getElementById("scope"),
     target: document.getElementById("target"),
     targetLabel: document.getElementById("target-label"),
-    queryToggle: document.getElementById("query-toggle"),
-    queryDirtyCount: document.getElementById("query-dirty-count"),
-    queryEditor: document.getElementById("query-editor"),
-    queryForm: document.getElementById("query-form"),
-    queryGroups: document.getElementById("query-groups"),
-    queryEffect: document.getElementById("query-effect"),
-    queryReset: document.getElementById("query-reset"),
-    queryApply: document.getElementById("query-apply"),
     refresh: document.getElementById("refresh"),
     export: document.getElementById("export"),
     status: document.getElementById("status"),
@@ -48,22 +32,7 @@ let authError = null;
 let tokenDraft = "";
 let authPending = false;
 
-/**
- * The query editor edits a draft rather than the live state. Only the fields
- * the reader actually touched are held here, so an SSE push - a finished
- * collection, a setting changed from a tab card or by the agent - keeps
- * updating everything else underneath instead of being locked out while the
- * panel is open. `baseline` is what each edited field read when it was first
- * touched, which is how a change arriving underneath an edited field is told
- * apart from the reader's own edit.
- */
-const queryDraft = {
-    open: false,
-    edited: new Map(),
-    baseline: new Map(),
-    conflicts: new Set(),
-    key: null,
-};
+const queryEditors = initQueryEditors({ state: () => state, applyFilters, el });
 
 /** The target popover, which commits separately from the query editor. */
 const targetDraft = { open: false, dirty: false };
@@ -2530,7 +2499,11 @@ function renderStatus() {
     }
     const updated = state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "never";
     const collection = state.metrics?.meta?.collectionMs;
-    dom.status.textContent = `${label} · last ${state.filters.days} days · updated ${updated}${
+    const window = state.metrics?.meta?.dataset?.window;
+    const period = window
+        ? `${timestamp(window.Start)} → ${timestamp(window.End)} (end exclusive)${state.metrics.meta.dataset.filtered ? " · dataset filtered" : ""}`
+        : state.filters.since || state.filters.until ? "custom collection period" : `last ${state.filters.days} days`;
+    dom.status.textContent = `${label} · ${period} · updated ${updated}${
         Number.isFinite(collection) ? ` (${(collection / 1000).toFixed(1)}s)` : ""
     }`;
 }
@@ -2543,185 +2516,6 @@ function syncScopeField() {
     dom.targetHint.textContent = org
         ? "Reads every repository in the organization. Prefix a host for GitHub Enterprise, e.g. ghe.example/octo."
         : "Prefix a host for GitHub Enterprise, e.g. ghe.example/octo/api.";
-}
-
-/** Build the query editor once; renders afterwards only assign values. */
-function buildQueryEditor() {
-    const groups = FIELD_GROUPS.map((group) => {
-        const fields = fieldsOfGroup(group.id);
-        if (fields.length === 0) {
-            return null;
-        }
-        return el("section", { class: "query-group", "data-group": group.id }, [
-            el("h3", {}, [
-                document.createTextNode(group.title),
-                el("span", { class: "query-group__effect", text: group.effect }),
-            ]),
-            el("p", { class: "query-group__note", text: group.note }),
-            el(
-                "div",
-                { class: "field-grid" },
-                fields.map((field) => queryField(field)),
-            ),
-        ]);
-    });
-    dom.queryGroups.replaceChildren(...groups.filter(Boolean));
-}
-
-/** One labelled control, wired to record an edit rather than to apply it. */
-function queryField(field) {
-    const id = `query-field-${field.name}`;
-    let control;
-    if (field.control === "select") {
-        control = el(
-            "select",
-            { id, name: field.name },
-            field.options.map((option) => el("option", { value: option, text: option })),
-        );
-    } else if (field.control === "checkbox") {
-        control = el("input", { id, name: field.name, type: "checkbox" });
-    } else if (field.control === "number") {
-        control = el("input", {
-            id,
-            name: field.name,
-            type: "number",
-            min: String(field.min),
-            max: String(field.max),
-            step: String(field.step ?? 1),
-        });
-        // Every number is required: an emptied box reads as NaN, and sending
-        // that would let the normalizer quietly substitute the default for
-        // whatever the reader had actually set.
-        control.required = true;
-    } else {
-        control = el("input", {
-            id,
-            name: field.name,
-            type: "text",
-            spellcheck: "false",
-            autocomplete: "off",
-            placeholder: field.placeholder ?? "",
-        });
-    }
-    // Numbers and text both report on `input`, so a half-typed value counts as
-    // an edit straight away. Without that, a control the reader is typing into
-    // still reads as untouched, and the next render would either overwrite
-    // what they typed or - worse - leave a stale value on screen and then take
-    // that stale value as the baseline when they finally commit it.
-    const event = field.control === "select" || field.control === "checkbox" ? "change" : "input";
-    control.addEventListener(event, () => recordEdit(field, control));
-    const label = el("label", { class: `field${field.control === "checkbox" ? " field--checkbox" : ""}`, "data-field": field.name });
-    if (field.control === "checkbox") {
-        label.append(control, el("span", { text: field.label }));
-    } else {
-        label.append(el("span", { text: field.label }), control);
-    }
-    return el("div", { class: "query-field" }, [
-        label,
-        el("small", { class: "field-hint", id: `query-hint-${field.name}`, text: field.hint ?? "" }),
-    ]);
-}
-
-/** Remember an edit, or forget it once it matches the live value again. */
-function recordEdit(field, control) {
-    const raw = field.control === "checkbox" ? control.checked : control.value;
-    const value = readFieldValue(field, raw);
-    const live = state?.filters?.[field.name];
-    if (!queryDraft.baseline.has(field.name)) {
-        queryDraft.baseline.set(field.name, live);
-    }
-    if (sameFieldValue(field, value, live)) {
-        queryDraft.edited.delete(field.name);
-        queryDraft.baseline.delete(field.name);
-        queryDraft.conflicts.delete(field.name);
-    } else {
-        queryDraft.edited.set(field.name, value);
-    }
-    renderQueryEditor();
-}
-
-/**
- * Push the live query into every control the reader has not edited. Because an
- * edit is recorded on the first keystroke, "not edited" means the control is
- * genuinely untouched, so it is safe to assign even while it holds the caret -
- * and necessary, since a control left showing a stale value would otherwise be
- * taken as the baseline the moment the reader did type into it.
- *
- * An edited field keeps its draft. If the authoritative value moved away from
- * what it was when the edit started, the field is flagged so applying it does
- * not silently undo a change made elsewhere; the flag clears again if the two
- * come back into agreement.
- */
-function renderQueryEditor() {
-    if (!state) {
-        return;
-    }
-    let dirty = 0;
-    for (const field of QUERY_FIELDS) {
-        const wrapper = dom.queryGroups.querySelector(`[data-field="${field.name}"]`);
-        const control = document.getElementById(`query-field-${field.name}`);
-        if (!control) {
-            continue;
-        }
-        const live = state.filters?.[field.name];
-        if (queryDraft.edited.has(field.name)) {
-            // Something else may have committed the very value being drafted,
-            // which settles the edit rather than leaving it pending forever.
-            if (sameFieldValue(field, queryDraft.edited.get(field.name), live)) {
-                queryDraft.edited.delete(field.name);
-                queryDraft.baseline.delete(field.name);
-                queryDraft.conflicts.delete(field.name);
-            } else if (sameFieldValue(field, queryDraft.baseline.get(field.name), live)) {
-                queryDraft.conflicts.delete(field.name);
-            } else {
-                queryDraft.conflicts.add(field.name);
-            }
-        }
-        const edited = queryDraft.edited.has(field.name);
-        if (edited) {
-            dirty += 1;
-        } else {
-            const next = writeFieldValue(field, live);
-            if (field.control === "checkbox") {
-                control.checked = next;
-            } else if (control.value !== next) {
-                control.value = next;
-            }
-        }
-        wrapper?.classList.toggle("field--dirty", edited);
-    }
-    // auto is the one setting that does not state what it does: the width is
-    // resolved from the window when the collection runs, so the width it
-    // actually resolved to is reported beside it.
-    const bucketHint = document.getElementById("query-hint-bucket");
-    if (bucketHint) {
-        const base = fieldByName("bucket")?.hint ?? "";
-        const resolved = state.metrics?.fleet?.bucket;
-        bucketHint.textContent =
-            state.filters?.bucket === "auto" && resolved ? `${base} This window resolved to ${resolved}.` : base;
-    }
-    dom.queryDirtyCount.hidden = dirty === 0;
-    dom.queryDirtyCount.textContent = String(dirty);
-    dom.queryReset.disabled = dirty === 0;
-    dom.queryApply.disabled = dirty === 0;
-    dom.queryEffect.textContent = describePending();
-}
-
-/** Say what pressing Apply will cost before it is pressed. */
-function describePending() {
-    if (queryDraft.edited.size === 0) {
-        return "No changes.";
-    }
-    const groups = new Set();
-    for (const name of queryDraft.edited.keys()) {
-        groups.add(QUERY_FIELDS.find((field) => field.name === name)?.group);
-    }
-    const effects = FIELD_GROUPS.filter((group) => groups.has(group.id)).map((group) => group.effect.toLowerCase());
-    const conflicts = [...queryDraft.conflicts].filter((name) => queryDraft.edited.has(name));
-    const warning = conflicts.length
-        ? ` ${conflicts.join(", ")} changed elsewhere while you were editing; applying will overwrite that.`
-        : "";
-    return `${queryDraft.edited.size} change${queryDraft.edited.size === 1 ? "" : "s"}: ${effects.join(", ")}.${warning}`;
 }
 
 /** The header button carries the target, so it has to follow the state. */
@@ -2742,9 +2536,7 @@ function renderTarget() {
 
 function renderFilters() {
     renderTarget();
-    if (queryDraft.open) {
-        renderQueryEditor();
-    }
+    queryEditors.render();
 }
 
 function render() {
@@ -2950,10 +2742,6 @@ function connect() {
         // screen when switching between the two.
         if (state && next.identity !== state.identity) {
             resetExplorer();
-            if (queryDraft.edited.size > 0) {
-                resetQueryDraft();
-                dom.queryEffect.textContent = `Target changed to ${next.key}; the draft was discarded.`;
-            }
         }
         state = next;
         render();
@@ -2964,7 +2752,7 @@ function connect() {
     };
 }
 
-/** Open and close the two forms, returning focus where it came from. */
+/** Open and close the target form, returning focus where it came from. */
 function openTargetPicker() {
     targetDraft.open = true;
     dom.targetPopover.hidden = false;
@@ -2984,32 +2772,6 @@ function closeTargetPicker({ restoreFocus = true } = {}) {
     if (restoreFocus) {
         dom.targetToggle.focus();
     }
-}
-
-function openQueryEditor() {
-    queryDraft.open = true;
-    queryDraft.key = state?.key ?? null;
-    dom.queryEditor.hidden = false;
-    dom.queryToggle.setAttribute("aria-expanded", "true");
-    renderQueryEditor();
-    document.getElementById("query-field-days")?.focus();
-}
-
-function closeQueryEditor({ restoreFocus = true } = {}) {
-    queryDraft.open = false;
-    dom.queryEditor.hidden = true;
-    dom.queryToggle.setAttribute("aria-expanded", "false");
-    if (restoreFocus) {
-        dom.queryToggle.focus();
-    }
-}
-
-/** Throw the draft away and show the live query again. */
-function resetQueryDraft() {
-    queryDraft.edited.clear();
-    queryDraft.baseline.clear();
-    queryDraft.conflicts.clear();
-    renderQueryEditor();
 }
 
 dom.targetToggle.addEventListener("click", () => {
@@ -3038,43 +2800,11 @@ dom.targetForm.addEventListener("submit", (event) => {
     }
     void switchTarget({ scope: dom.scope.value, target })
         .then(() => {
-            // The settings follow the reader to the new target rather than
-            // being restored from whatever was last used there.
-            resetQueryDraft();
             closeTargetPicker();
         })
         .catch((error) => {
             dom.targetError.textContent = error?.message ?? String(error);
             dom.targetError.hidden = false;
-        });
-});
-
-dom.queryToggle.addEventListener("click", () => {
-    if (queryDraft.open) {
-        closeQueryEditor();
-    } else {
-        openQueryEditor();
-    }
-});
-dom.queryReset.addEventListener("click", () => resetQueryDraft());
-dom.queryForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (!dom.queryForm.reportValidity()) {
-        return;
-    }
-    const patch = Object.fromEntries(queryDraft.edited);
-    if (Object.keys(patch).length === 0) {
-        return;
-    }
-    dom.queryApply.disabled = true;
-    void applyFilters(patch)
-        .then(() => {
-            resetQueryDraft();
-            closeQueryEditor();
-        })
-        .catch((error) => {
-            dom.queryEffect.textContent = `Could not apply: ${error?.message ?? error}`;
-            dom.queryApply.disabled = false;
         });
 });
 
@@ -3086,8 +2816,8 @@ document.addEventListener("keydown", (event) => {
     }
     if (targetDraft.open) {
         closeTargetPicker();
-    } else if (queryDraft.open) {
-        closeQueryEditor();
+    } else {
+        queryEditors.close();
     }
 });
 document.addEventListener("pointerdown", (event) => {
@@ -3127,8 +2857,6 @@ initExplorer({
             body: JSON.stringify(options),
         }).catch(() => {}),
 });
-
-buildQueryEditor();
 
 fetch("./api/state")
     .then((response) => response.json())

@@ -46,26 +46,37 @@ if (args[0] === "api") {
     if (args[1] !== "rate_limit") throw new Error("Unexpected direct API: " + args[1]);
     output({resources: {core: {remaining: 10000, reset: Math.floor(Date.now()/1000)+3600}}});
 } else if (args.includes("--help")) {
-    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n");
+    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n  --until string\\n");
 } else if (args.includes("--version")) {
     process.stdout.write("fixture\\n");
 } else if (args[2] === "collect") {
     const latest = Object.fromEntries(jobs.slice(0, 6001).map(job => [job.JobID, true]));
     const snapshot = {Version: 1, CreatedAt: time(7000), Contents: {Jobs: true, AllAttempts: true},
         Data: {Window: {Start: time(0), End: time(7000)}, LatestJobs: latest, Runners: [], Warnings: [],
-            HostedRunners: {}, RepositoryPublic: {"owner/repo": false}, Truncated: false}};
+            HostedRunners: {}, RepositoryPublic: {"owner/repo": false}, Truncated: false,
+            Runs: runs.map(run => ({id: run.RunID})),
+            Jobs: jobs.map(job => ({id: job.JobID, run_id: job.RunID})),
+            RunRepositories: Object.fromEntries(runs.map(run => [run.RunID, run.Repository]))}};
     fs.writeFileSync(args[args.indexOf("--output")+1], zlib.gzipSync(JSON.stringify(snapshot)));
 } else {
     if (!args.includes("--input")) throw new Error("A report attempted an independent collection: " + args.join(" "));
-    if (args[2] === "runs") runs.forEach(output);
-    else if (args[2] === "jobs") jobs.forEach(output);
-    else if (args[2] === "steps") jobs.forEach(job => output({...job,
+    const snapshot = JSON.parse(zlib.gunzipSync(fs.readFileSync(args[args.indexOf("--input")+1])));
+    const selected = new Set(snapshot.Data.Runs.map(run => String(run.id)));
+    const selectedRuns = runs.filter(run => selected.has(run.RunID));
+    const selectedJobs = jobs.filter(job => selected.has(job.RunID));
+    if (args[2] === "runs") selectedRuns.forEach(output);
+    else if (args[2] === "jobs") selectedJobs.forEach(output);
+    else if (args[2] === "steps") selectedJobs.forEach(job => output({...job,
         JobConclusion: job.Conclusion, JobStartedAt: job.StartedAt, JobCompletedAt: job.CompletedAt,
         RunStartedAt: job.StartedAt, StepNumber: 1, StepName: "Compile", StepKey: "Compile",
         StepOccurrence: 1, StepStatus: "completed", StepConclusion: "success", Offset: 0}));
-    else if (args[2] === "report") output({summary: {Window: {Start: time(0), End: time(7000)}, Runs: 6001, HostedJobs: 6002}});
-    else if (args[2] === "timeline") output({RunID: args[3], RunAttempt: 1, Jobs: []});
-    else if (args[2] === "export") output({Runs: 6001});
+    else if (args[2] === "report") output({summary: {Window: snapshot.Data.Window, Runs: selectedRuns.length, HostedJobs: selectedJobs.length},
+        concurrency: [{Start: snapshot.Data.Window.Start, End: snapshot.Data.Window.End, Jobs: selectedJobs.length}]});
+    else if (args[2] === "timeline") {
+        if (!selected.has(args[3])) throw new Error("Run is outside the retained period");
+        output({RunID: args[3], RunAttempt: 1, Jobs: []});
+    }
+    else if (args[2] === "export") output({Runs: selectedRuns.length});
     else throw new Error("Unexpected command: " + args.join(" "));
 }
 `, { mode: 0o700 });
@@ -78,7 +89,7 @@ if (args[0] === "api") {
     const { exportFleet } = await import("../lib/runnerkit.mjs");
     const { DashboardInstance } = await import("../lib/instance.mjs");
     const { startInstanceServer } = await import("../lib/server.mjs");
-    const query = normalizeQuery({ repo: "owner/repo", days: 9, maxRuns: 0 });
+    const query = normalizeQuery({ repo: "owner/repo", days: 9, maxRuns: 0, jobKind: "all" });
     store = new DashboardStore({ cwd: directory });
     await Promise.all([store.refresh(query), store.refresh(query)]);
     const state = store.snapshot("repo:owner/repo");
@@ -148,9 +159,48 @@ if (args[0] === "api") {
     const recorded = await calls();
     assert.equal(recorded.filter(args => args[2] === "collect").length, 1);
     assert.ok(recorded.filter(args => args[0] === "api").every(args => args[1] === "rate_limit"));
-    await store.refresh({...query, groupBy: "id", bucket: "1h", targetUtilization: 0.8});
+    await store.refresh({...query, labels: ["ubuntu-latest"], groupBy: "label", bucket: "1h",
+        selfHostedOnly: true, targetWait: "2m", targetUtilization: 0.8});
     assert.equal(store.entry(query).dataset.meta.id, state.metrics.meta.dataset.id);
     assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    const loadedSteps = await fetch(`${url}api/steps`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({workflow: "ci.yml", runBudget: 0, includeAllAttempts: true}),
+    });
+    assert.equal(loadedSteps.status, 200);
+    await instance.project({all: true});
+    const beforeFilter = (await calls()).length;
+    const time = index => new Date(Date.UTC(2026, 9, 1) + index * 1000).toISOString();
+    await instance.apply({patch: {filterFrom: time(1), filterTo: time(3)}});
+    await Promise.all([
+        instance.apply({patch: {filterFrom: time(3), filterTo: time(6)}}),
+        instance.apply({patch: {filterFrom: time(1), filterTo: time(3)}}),
+    ]);
+    const narrowed = instance.state();
+    assert.equal(narrowed.metrics.meta.dataset.sourceId, state.metrics.meta.dataset.id);
+    assert.equal(narrowed.metrics.overview.totals.runs, 2);
+    assert.equal(narrowed.metrics.usage.window.jobs, 2);
+    assert.equal(narrowed.metrics.fleet.summary.runs, 2);
+    assert.equal(narrowed.steps.result.meta.analysedRuns, 2);
+    assert.equal(narrowed.steps.result.meta.totalJobs, 2);
+    assert.equal(narrowed.timeline.matched, 2);
+    await store.rows.entry(store.rows.signature(instance.effectiveQuery)).inflight;
+    assert.equal(instance.state().rows.status, "ready");
+    const filteredExport = await instance.export("json");
+    assert.equal(JSON.parse(filteredExport.body).Runs, 2);
+    const filteredTimeline = await fetch(`${url}api/run-timeline?run=1`);
+    assert.equal(filteredTimeline.status, 502);
+    const filterCalls = (await calls()).slice(beforeFilter);
+    assert.ok(filterCalls.every(args => args[0] !== "api" && args[2] !== "collect"));
+    assert.throws(() => instance.apply({patch: {filterFrom: time(-1)}}), /within the collected period/);
+    assert.equal(instance.state().metrics.overview.totals.runs, 2);
+    const filteredDataset = store.entry(query).dataset;
+    await instance.apply({patch: {filterFrom: "", filterTo: ""}});
+    assert.equal(instance.state().metrics.overview.totals.runs, 6001);
+    assert.equal(instance.state().steps.result.meta.totalJobs, 6002);
+    assert.equal(store.entry(query).dataset.meta.id, state.metrics.meta.dataset.id);
+    assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    await assert.rejects(access(filteredDataset.input));
     const old = store.entry(query).dataset.acquire();
     const previousRevision = store.rows.signature(query);
     await store.refresh(query, {force: true});

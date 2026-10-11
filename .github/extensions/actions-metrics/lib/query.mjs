@@ -11,8 +11,9 @@
 //
 // What this model deliberately does NOT do is collapse to a single identity
 // hash. The dashboard runs many subcommands over one collection and then
-// projects that collection several ways, so it has three:
+// projects that collection several ways, so it has four:
 //
+//   datasetQueryId - what has to be fetched from GitHub
 //   collectionId  - what has to be fetched from the CLI
 //   projectionId  - how the collection already in hand is read
 //   rowQueryId    - the raw job rows the explorer holds in the browser
@@ -42,6 +43,7 @@ import {
     MIN_TOP_RUNNERS,
 } from "./jobs.mjs";
 import { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET } from "./jobrows.mjs";
+import { normalizePeriodTime, periodTime } from "../shared/period.mjs";
 
 /** Highest `--max-runs` the setting accepts; 0 means no limit, and the
  * concurrency range `--concurrency` accepts. Declared in shared/fields.mjs so
@@ -146,6 +148,36 @@ export const FIELDS = {
         default: DEFAULTS.days,
         normalize: (value) => clampInt(value, 1, 365, DEFAULTS.days),
         schema: { type: "integer", minimum: 1, maximum: 365, description: `Size of the analysis window in days. Defaults to ${DEFAULTS.days}.` },
+    },
+    since: {
+        collection: true,
+        rows: true,
+        persist: true,
+        default: "",
+        normalize: normalizePeriodTime,
+        schema: { type: "string", description: "Inclusive collection start, as YYYY-MM-DD (UTC) or RFC3339. Overrides days. Empty/default uses days." },
+    },
+    until: {
+        collection: true,
+        rows: true,
+        persist: true,
+        default: "",
+        normalize: normalizePeriodTime,
+        schema: { type: "string", description: "Exclusive collection end, as YYYY-MM-DD (UTC) or RFC3339. Empty/default is now; days counts back from this end." },
+    },
+    filterFrom: {
+        collection: true,
+        rows: true,
+        default: "",
+        normalize: normalizePeriodTime,
+        schema: { type: "string", description: "Inclusive run-created-time filter on the retained dataset. No API collection. Empty/default is the collected start; must stay inside dataset coverage." },
+    },
+    filterTo: {
+        collection: true,
+        rows: true,
+        default: "",
+        normalize: normalizePeriodTime,
+        schema: { type: "string", description: "Exclusive run-created-time filter on the retained dataset. No API collection. Empty/default is the collected end; must stay inside dataset coverage." },
     },
     event: {
         collection: true,
@@ -391,6 +423,9 @@ export const PROJECTION_FIELDS = fieldsWhere("projection");
 export const ROW_FIELDS = fieldsWhere("rows");
 /** Fields remembered per target between sessions. */
 export const PERSISTED_FIELDS = fieldsWhere("persist");
+/** Fields that require a new GitHub dataset rather than another snapshot report. */
+export const DATASET_FIELDS = COLLECTION_FIELDS.filter(name =>
+    !["labels", "groupBy", "bucket", "selfHostedOnly", "targetWait", "targetUtilization", "filterFrom", "filterTo"].includes(name));
 
 /** A query with every field at its default and no target. */
 export const DEFAULT_QUERY = Object.freeze(
@@ -488,6 +523,11 @@ export function applyQueryPatch(query, patch = {}) {
             merged[name] = [];
         }
     }
+    if (datasetQueryId(merged) !== datasetQueryId(current)) {
+        for (const name of ["filterFrom", "filterTo"]) {
+            if (patch[name] === undefined) merged[name] = "";
+        }
+    }
     return normalizeQuery(merged);
 }
 
@@ -558,6 +598,18 @@ export function validateQuery(query) {
             message: `"${selector}" names host ${split.host}, but host is set to ${host}. Drop one of them.`,
         };
     }
+    for (const name of ["since", "until", "filterFrom", "filterTo"]) {
+        if (query[name] && !Number.isFinite(periodTime(query[name]))) {
+            return { code: "period_invalid", message: `${name} must be a valid YYYY-MM-DD (UTC) date or RFC3339 timestamp` };
+        }
+    }
+    const end = query.until ? periodTime(query.until) : Date.now();
+    if (end > Date.now() || (query.since && periodTime(query.since) >= end)) {
+        return { code: "period_invalid", message: "Collection start must be before its exclusive end, and the end cannot be in the future" };
+    }
+    if (query.filterFrom && query.filterTo && periodTime(query.filterFrom) >= periodTime(query.filterTo)) {
+        return { code: "period_invalid", message: "Dataset filter start must be before its exclusive end" };
+    }
     return null;
 }
 
@@ -610,6 +662,11 @@ export function queryId(query) {
  */
 export function collectionId(query) {
     return hash(pick(query, COLLECTION_FIELDS));
+}
+
+/** Identity of API data, independent of the views read from the retained file. */
+export function datasetQueryId(query) {
+    return hash(pick(query, DATASET_FIELDS));
 }
 
 /**
@@ -705,6 +762,10 @@ export function describeScope(query) {
         scope: scopeOf(canonical),
         allRepos: scopeOf(canonical) === "org",
         days: canonical.days,
+        since: canonical.since,
+        until: canonical.until,
+        filterFrom: canonical.filterFrom,
+        filterTo: canonical.filterTo,
         event: canonical.event,
         branch: canonical.branch,
         workflow: canonical.workflow,
@@ -716,10 +777,13 @@ export function describeScope(query) {
 
 /** The window a query covers, ending at the time its data was collected. */
 export function windowFor(query, collectedAt) {
-    const to = collectedAt ? new Date(collectedAt).getTime() : Date.now();
+    const normalized = normalizeQuery(query);
+    const to = normalized.until ? periodTime(normalized.until) : collectedAt ? new Date(collectedAt).getTime() : Date.now();
     const end = Number.isFinite(to) ? to : Date.now();
-    const days = normalizeQuery(query).days;
-    return { from: end - days * 86400000, to: end, days };
+    const from = normalized.since ? periodTime(normalized.since) : end - normalized.days * 86400000;
+    const start = normalized.filterFrom ? periodTime(normalized.filterFrom) : from;
+    const finish = normalized.filterTo ? periodTime(normalized.filterTo) : end;
+    return { from: start, to: finish, days: (finish - start) / 86400000 };
 }
 
 function schemaProperties(names) {

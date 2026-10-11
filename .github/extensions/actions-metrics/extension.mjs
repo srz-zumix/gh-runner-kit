@@ -572,7 +572,7 @@ const canvas = createCanvas({
         {
             name: "set_filters",
             description:
-                "Change what the dashboard analyses - the repository or organization, the analysis window, the filters, the collection limits or the projection settings - and re-collect the metrics. Every field is optional and an omitted one keeps its current value.",
+                "Change the target, collection period, filters, limits or display settings. Dataset-changing settings collect again; display settings re-read the retained snapshot without GitHub requests. Request concurrency applies to the next collection only. Every field is optional and an omitted one keeps its current value.",
             // Literally the canvas's own schema: a field settable when the
             // panel is opened is settable afterwards, by construction.
             inputSchema: querySchema,
@@ -927,7 +927,7 @@ const canvas = createCanvas({
         const query = panel.instance.effectiveQuery;
         return {
             title: `Actions metrics · ${panel.instance.key}${scopeOf(query) === "org" ? " (org)" : ""}`,
-            status: `Last ${query.days} days`,
+            status: query.since || query.until ? "Custom collection period" : `Last ${query.days} days`,
             url: panel.url,
         };
     },

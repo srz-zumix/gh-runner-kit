@@ -11,6 +11,7 @@ import {
     assertQuery,
     canonicalizeQuery,
     collectionId,
+    datasetQueryId,
     filtersOf,
     formatQuery,
     limitsOf,
@@ -28,6 +29,8 @@ import { exportFleet, hasExcludeRunner, hasJobRows } from "./runnerkit.mjs";
 import { collectRunnerTimeline, compileExclusions } from "./jobs.mjs";
 import { sortByCriteria, validateSorts } from "../shared/sort.mjs";
 import { timelineMatchesWorkflow } from "../shared/steps.mjs";
+import { filteredWindow } from "../shared/period.mjs";
+import { collectStepMetrics } from "./steprows.mjs";
 
 /** Hard ceiling on one page of runners, so a crafted query cannot ask for all of them at once. */
 const MAX_PAGE = 200;
@@ -41,6 +44,8 @@ export class DashboardInstance {
         // panel last asked for and what it falls back to before the store has
         // an entry.
         this.query = normalizeQuery(query);
+        this.applyGeneration = 0;
+        this.periodViews = null;
         this.listeners = new Set();
         this.unsubscribe = null;
         this.timeline = null;
@@ -691,12 +696,53 @@ export class DashboardInstance {
             ? canonicalizeQuery(assertQuery(applyQueryPatch(this.effectiveQuery, patch)))
             : normalizeQuery(this.effectiveQuery);
         const targetChanged = targetKey(next) !== this.identity;
+        const periodOnly = !force && !bypassCache && !targetChanged
+            && datasetQueryId(next) === datasetQueryId(this.effectiveQuery)
+            && (next.filterFrom !== this.effectiveQuery.filterFrom || next.filterTo !== this.effectiveQuery.filterTo);
+        if (periodOnly) {
+            const dataset = this.store.entry(this.effectiveQuery).dataset;
+            if (!dataset) {
+                const error = new Error("Load a dataset before setting a period filter");
+                error.code = "no_dataset";
+                throw error;
+            }
+            filteredWindow(dataset.meta.collectionWindow ?? dataset.meta.window, next);
+        }
+        const views = periodOnly ? this.periodViews ?? {
+            timeline: this.timelineRequest,
+            steps: this.steps.settings,
+            rows: Boolean(this.rowSignature),
+        } : null;
+        this.periodViews = views;
+        const generation = ++this.applyGeneration;
+        const current = () => generation === this.applyGeneration && collectionId(next) === collectionId(this.effectiveQuery);
         this.query = next;
         if (targetChanged) {
             this.attach();
         }
         const done = this.store.refresh(this.query, { force, bypassCache });
         this.broadcast();
-        return done;
+        if (!views) return done;
+        return done.then(async result => {
+            if (result.status !== "ready" || !current()) return result;
+            if (views.rows) this.requestRows();
+            if (views.timeline && !this.timelineRequest) await this.project(views.timeline);
+            if (!current()) return result;
+            if (views.steps && this.steps.status === "idle") {
+                const { generation, signal } = this.beginStepRequest();
+                try {
+                    const steps = await this.store.withDataset(next, dataset => collectStepMetrics({
+                        dataset, target: targetOf(next), filters: filtersOf(next), limits: limitsOf(next),
+                        cwd: this.store.cwd, ...views.steps, signal,
+                    }));
+                    this.setStepMetrics(views.steps, steps, generation);
+                } catch (error) {
+                    this.setStepError(views.steps, error, generation);
+                }
+            }
+            return result;
+        }).finally(() => {
+            if (generation === this.applyGeneration) this.periodViews = null;
+        });
     }
 }
