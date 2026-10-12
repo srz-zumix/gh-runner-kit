@@ -474,8 +474,7 @@ Optional `--until TIME` sets the exclusive collection end (default now).
 Use it with `--since TIME` for an explicit `[since, until)` period, or with
 `--days N` for N days ending at that time. Dates without a timezone use UTC.
 Run selection uses creation time. Future ends, invalid dates and reversed
-bounds fail before API collection. Like other collection flags, `--until`
-cannot be combined with `--input`.
+bounds fail before API collection.
 
 The snapshot is written to `--output`, `-` for stdout by default, and gzip-compressed when the name ends in `.gz`.
 

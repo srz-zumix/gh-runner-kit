@@ -2,13 +2,17 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { gunzipSync, gzipSync } from "node:zlib";
-import { assertRateBudget, ghRaw } from "./gh.mjs";
+import { gunzip as gunzipCallback, gzip as gzipCallback } from "node:zlib";
+import { promisify } from "node:util";
 import { collectFleet, collectRuns, jobRowsCommand, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
 import { filteredWindow, periodTime } from "../shared/period.mjs";
 import { filterSnapshot, parseSnapshot, stringifySnapshot } from "./period.mjs";
+
+/** Compression runs on the libuv threadpool so a large snapshot cannot stall the event loop. */
+const gunzip = promisify(gunzipCallback);
+const gzip = promisify(gzipCallback);
 
 /** A retained snapshot owns its file until the last active reader releases it. */
 export class SharedDataset {
@@ -67,9 +71,11 @@ async function datasetView(base, filters, signal) {
     const directory = await mkdtemp(join(tmpdir(), "actions-metrics-period-"));
     try {
         signal?.throwIfAborted();
-        const snapshot = parseSnapshot(gunzipSync(await readFile(base.input)).toString("utf8"));
+        const snapshot = parseSnapshot((await gunzip(await readFile(base.input))).toString("utf8"));
         const input = join(directory, "snapshot.json.gz");
-        await writeFile(input, gzipSync(stringifySnapshot(filterSnapshot(snapshot, runs, window))), { mode: 0o600 });
+        const body = await gzip(stringifySnapshot(filterSnapshot(snapshot, runs, window)));
+        signal?.throwIfAborted();
+        await writeFile(input, body, { mode: 0o600 });
         signal?.throwIfAborted();
         return new SharedDataset(input, directory, runs, jobs, meta, base);
     } catch (error) {
