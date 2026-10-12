@@ -1,8 +1,16 @@
 ci:
 - any:
   - changed-files:
-    - any-glob-to-all-files: '.github/**'
+    - all-files-to-any-glob:
+      - '.github/!(extensions)'
+      - '.github/!(extensions)/**'
 - color: '#7c0bb2'
+
+canvas:
+- any:
+  - changed-files:
+    - any-glob-to-any-files: '.github/extensions/**'
+- color: '#ff5733'
 
 documentation:
 - changed-files:
