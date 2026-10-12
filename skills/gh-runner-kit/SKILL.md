@@ -561,7 +561,7 @@ Shared options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | - | Drop the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
 | `--format` | - | Output format: `json`. Table output is used when not specified |
@@ -576,10 +576,16 @@ Shared options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `org` or `repo` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 Definitions to be aware of when reading the numbers:
 
+- **Period.** Optional `--until TIME` is an exclusive end (default now).
+  Combine it with `--since TIME` for `[since, until)` or `--days N` for N days
+  ending there. Dates without timezones use UTC. Run selection uses creation
+  time. Invalid/reversed bounds and future ends fail before collection.
+  `--until` cannot be combined with `--input`.
 - **Scope.** `--type` selects where the runner inventory is read from, but the
   workflow runs always come from a repository because the API has no
   organization-wide run listing. Use `--all-repos` to walk every repository of
@@ -634,7 +640,7 @@ extra API request.
 
 ```bash
 gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--all-repos] [--format json]
+  [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
@@ -668,7 +674,7 @@ collection in one command.
 
 ```bash
 gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--all-repos] [--output PATH]
+  [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--output PATH]
 ```
 
 | Option | Default | Description |
@@ -696,7 +702,7 @@ time bucket at a time.
 
 ```bash
 gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--format json]
+  [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
@@ -731,7 +737,7 @@ execution. Job timestamps alone do not establish that a runner was occupied.
 
 ```bash
 gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+  [--rate KEY=PRICE]... [--days N | --since TIME] [--until TIME] [--all-repos] [--max-runs N] [--format json]
 ```
 
 | Option | Default | Description |
@@ -773,7 +779,7 @@ demand for every label in a form a monitoring system can ingest.
 
 ```bash
 gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--summary] [--days N | --since TIME] [--all-repos] [--format prometheus|json]
+  [--summary] [--days N | --since TIME] [--until TIME] [--all-repos] [--format prometheus|json]
 ```
 
 | Option | Default | Description |
@@ -805,7 +811,7 @@ busy timeline of a single runner.
 gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
   [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... \
   [--kind all|self-hosted|github-hosted] \
-  [--limit N] [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
+  [--limit N] [--days N | --since TIME] [--until TIME] [--all-repos] [--format json|ndjson|table]
 ```
 
 | Option | Default | Description |
@@ -854,7 +860,7 @@ carry, one single label at a time. Use `metrics queue` instead when the whole
 
 ```bash
 gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--include-unused] [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+  [--include-unused] [--days N | --since TIME] [--until TIME] [--all-repos] [--max-runs N] [--format json]
 ```
 
 | Option | Default | Description |
@@ -878,7 +884,7 @@ each set waited for a runner.
 
 ```bash
 gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--max-runs N] [--format json]
 ```
 
 Table columns: `LABELS`, `KIND`, `JOBS`, `WAIT P50`, `WAIT P95`, `WAIT MAX`,
@@ -898,7 +904,7 @@ are a concern.
 
 ```bash
 gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--section SECTION]... [--days N | --since TIME] [--all-repos] [--format json]
+  [--section SECTION]... [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
@@ -922,7 +928,7 @@ Aggregates the collected workflow activity by repository.
 
 ```bash
 gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--branch BRANCH] [--event EVENT] \
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--branch BRANCH] [--event EVENT] \
   [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] \
   [--format json]
 ```
@@ -942,7 +948,7 @@ Breaks the fleet activity down per runner, per label set or per runner group.
 
 ```bash
 gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--group-by name|label|group] [--days N | --since TIME] [--all-repos] [--format json]
+  [--group-by name|label|group] [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
@@ -963,7 +969,7 @@ Lists every workflow run returned by the collection, one row each.
 
 ```bash
 gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--format json|ndjson|table]
 ```
 
 The listing uses the same run collection as the other metrics commands. It does not
@@ -983,7 +989,7 @@ gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type o
   [--job PATTERN]... [--step PATTERN]... [--merge-matrix] \
   [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... \
   [--kind all|self-hosted|github-hosted] [--limit N] \
-  [--days N | --since TIME] [--all-repos] [--format json|ndjson|table]
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--format json|ndjson|table]
 ```
 
 | Option | Default | Description |
@@ -1035,7 +1041,7 @@ Summarizes how the fleet behaved over the window.
 
 ```bash
 gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--all-repos] [--max-runs N] [--format json]
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--max-runs N] [--format json]
 ```
 
 Reported metrics: `RUNNERS`, `ONLINE`, `BUSY`, `CORDONED`, `RUNS`, `JOBS`,
@@ -1048,7 +1054,7 @@ Breaks the collected jobs down per workflow.
 
 ```bash
 gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--self-hosted-only] [--days N | --since TIME] [--all-repos] [--format json]
+  [--self-hosted-only] [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |

@@ -416,7 +416,7 @@ Options:
 ### Recommend how many runners each runs-on label set needs
 
 ```sh
-gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics capacity [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--target-wait DURATION] [--target-utilization RATIO] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Size every `runs-on` label set against a target queue time.
@@ -434,7 +434,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -451,12 +451,13 @@ Options:
 | `--target-wait` | `1m0s` | Mean queue time the recommended pool aims for, such as `60s` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Collect the workflow activity every other metrics command reports from
 
 ```sh
-gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--output PATH]
+gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--output PATH]
 ```
 
 Collect the runner inventory, the workflow runs and their jobs once, and write the result to a snapshot file.
@@ -469,6 +470,13 @@ Optional `--all-attempts` (default `false`) retains historical attempt metadata 
 
 Run searches are split into nonoverlapping time windows when they reach GitHub's 1,000-result search limit. `--max-runs 0` removes the application budget; a single second that still saturates the API limit is an explicit error rather than silently incomplete data.
 
+Optional `--until TIME` sets the exclusive collection end (default now).
+Use it with `--since TIME` for an explicit `[since, until)` period, or with
+`--days N` for N days ending at that time. Dates without a timezone use UTC.
+Run selection uses creation time. Future ends, invalid dates and reversed
+bounds fail before API collection. Like other collection flags, `--until`
+cannot be combined with `--input`.
+
 The snapshot is written to `--output`, `-` for stdout by default, and gzip-compressed when the name ends in `.gz`.
 
 Options:
@@ -479,7 +487,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -492,13 +500,14 @@ Options:
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--usage` | `false` | Also collect billable usage, repository visibility and hosted machine inventory for `metrics cost --input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show how many jobs ran at the same time over the window
 
 ```sh
-gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Reconstruct the number of jobs that occupied a runner at the same time from their start and completion timestamps, one time bucket at a time.
@@ -515,7 +524,7 @@ Options:
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -531,12 +540,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Report the billable time GitHub-hosted runners consumed
 
 ```sh
-gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics cost [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--rate KEY=PRICE]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Estimate GitHub-hosted execution costs by billing SKU and machine specification.
@@ -558,7 +568,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -574,12 +584,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Publish the fleet metrics for monitoring
 
 ```sh
-gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--summary] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format prometheus|json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics export [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--summary] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format prometheus|json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Publish the fleet overview, the queue time of every `runs-on` label set and the demand for every label in a form a monitoring system can ingest, which is what a scheduled workflow needs.
@@ -599,7 +610,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | `prometheus` | Output format: `{json\|prometheus}` |
@@ -615,12 +626,13 @@ Options:
 | `--summary` | `false` | Also append a Markdown report to `$GITHUB_STEP_SUMMARY` |
 | `-t`, `--template` | - | Format JSON output using a Go template. Requires `--format json` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Summarize the collected workflow activity by repository
 
 ```sh
-gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Roll up the workflow rows to the repository level so that a single repository can be compared against the others in an organization-wide report. The totals are built from the normalized job records, so counts stay consistent with the per-workflow view. Percentiles like `WAIT P50` are not exposed at the repository level because they cannot be safely reconstructed from per-workflow data; only raw additive counts and derived rates are shown.
@@ -636,7 +648,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -651,12 +663,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### List the jobs behind the metrics
 
 ```sh
-gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics jobs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every job the metrics were aggregated from, one row each, so a downstream tool can group them on an axis this extension does not report, such as the busy timeline of a single runner.
@@ -684,7 +697,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--exclude-runner` | - | Drop the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and it wins over `--runner` |
@@ -704,12 +717,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template. Requires an explicit `--format json` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Compare the demand for each label against the runners that carry it
 
 ```sh
-gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--include-unused] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics label [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--include-unused] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Match the labels the jobs requested against the labels the registered runners carry, one label at a time.
@@ -727,7 +741,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -743,12 +757,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show how long each runs-on label set waited
 
 ```sh
-gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics queue [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Group the jobs by the `runs-on` label set they requested and report how long each set waited for a runner.
@@ -764,7 +779,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -779,12 +794,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Print several metrics reports from one collection
 
 ```sh
-gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Collect the fleet once and print several of the other metrics reports from it, which is cheaper than running each of them on its own when API rate limits are a concern.
@@ -801,7 +817,7 @@ Options:
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--bucket` | `1h` | Width of each concurrency section time bucket, such as `15m` |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -824,12 +840,13 @@ Options:
 | `--target-wait` | `1m0s` | Mean queue time the capacity section aims for, such as `60s` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show per runner activity
 
 ```sh
-gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--group-by name|label|group] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runner [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--group-by name|label|group] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Break the fleet activity down per runner, per `runs-on` label set or per runner group.
@@ -845,7 +862,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -860,12 +877,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### List workflow runs behind the metrics
 
 ```sh
-gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every workflow run returned by the collection, one row each. The command uses
@@ -882,7 +900,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | `json` | Output format: `{json\|ndjson\|table}` |
@@ -895,12 +913,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Report how long each step of every job takes
 
 ```sh
-gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--job PATTERN]... [--step PATTERN]... [--merge-matrix] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics steps [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--job PATTERN]... [--step PATTERN]... [--merge-matrix] [--label LABEL]... [--runner PATTERN]... [--exclude-runner PATTERN]... [--kind all|self-hosted|github-hosted] [--limit N] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Report how long each step of every job takes across the collected runs.
@@ -924,7 +943,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--exclude-runner` | - | Drop the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and it wins over `--runner` |
@@ -947,12 +966,13 @@ Options:
 | `--step` | all steps | Keep only the steps whose name matches this pattern, which accepts a `*` wildcard (repeatable) |
 | `-t`, `--template` | - | Format JSON output using a Go template. Requires an explicit `--format json` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show a self-hosted runner fleet overview
 
 ```sh
-gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics summary [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Summarize how the self-hosted runner fleet behaved over a time window.
@@ -972,7 +992,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -987,12 +1007,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show the failure rate and the duration of each workflow
 
 ```sh
-gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--self-hosted-only] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics workflow [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--self-hosted-only] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Break the collected jobs down per workflow.
@@ -1010,7 +1031,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -1026,12 +1047,13 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show the per-repository workflow summary
 
 ```sh
-gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics repository [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Aggregate the collected workflow activity by repository.
@@ -1045,7 +1067,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
-| `--days` | `7` | Aggregate over the last N days. Mutually exclusive with `--since` |
+| `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--format` | - | Output format: `{json}`. Table output is used when not specified |
@@ -1060,6 +1082,7 @@ Options:
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 
 ### Show the settings of an organization runner group

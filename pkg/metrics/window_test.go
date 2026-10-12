@@ -50,11 +50,48 @@ func TestWindowCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWindow() error = %v", err)
 	}
+
 	if got, want := w.Created(), ">=2026-08-31"; got != want {
 		t.Fatalf("Created() = %q, want %q", got, want)
 	}
 	if got, want := w.Duration(), 7*24*time.Hour; got != want {
 		t.Fatalf("Duration() = %v, want %v", got, want)
+	}
+}
+
+func TestParseWindowEndingAt(t *testing.T) {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, since, until string
+		days               int
+		start, end         string
+		wantErr            bool
+	}{
+		{"explicit dates", "2026-08-01", "2026-08-03", 7, "2026-08-01T00:00:00Z", "2026-08-03T00:00:00Z", false},
+		{"days ending in the past", "", "2026-08-03", 2, "2026-08-01T00:00:00Z", "2026-08-03T00:00:00Z", false},
+		{"timezone offsets", "2026-08-01T09:00:00+09:00", "2026-08-03T09:00:00+09:00", 7, "2026-08-01T00:00:00Z", "2026-08-03T00:00:00Z", false},
+		{"future end", "", "2027-01-01", 7, "", "", true},
+		{"invalid end", "", "2026-02-30", 7, "", "", true},
+		{"equal bounds", "2026-08-03", "2026-08-03", 7, "", "", true},
+		{"reversed bounds", "2026-08-04", "2026-08-03", 7, "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseWindowEndingAt(tc.days, tc.since, tc.until, now)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseWindowEndingAt() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			start, _ := time.Parse(time.RFC3339, tc.start)
+			end, _ := time.Parse(time.RFC3339, tc.end)
+			if !got.Start.Equal(start) || !got.End.Equal(end) {
+				t.Fatalf("window = %+v, want [%s, %s)", got, tc.start, tc.end)
+			}
+			if !got.Contains(start) || got.Contains(end) {
+				t.Fatal("window must include its start and exclude its end")
+			}
+		})
 	}
 }
 
