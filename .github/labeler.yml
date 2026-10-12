@@ -7,9 +7,8 @@ ci:
 - color: '#7c0bb2'
 
 canvas:
-- any:
-  - changed-files:
-    - any-glob-to-any-files: '.github/extensions/**'
+- changed-files:
+  - any-glob-to-any-file: '.github/extensions/**'
 - color: '#ff5733'
 
 documentation:
