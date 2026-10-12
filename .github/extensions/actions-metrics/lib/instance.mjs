@@ -110,10 +110,53 @@ export class DashboardInstance {
         this.rowUnsubscribe = null;
         this.rowSignature = null;
         this.store.entry(this.query);
+        this.datasetSeen = this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null;
         this.unsubscribe = this.store.subscribe(this.identity, () => {
+            // Captured before the broadcast, because `state()` is what drops the
+            // views a changed dataset identity invalidated.
+            const views = this.capturePeriodViews();
             this.broadcast();
             this.reproject();
+            if (views) void this.restoreViews(views, this.effectiveQuery, this.periodCurrent()).catch(() => {});
         });
+    }
+
+    /**
+     * The views to re-read when another panel on this target narrowed the shared
+     * dataset by period, or null when nothing here has to be restored.
+     *
+     * One query is in force per target, so a period filter applied in one panel
+     * reaches every panel pointed at it: the dataset identity changes, and each
+     * panel's timeline, step state and rows are dropped as answers to a dataset
+     * that is no longer shown. The panel that applied the change restores its own
+     * views in `apply`; this is the same restoration for the panels that did not.
+     */
+    capturePeriodViews() {
+        const stored = this.store.snapshot(this.identity);
+        const id = stored?.metrics?.meta?.dataset?.id ?? null;
+        const seen = this.datasetSeen;
+        this.datasetSeen = id;
+        // `periodViews` marks this panel as the one applying the change, which
+        // restores its views itself once the apply resolves.
+        if (!id || !seen || id === seen || this.periodViews) return null;
+        // Only a period filter over one collection: a new collection answers a
+        // different question, and its views are meant to go.
+        const source = stored?.metrics?.meta?.dataset?.sourceId ?? id;
+        // A filtered dataset is identified as `<collection>:<from>:<to>`, so the
+        // collection a seen identity belonged to is its first field.
+        if (source !== String(seen).split(":")[0]) return null;
+        const views = {
+            timeline: this.timelineRequest,
+            steps: this.steps.settings,
+            rows: Boolean(this.rowSignature),
+        };
+        return views.timeline || views.steps || views.rows ? views : null;
+    }
+
+    /** True while the dataset the restoration was started for is still the one shown. */
+    periodCurrent() {
+        const id = this.datasetSeen;
+        return () => (this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null) === id;
     }
 
     /**
@@ -724,25 +767,36 @@ export class DashboardInstance {
         this.broadcast();
         if (!views) return done;
         return done.then(async result => {
-            if (result.status !== "ready" || !current()) return result;
-            if (views.rows) this.requestRows();
-            if (views.timeline && !this.timelineRequest) await this.project(views.timeline);
-            if (!current()) return result;
-            if (views.steps && this.steps.status === "idle") {
-                const { generation, signal } = this.beginStepRequest();
-                try {
-                    const steps = await this.store.withDataset(next, dataset => collectStepMetrics({
-                        dataset, target: targetOf(next), filters: filtersOf(next), limits: limitsOf(next),
-                        cwd: this.store.cwd, ...views.steps, signal,
-                    }));
-                    this.setStepMetrics(views.steps, steps, generation);
-                } catch (error) {
-                    this.setStepError(views.steps, error, generation);
-                }
-            }
+            if (result.status !== "ready") return result;
+            await this.restoreViews(views, next, current);
             return result;
         }).finally(() => {
             if (generation === this.applyGeneration) this.periodViews = null;
         });
+    }
+
+    /**
+     * Re-read the views a dataset period change dropped - the single-run
+     * timeline, the step collection and the explorer rows - against `query`,
+     * stopping as soon as `current` reports that another change superseded this
+     * one.
+     */
+    async restoreViews(views, query, current) {
+        if (!current()) return;
+        if (views.rows) this.requestRows();
+        if (views.timeline && !this.timelineRequest) await this.project(views.timeline);
+        if (!current()) return;
+        if (views.steps && this.steps.status === "idle") {
+            const { generation, signal } = this.beginStepRequest();
+            try {
+                const steps = await this.store.withDataset(query, dataset => collectStepMetrics({
+                    dataset, target: targetOf(query), filters: filtersOf(query), limits: limitsOf(query),
+                    cwd: this.store.cwd, ...views.steps, signal,
+                }));
+                this.setStepMetrics(views.steps, steps, generation);
+            } catch (error) {
+                this.setStepError(views.steps, error, generation);
+            }
+        }
     }
 }
