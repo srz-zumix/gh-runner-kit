@@ -1,6 +1,6 @@
 ---
 name: gh-runner-kit
-description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners and listing organization and enterprise GitHub-hosted runner pools — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including the unaggregated job listing, Prometheus and step summary output.
+description: GitHub CLI extension (gh runner-kit) for managing GitHub Actions self-hosted runners and listing organization and enterprise GitHub-hosted runner pools — listing runners, cordoning/uncordoning them to stop or resume job scheduling without deleting the registration, downloading/registering/running the actions/runner agent, and reporting fleet utilization, queue time, label demand, concurrency, recommended capacity, hosted runner cost and per-workflow activity, including the unaggregated job listing, Prometheus and step summary output, and the billing usage of an organization, user or enterprise.
 ---
 
 # gh-runner-kit
@@ -41,6 +41,9 @@ token).
 ```text
 gh runner-kit                # Root command
 ├── available                # List runners a repository can use
+├── billing                  # Billing usage of an organization, user or enterprise
+│   ├── summary               # Gross, discount and net usage per product and SKU
+│   └── usage                 # Billing usage lines, optionally summed with --group-by
 ├── cordon                   # Stop runners from receiving new jobs
 ├── extension                # Manage bundled Copilot CLI canvas extensions
 │   ├── install               # Install bundled extensions
@@ -109,6 +112,13 @@ hosted runner labels such as `ubuntu-latest`.
 `available` always targets a repository, and every `group` subcommand always
 targets an organization.
 
+`billing usage` and `billing summary` target an organization by default (`--owner`,
+or the owner of `--repo` or of the current repository), or a user with `--user` or an
+enterprise with `--enterprise [HOST/]ENTERPRISE`. `--enterprise` cannot be combined
+with `--owner`, `--user` or `--repo`, and `--user` cannot be combined with `--repo`.
+The billing API has no repository endpoint, so `--repo` reports the organization and
+keeps the lines of that repository.
+
 Every `group` subcommand that takes a `<group>` argument accepts either the
 runner group name or its ID, and `group runner add` / `group runner remove`
 accept the runner name or its ID the same way.
@@ -154,6 +164,74 @@ Reading the organization runner groups requires organization owner permission.
 Runner groups are an organization feature, so only the repository-level runners
 are listed for a user-owned repository.
 Use `list --type repo` instead when only repository-level runners are needed.
+
+### billing summary
+
+Shows the billing usage summary: the gross, discount and net quantity and amount of
+each product and SKU used in the period. The API is in public preview. Reading
+organization usage requires organization owner or billing manager access; enterprise
+usage requires enterprise owner or billing manager access. Amounts are in USD and are
+not an invoice.
+
+```bash
+gh runner-kit billing summary [--repo [HOST/]OWNER/REPO | --owner OWNER | --user USER | --enterprise [HOST/]ENTERPRISE] \
+  [--year YYYY] [--month M] [--day D] [--cost-center ID] [--product PRODUCT] [--sku SKU] \
+  [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+All options are optional. Table output is used by default; JSON output is the full API
+summary. Only the last 24 months are available.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--cost-center` | - | Summarize a single cost center by ID (enterprise only) |
+| `--day` | whole month | Summarize a single day, 1-31 |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; exclusive with `--owner`, `--user` and `--repo` |
+| `--format` | - | Output format: `json`. Table output is used when not specified |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--month` | whole year | Summarize a single month, 1-12 |
+| `--owner` | current repository owner | Select an organization by owner name; exclusive with `--user` |
+| `--product` | `actions` | Summarize only this billing product; empty summarizes every product |
+| `-R`, `--repo` | current repository | Select a repository; only that repository is summarized |
+| `--sku` | every SKU | Summarize only this SKU, such as `actions_linux` |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--user` | - | Select a user account by name; exclusive with `--repo` |
+| `--year` | current year | Summarize a single year, with four digits |
+
+### billing usage
+
+Lists the lines of the billing usage report: the date, product, SKU, quantity, unit,
+price and gross, discount and net amounts of what was used. Only the lines of `--product`
+are shown (default `actions`). The enhanced billing platform is required. Reading
+organization usage requires organization owner or billing manager access; enterprise
+usage requires enterprise owner or billing manager access. Amounts are in USD and are
+not an invoice.
+
+```bash
+gh runner-kit billing usage [--repo [HOST/]OWNER/REPO | --owner OWNER | --user USER | --enterprise [HOST/]ENTERPRISE] \
+  [--year YYYY] [--month M] [--day D] [--hour H] [--cost-center ID] [--product PRODUCT] \
+  [--group-by date|org|product|repo|sku] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+```
+
+All options are optional. Table output is used by default; JSON output is the list of
+lines, or of sums with `--group-by`. Only the last 24 months are available.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--cost-center` | - | Report a single cost center by ID (enterprise only) |
+| `--day` | whole month | Report a single day, 1-31 |
+| `--enterprise` | - | Select an enterprise using `[HOST/]ENTERPRISE`; exclusive with `--owner`, `--user` and `--repo` |
+| `--format` | - | Output format: `json`. Table output is used when not specified |
+| `--group-by` | - | Sum the usage lines by `date`, `org`, `product`, `repo` or `sku` instead of listing them |
+| `--hour` | whole day | Report a single hour, 0-23 (organization and user only) |
+| `-q`, `--jq` | - | Filter JSON output using a jq expression |
+| `--month` | whole year | Report a single month, 1-12 |
+| `--owner` | current repository owner | Select an organization by owner name; exclusive with `--user` |
+| `--product` | `actions` | Report only this billing product; empty reports every product |
+| `-R`, `--repo` | current repository | Select a repository; the lines of that repository are kept |
+| `-t`, `--template` | - | Format JSON output using a Go template |
+| `--user` | - | Select a user account by name; exclusive with `--repo` |
+| `--year` | current year | Report a single year, with four digits |
 
 ### cordon
 
