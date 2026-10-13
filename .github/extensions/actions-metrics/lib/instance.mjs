@@ -743,7 +743,12 @@ export class DashboardInstance {
             && datasetQueryId(next) === datasetQueryId(this.effectiveQuery)
             && (next.filterFrom !== this.effectiveQuery.filterFrom || next.filterTo !== this.effectiveQuery.filterTo);
         if (periodOnly) {
-            const dataset = this.store.entry(this.effectiveQuery).dataset;
+            const { dataset, status } = this.store.entry(this.effectiveQuery);
+            if (status === "loading") {
+                const error = new Error("Wait for the collection to finish before setting a period filter");
+                error.code = "loading";
+                throw error;
+            }
             if (!dataset) {
                 const error = new Error("Load a dataset before setting a period filter");
                 error.code = "no_dataset";
