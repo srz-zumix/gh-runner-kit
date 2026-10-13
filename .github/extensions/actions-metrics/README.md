@@ -27,6 +27,64 @@ To use it outside this repository, copy the directory to `~/.copilot/extensions/
 
 Ask Copilot to open the dashboard, or open the **Actions metrics** canvas from the panel list.
 
+## Settings
+
+**Collection** and **Display** have separate drafts, pending-change counts,
+**Reset** and **Apply** buttons. Opening or applying one does not apply or
+discard the other's edits. Untouched fields follow live updates; conflicting
+edits show a warning. A target change discards drafts written for the old target.
+
+**Collection** contains the collection period, event, branch, workflow,
+repository filters, runner inventory, billable time and run limit. Changing
+these fetches a new dataset. Its **Execution** settings change request
+concurrency for the next collection only, without collecting immediately.
+**Display** contains dataset period filtering, report labels/grouping/buckets,
+self-hosted filtering, capacity targets, runner projections and explorer row
+limits. These re-read the retained snapshot without GitHub requests;
+they cannot be applied before a dataset is loaded or during collection.
+
+In **Collection**, optional **Collection start** and **Collection end**
+select an inclusive-start, exclusive-end period by workflow run creation time.
+The controls use your local timezone and send absolute timestamps to the CLI.
+An empty start uses **Window** days back from the end; an empty end uses now.
+API inputs `since` and `until` accept RFC3339 or `YYYY-MM-DD` (midnight UTC).
+`since` overrides `days` (default 30). A custom end requires a CLI build with
+`metrics collect --until`.
+
+After loading, **Display → Dataset period filter** narrows the retained dataset
+without GitHub requests. Optional `filterFrom` and `filterTo` are inclusive
+start and exclusive end; an empty bound uses that side of the collected period.
+Both must stay within the coverage shown below the group heading. Press
+**Clear period filter**, then **Apply**, to restore the whole original dataset.
+All tabs, agent summaries, job/step rows, single-run timelines and exports use
+the same selected runs and their jobs, including historical attempts. Loaded
+steps, runner projections and explorer rows are re-read when the filter changes.
+Runner occupancy charts still clip job intervals to the selected window; step
+durations and cost minutes retain whole executions, not partial-job estimates.
+Inventory remains the current inventory, not a historical inventory.
+
+Both period groups offer **Today**, **Yesterday**, **This week**, **Last week**,
+**This month**, **Last month**, **Last 7 days** and **Last 30 days** presets.
+Calendar boundaries use your local timezone, with weeks starting on Monday;
+rolling days are exact 24-hour periods. Presets only populate their own draft:
+press that editor's **Apply** to use them. Current collection periods keep the
+end empty, meaning now when applied; completed periods have a fixed exclusive
+end. Rolling collection presets set **Window** to 7 or 30 and clear both
+dates, so subsequent refreshes still cover that many days.
+Dataset presets select only the intersection with collected coverage.
+Partial coverage is marked in the preset menu and shows the requested and
+available dates, explicitly identifying missing dates as not analysed.
+Presets with no overlap are disabled. Manually entered dataset bounds still
+reject dates outside coverage; they are not silently clipped.
+
+Collection changes clear the dataset filter unless new bounds are explicitly
+provided. Dataset filters are not saved as user-global preferences.
+`metrics.meta.dataset.window` describes the selected period,
+`collectionWindow` the original coverage, and `sourceId` the retained collection
+identity; `runs`/`jobs` are selected counts and `collectedRuns`/`collectedJobs`
+are original counts. Invalid, reversed, future collection bounds and filters
+outside coverage report errors rather than silently widening or swapping dates.
+
 ## Tabs
 
 | Tab | What it reports |

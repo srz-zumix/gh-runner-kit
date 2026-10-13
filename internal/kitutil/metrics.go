@@ -25,6 +25,7 @@ type MetricsFlags struct {
 	Type         string
 	Days         int
 	Since        string
+	Until        string
 	MaxRuns      int
 	Concurrency  int
 	Branch       string
@@ -77,7 +78,7 @@ func WithoutFormatFlags() AddOption {
 // also forbidding combinations, such as --repo together with --owner, that stay legal
 // when collecting from the API.
 var collectionFlagNames = []string{
-	"repo", "owner", "type", "days", "since", "max-runs", "concurrency",
+	"repo", "owner", "type", "days", "since", "until", "max-runs", "concurrency",
 	"branch", "event", "workflow", "all-repos", "include-repo", "exclude-repo",
 }
 
@@ -94,6 +95,7 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 	AddTypeFlag(cmd, &m.Type)
 	f.IntVar(&m.Days, "days", metrics.DefaultDays, "Aggregate over the last N days")
 	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (cannot be used with --days)")
+	f.StringVar(&m.Until, "until", "", "Exclusive end time, as YYYY-MM-DD or RFC3339 (default now; --days counts back from this time)")
 	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per repository (0 for no limit)")
 	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of per-run API requests to issue in parallel")
 	f.StringVar(&m.Branch, "branch", "", "Keep only the workflow runs of this branch")
@@ -125,7 +127,7 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 	}
 }
 
-// Window resolves the aggregation window from the --days/--since flags. Commands that must
+// Window resolves the aggregation window from the --days/--since/--until flags. Commands that must
 // validate the window before collecting data can call this first and hand the result to
 // CollectWithWindow, so validation and collection agree on a single window.
 // When --input is set, the window comes from the snapshot instead, so a report run
@@ -138,7 +140,7 @@ func (m *MetricsFlags) Window() (metrics.Window, error) {
 		}
 		return snap.Data.Window, nil
 	}
-	return metrics.ParseWindow(m.Days, m.Since, time.Now())
+	return metrics.ParseWindowEndingAt(m.Days, m.Since, m.Until, time.Now())
 }
 
 // loadSnapshot decodes --input once and reuses it for every later call in the same

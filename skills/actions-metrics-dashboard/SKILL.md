@@ -65,7 +65,7 @@ text; they do not identify a repository workflow file.
 
 | Action | Purpose |
 | --- | --- |
-| `set_filters` | Change the target, the window, the filters or the limits, and re-collect. Every field is optional; an omitted field keeps its value. |
+| `set_filters` | Change the target, the window, the filters or the limits. Collection fields re-collect; display fields, including `filterFrom`/`filterTo`, re-read the retained dataset without GitHub requests. Every field is optional; an omitted field keeps its value. |
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
@@ -270,11 +270,56 @@ repository target and collect it.
 
 Passed to `open_canvas` and to `set_filters` alike.
 
+The toolbar separates **Collection** (dataset-changing settings) from
+**Display** (retained-dataset filters and reports). Each has its own draft,
+pending count, **Reset** and **Apply**; applying or resetting one leaves the
+other's edits intact. Collection includes periods, event/branch/workflow,
+repository patterns, inventory, billable time and run limits. Request
+concurrency is also there, but applies to the next collection without fetching
+immediately. Display includes period filters, labels, grouping, buckets,
+self-hosted filtering, capacity targets, projections and explorer row budgets.
+It makes no GitHub requests and cannot be applied without a loaded dataset or
+during collection. Target changes discard old-target drafts; live conflicting
+edits are identified before applying.
+
+Both period groups offer Today, Yesterday, This week, Last week, This month,
+Last month, Last 7 days and Last 30 days. Local calendar boundaries use Monday
+weeks; rolling days are exact 24-hour periods. Presets fill only that editor's
+draft, requiring **Apply**. Current collection periods leave `until` empty
+(now when applied), while completed periods set a fixed exclusive end.
+Rolling collection presets set `days` to 7 or 30 and clear `since`/`until`
+so refreshes keep the same rolling duration.
+Dataset presets intersect the requested dates with original collected coverage
+and explicitly mark partial coverage, showing requested and available dates.
+No-overlap presets are disabled. This clipping is a UI preset operation only:
+manually entered or agent-supplied dates outside coverage remain errors.
+Never describe missing preset dates as analysed.
+
 **Target** — `repo` (`[HOST/]OWNER/REPO`), `owner` (`[HOST/]OWNER`), `host`.
 
 **Window and filters** — `days` (1-365, default 30), `event`, `branch`,
 `workflow` (file name such as `ci.yml`, or the workflow ID), `labels` (the
 concurrency timeline only, because no other report accepts a label filter).
+
+**Collection period** — optional `since` (inclusive start) and `until`
+(exclusive end), as RFC3339 or `YYYY-MM-DD` (midnight UTC). `since` overrides
+`days`; without it, days counts back from `until` (now when empty).
+Selection is by workflow run creation time. The Collection controls use local time.
+A custom end requires `gh runner-kit metrics collect --until`.
+
+**Dataset period filter** — optional `filterFrom` and `filterTo` narrow the
+retained dataset by the same run creation time, without GitHub requests.
+An empty bound uses the collected bound. They must stay within
+`metrics.meta.dataset.collectionWindow`; `window` is the selected period.
+All tabs, jobs, steps, single-run timelines, summaries and exports use these
+selected runs and their jobs/attempts. Loaded dependent views are re-read.
+Occupancy charts clip execution intervals; costs and steps retain whole job
+executions. `sourceId` stays the original collection identity;
+`collectedRuns`/`collectedJobs` remain the original counts. Clear both fields
+to restore the dataset. Collection changes clear these filters unless
+explicitly restated. They are not saved as global preferences.
+Invalid or reversed dates, future collection bounds and filters outside
+coverage are errors. Do not claim those periods were analysed.
 
 **Repository filters** — `includeRepos`, `excludeRepos`, patterns such as
 `octo/*` or `owner/repo`. Applied before collection, so they also cut the API

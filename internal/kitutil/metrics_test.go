@@ -79,6 +79,7 @@ func TestMetricsFlagsInputRejectsCollectionFlags(t *testing.T) {
 		{name: "owner", args: []string{"--input", "snap.json", "--owner", "octo"}},
 		{name: "days", args: []string{"--input", "snap.json", "--days", "1"}},
 		{name: "since", args: []string{"--input", "snap.json", "--since", "2026-01-01"}},
+		{name: "until", args: []string{"--input", "snap.json", "--until", "2026-02-01"}},
 		{name: "no-cache", args: []string{"--input", "snap.json", "--no-cache"}},
 		{name: "refresh", args: []string{"--input", "snap.json", "--refresh"}},
 	}
@@ -119,6 +120,7 @@ func TestMetricsFlagsWindowFromSnapshot(t *testing.T) {
 		Start: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC),
 	}
+
 	snap := &metrics.Snapshot{
 		Version:  metrics.CurrentSnapshotVersion,
 		Contents: metrics.SnapshotContents{Jobs: true},
@@ -135,6 +137,17 @@ func TestMetricsFlagsWindowFromSnapshot(t *testing.T) {
 	}
 	if !got.Start.Equal(want.Start) || !got.End.Equal(want.End) {
 		t.Fatalf("Window() = %+v, want %+v", got, want)
+	}
+}
+
+func TestMetricsFlagsWindowWithUntil(t *testing.T) {
+	flags := MetricsFlags{Days: 7, Since: "2026-01-01", Until: "2026-01-03"}
+	window, err := flags.Window()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := window.Duration(); got != 48*time.Hour {
+		t.Fatalf("Duration() = %s, want 48h", got)
 	}
 }
 

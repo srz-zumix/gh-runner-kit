@@ -298,9 +298,15 @@ function baseArgs(subcommand, { target, filters, limits, force, probe, input = "
         "metrics",
         subcommand,
         ...targetArgs(target).args,
-        "--days",
-        String(filters.days),
     ];
+    if (filters.since) args.push("--since", filters.since);
+    else args.push("--days", String(filters.days));
+    if (filters.until) {
+        if (probe && !probe.flags?.has("--until")) {
+            throw new Error("Bounded collection periods require gh runner-kit --until; update gh runner-kit");
+        }
+        args.push("--until", filters.until);
+    }
     // `metrics collect` writes a snapshot rather than a report, so it has no --format.
     if (format) {
         args.push("--format", format);
@@ -783,7 +789,7 @@ async function collectFleetSteps(result, options, warnings) {
         // the rest would each be refused in turn - or, while `gh runner-kit`
         // is still backing off, sit out its retries first. The caller reports
         // the cooldown as the snapshot's error.
-        if (rateLimitCooldown(target.host) || signal?.aborted) {
+        if ((!options.input && rateLimitCooldown(target.host)) || signal?.aborted) {
             break;
         }
         if (step.skip) {

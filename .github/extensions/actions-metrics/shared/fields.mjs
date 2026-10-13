@@ -12,6 +12,7 @@
 // `lib/jobrows.mjs` re-export them. Without that, a select in the toolbar
 // could offer a value the normalizer silently rewrites to the default - the
 // field would look settable and do nothing.
+import { localPeriodValue } from "./period.mjs";
 
 /** Keys `gh runner-kit metrics runner --group-by` accepts. */
 export const GROUP_BY_KEYS = ["name", "label", "group"];
@@ -70,24 +71,42 @@ export const MAX_DAYS = 365;
 export const FIELD_GROUPS = [
     {
         id: "collection",
+        editor: "collection",
         title: "Collection",
         effect: "Collects again",
         note: "These decide what is fetched from GitHub, so changing one discards the collection in hand and reads the window afresh.",
     },
     {
+        id: "dataset",
+        editor: "display",
+        title: "Dataset period filter",
+        effect: "No GitHub requests",
+        note: "Select runs by creation time in the retained dataset. Applies to every tab and export. Clear both dates to restore the collected period.",
+    },
+    {
+        id: "reports",
+        editor: "display",
+        title: "Reports",
+        effect: "No GitHub requests",
+        note: "Filters, grouping and capacity targets re-read the retained snapshot without changing what was collected.",
+    },
+    {
         id: "projection",
+        editor: "display",
         title: "Projection",
         effect: "Re-reads the collection",
         note: "These re-read the jobs already collected, so a change lands in seconds without asking GitHub for anything.",
     },
     {
         id: "rows",
+        editor: "display",
         title: "Job explorer",
         effect: "Refreshes explorer rows",
         note: "This bounds the raw job rows the explorer holds in the browser.",
     },
     {
         id: "operational",
+        editor: "collection",
         title: "Execution",
         effect: "Waits for the next collection",
         note: "This changes how fast the requests go out rather than what they ask for, so it applies the next time something is collected.",
@@ -110,7 +129,35 @@ export const QUERY_FIELDS = [
         max: MAX_DAYS,
         step: 1,
         required: true,
-        hint: "How many days back to read, counted from now.",
+        hint: "Days back from Collection end (now when empty). Ignored while Collection start is set.",
+    },
+    {
+        name: "since",
+        group: "collection",
+        label: "Collection start (inclusive)",
+        control: "datetime",
+        hint: "Local time. Select runs created at or after this time; empty uses Window.",
+    },
+    {
+        name: "until",
+        group: "collection",
+        label: "Collection end (exclusive)",
+        control: "datetime",
+        hint: "Local time. Select runs created before this time; empty uses now.",
+    },
+    {
+        name: "filterFrom",
+        group: "dataset",
+        label: "Filter start (inclusive)",
+        control: "datetime",
+        hint: "Local time, inside dataset coverage. Empty uses the collected start.",
+    },
+    {
+        name: "filterTo",
+        group: "dataset",
+        label: "Filter end (exclusive)",
+        control: "datetime",
+        hint: "Local time, inside dataset coverage. Empty uses the collected end.",
     },
     {
         name: "event",
@@ -138,11 +185,11 @@ export const QUERY_FIELDS = [
     },
     {
         name: "labels",
-        group: "collection",
+        group: "reports",
         label: "Runs-on labels",
         control: "labels",
         placeholder: "all",
-        hint: "Comma-separated. Keeps jobs requesting every one of these labels.",
+        hint: "Concurrency timeline only. Keeps jobs requesting every comma-separated label.",
     },
     {
         name: "includeRepos",
@@ -172,7 +219,7 @@ export const QUERY_FIELDS = [
     },
     {
         name: "bucket",
-        group: "collection",
+        group: "reports",
         label: "Bucket",
         control: "select",
         options: BUCKET_KEYS,
@@ -180,7 +227,7 @@ export const QUERY_FIELDS = [
     },
     {
         name: "groupBy",
-        group: "collection",
+        group: "reports",
         label: "Group runners by",
         control: "select",
         options: GROUP_BY_KEYS,
@@ -196,14 +243,14 @@ export const QUERY_FIELDS = [
     },
     {
         name: "selfHostedOnly",
-        group: "collection",
+        group: "reports",
         label: "Self-hosted runs only",
         control: "checkbox",
         hint: "Drop runs that never touched a self-hosted runner.",
     },
     {
         name: "targetWait",
-        group: "collection",
+        group: "reports",
         label: "Target queue wait",
         control: "select",
         options: TARGET_WAIT_KEYS,
@@ -211,7 +258,7 @@ export const QUERY_FIELDS = [
     },
     {
         name: "targetUtilization",
-        group: "collection",
+        group: "reports",
         label: "Target utilization",
         control: "number",
         min: 0.1,
@@ -288,6 +335,12 @@ export function fieldsOfGroup(groupId) {
     return QUERY_FIELDS.filter((field) => field.group === groupId);
 }
 
+/** Each setting belongs to exactly one independently applied editor. */
+export function fieldsOfEditor(editorId) {
+    const groups = new Set(FIELD_GROUPS.filter(group => group.editor === editorId).map(group => group.id));
+    return QUERY_FIELDS.filter(field => groups.has(field.group));
+}
+
 /** Look one field up by the name it carries in the query. */
 export function fieldByName(name) {
     return QUERY_FIELDS.find((field) => field.name === name);
@@ -299,6 +352,11 @@ export function fieldByName(name) {
  * equal to the state it came from rather than differing by type alone.
  */
 export function readFieldValue(field, raw) {
+    if (field.control === "datetime") {
+        if (!raw) return "";
+        const time = new Date(raw).getTime();
+        return Number.isFinite(time) ? new Date(time).toISOString() : String(raw);
+    }
     if (field.control === "checkbox") {
         return Boolean(raw);
     }
@@ -318,6 +376,7 @@ export function readFieldValue(field, raw) {
 
 /** Render a query value into what the control should display. */
 export function writeFieldValue(field, value) {
+    if (field.control === "datetime") return localPeriodValue(value);
     if (field.control === "checkbox") {
         return Boolean(value);
     }

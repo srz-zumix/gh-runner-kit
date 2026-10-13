@@ -1,17 +1,23 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { gunzipSync } from "node:zlib";
-import { assertRateBudget, ghRaw } from "./gh.mjs";
+import { gunzip as gunzipCallback, gzip as gzipCallback } from "node:zlib";
+import { promisify } from "node:util";
 import { collectFleet, collectRuns, jobRowsCommand, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
+import { filteredWindow, periodTime } from "../shared/period.mjs";
+import { filterSnapshot, parseSnapshot, stringifySnapshot } from "./period.mjs";
+
+/** Compression runs on the libuv threadpool so a large snapshot cannot stall the event loop. */
+const gunzip = promisify(gunzipCallback);
+const gzip = promisify(gzipCallback);
 
 /** A retained snapshot owns its file until the last active reader releases it. */
 export class SharedDataset {
-    constructor(input, directory, runs, jobs, meta) {
-        Object.assign(this, { input, directory, runs, jobs, meta });
+    constructor(input, directory, runs, jobs, meta, base = null) {
+        Object.assign(this, { input, directory, runs, jobs, meta, base });
         this.references = 1;
         this.retired = false;
     }
@@ -23,7 +29,13 @@ export class SharedDataset {
     }
 
     async release() {
-        if (--this.references === 0) await rm(this.directory, { recursive: true, force: true });
+        if (--this.references === 0) {
+            try {
+                if (this.directory) await rm(this.directory, { recursive: true, force: true });
+            } finally {
+                await this.base?.release();
+            }
+        }
     }
 
     async retire() {
@@ -34,6 +46,41 @@ export class SharedDataset {
 
     select(options) {
         return selectDatasetJobs(this, options);
+    }
+}
+
+async function datasetView(base, filters, signal) {
+    const window = filteredWindow(base.meta.window, filters);
+    const filtered = Boolean(filters.filterFrom || filters.filterTo);
+    const from = periodTime(window.Start);
+    const to = periodTime(window.End);
+    const runs = filtered ? base.runs.filter(run => {
+        const created = periodTime(run.created_at);
+        return created >= from && created < to;
+    }) : base.runs;
+    const selected = new Set(runs.map(run => JSON.stringify([run.repository, String(run.id)])));
+    const jobs = filtered ? base.jobs.filter(job => selected.has(JSON.stringify([job.Repo, String(job.RunID)]))) : base.jobs;
+    const meta = {
+        ...base.meta,
+        id: filtered ? `${base.meta.id}:${from}:${to}` : base.meta.id,
+        sourceId: base.meta.id, collectionWindow: base.meta.window,
+        collectedRuns: base.meta.runs, collectedJobs: base.meta.jobs,
+        window, runs: runs.length, jobs: jobs.length, filtered,
+    };
+    if (!filtered) return new SharedDataset(base.input, null, runs, jobs, meta, base);
+    const directory = await mkdtemp(join(tmpdir(), "actions-metrics-period-"));
+    try {
+        signal?.throwIfAborted();
+        const snapshot = parseSnapshot((await gunzip(await readFile(base.input))).toString("utf8"));
+        const input = join(directory, "snapshot.json.gz");
+        const body = await gzip(stringifySnapshot(filterSnapshot(snapshot, runs, window)));
+        signal?.throwIfAborted();
+        await writeFile(input, body, { mode: 0o600 });
+        signal?.throwIfAborted();
+        return new SharedDataset(input, directory, runs, jobs, meta, base);
+    } catch (error) {
+        await rm(directory, { recursive: true, force: true });
+        throw error;
     }
 }
 
@@ -53,15 +100,8 @@ function nativeJob(row, runs) {
 export async function collectSharedSnapshot({ target, filters, limits, cwd, dataset: retained, force = false, signal, onProgress } = {}) {
     const started = Date.now();
     if (retained?.source) {
-        retained.acquire();
-        try {
-            const warnings = [...retained.source.warnings];
-            const fleet = await collectFleet({ target, filters, limits, cwd, input: retained.input, signal, onProgress, warnings });
-            if (!fleet.summary) throw new Error("The shared dataset's fleet report could not be read; see collection warnings");
-            return { ...retained.source, target, filters, limits, dataset: retained, fleet, warnings, durationMs: Date.now() - started };
-        } finally {
-            await retained.release();
-        }
+        const base = (retained.base ?? retained).acquire();
+        return readDataset(base, { target, filters, limits, cwd, signal, onProgress, started });
     }
     await assertRateBudget(target.host, { cwd });
     const probe = await probeRunnerKit(cwd);
@@ -96,8 +136,6 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
             truncated: snapshot.Data.Truncated === true, warnings,
         };
         dataset = new SharedDataset(input, directory, runResult.rows, jobs, meta);
-        const fleet = await collectFleet({ target, filters, limits, cwd, input, signal, onProgress, warnings });
-        if (!fleet.summary) throw new Error("The shared dataset's fleet report could not be read; see collection warnings");
         const runByID = new Map(dataset.runs.map(run => [JSON.stringify([run.repository, String(run.id)]), run]));
         const owner = target.owner.toLowerCase();
         dataset.source = {
@@ -107,13 +145,39 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
             runners: (snapshot.Data.Runners ?? []).map(runner => ({ ...runner, scope: target.kind === "org" || filters.runnerType === "org" ? "organization" : "repository" })),
             hostedRunners: snapshot.Data.HostedRunners?.[owner] ?? [],
             publicRepository: snapshot.Data.RepositoryPublic?.[target.nwo] ?? null,
-            timings: [], workflows: [], fleet, warnings,
+            timings: [], workflows: [], warnings,
             collectedAt: snapshot.CreatedAt, durationMs: Date.now() - started,
+        };
+    } catch (error) {
+        if (dataset) await dataset.retire();
+        else await rm(directory, { recursive: true, force: true });
+        throw error;
+    }
+    return readDataset(dataset, { target, filters, limits, cwd, signal, onProgress, started });
+}
+
+/** Transfer one base reference to a view; a failed or retired view releases it. */
+async function readDataset(base, { target, filters, limits, cwd, signal, onProgress, started }) {
+    let dataset;
+    try {
+        dataset = await datasetView(base, filters, signal);
+        const warnings = [...base.source.warnings];
+        const days = (periodTime(dataset.meta.window.End) - periodTime(dataset.meta.window.Start)) / 86400000;
+        const fleet = await collectFleet({ target, filters: { ...filters, days }, limits, cwd, input: dataset.input, signal, onProgress, warnings });
+        if (!fleet.summary) throw new Error("The shared dataset's fleet report could not be read; see collection warnings");
+        const selected = new Set(dataset.runs.map(run => JSON.stringify([run.repository, String(run.id)])));
+        dataset.source = {
+            ...base.source, target, filters, limits, dataset, fleet, warnings,
+            runs: dataset.runs,
+            jobs: dataset.meta.filtered
+                ? base.source.jobs.filter(job => selected.has(JSON.stringify([job.__run?.repository, String(job.__run?.id)])))
+                : base.source.jobs,
+            durationMs: Date.now() - started,
         };
         return dataset.source;
     } catch (error) {
         if (dataset) await dataset.retire();
-        else await rm(directory, { recursive: true, force: true });
+        else await base.release();
         throw error;
     }
 }
