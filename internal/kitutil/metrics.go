@@ -39,6 +39,7 @@ type MetricsFlags struct {
 	Input        string
 	AllAttempts  bool
 	Pricing      bool
+	Progress     bool
 	Exporter     cmdutil.Exporter
 
 	// snapshot memoizes the --input file across the Window and collect calls of a
@@ -386,6 +387,10 @@ func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window,
 		jobs = m.jobFetcher(client)
 	}
 
+	var onProgress func(metrics.CollectionProgress) error
+	if m.Progress {
+		onProgress = MetricsProgressWriter(cmd.ErrOrStderr())
+	}
 	collector := metrics.NewCollector(client, scope, metrics.Options{
 		Repos:        repos,
 		Window:       window,
@@ -401,6 +406,7 @@ func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window,
 		SkipRunners:  skipRunners,
 		Pricing:      wantUsage || m.Pricing,
 		AllAttempts:  m.AllAttempts,
+		OnProgress:   onProgress,
 	}, jobs)
 
 	if m.AllAttempts {

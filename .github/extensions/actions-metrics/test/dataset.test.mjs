@@ -94,11 +94,15 @@ if (args[0] === "api") {
     await Promise.all([store.refresh(query), store.refresh(query)]);
     const state = store.snapshot("repo:owner/repo");
     assert.equal(state.status, "ready", state.error);
+    assert.equal(state.collectionProgress.status, "complete");
+    assert.equal(state.collectionProgress.supported, false);
+    assert.match(state.collectionProgress.reason, /update gh runner-kit/);
     assert.equal(state.metrics.overview.totals.runs, 6001);
     assert.equal(state.metrics.usage.window.jobs, 6002);
     assert.equal(state.metrics.usage.window.minutes, 12004);
     const calls = async () => (await readFile(process.env.SHARED_CALLS, "utf8")).trim().split("\n").map(JSON.parse);
-    assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    const collections = async () => (await calls()).filter(args => args[2] === "collect" && !args.includes("--help"));
+    assert.equal((await collections()).length, 1);
     const instance = new DashboardInstance({instanceId: "shared-rows-test", store, query});
     const {server, url} = await startInstanceServer(instance);
     t.after(async () => {
@@ -126,7 +130,7 @@ if (args[0] === "api") {
     assert.equal(typeof payload.collectedAt, "number");
     assert.equal(payload.datasetId, state.metrics.meta.dataset.id);
     assert.deepEqual(payload.window, state.metrics.meta.dataset.window);
-    assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    assert.equal((await collections()).length, 1);
     await store.withDataset(query, async dataset => {
         assert.ok(dataset.source.jobs.every(job => job.execution_started === true));
         const options = { dataset, cwd: directory, target: {kind: "repo", owner: "owner", name: "repo", nwo: "owner/repo", host: null}, filters: query, limits: {maxRuns: 0}, workflow: "ci.yml", runBudget: 0 };
@@ -157,12 +161,13 @@ if (args[0] === "api") {
         await exportFleet({...options, input: dataset.input, format: "json"});
     });
     const recorded = await calls();
-    assert.equal(recorded.filter(args => args[2] === "collect").length, 1);
+    assert.equal((await collections()).length, 1);
     assert.ok(recorded.filter(args => args[0] === "api").every(args => args[1] === "rate_limit"));
     await store.refresh({...query, labels: ["ubuntu-latest"], groupBy: "label", bucket: "1h",
         selfHostedOnly: true, targetWait: "2m", targetUtilization: 0.8});
     assert.equal(store.entry(query).dataset.meta.id, state.metrics.meta.dataset.id);
-    assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    assert.deepEqual(store.entry(query).collectionProgress, state.collectionProgress);
+    assert.equal((await collections()).length, 1);
     const loadedSteps = await fetch(`${url}api/steps`, {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({workflow: "ci.yml", runBudget: 0, includeAllAttempts: true}),
@@ -184,6 +189,7 @@ if (args[0] === "api") {
     assert.equal(narrowed.steps.result.meta.analysedRuns, 2);
     assert.equal(narrowed.steps.result.meta.totalJobs, 2);
     assert.equal(narrowed.timeline.matched, 2);
+    assert.deepEqual(narrowed.collectionProgress, state.collectionProgress);
     await store.rows.entry(store.rows.signature(instance.effectiveQuery)).inflight;
     assert.equal(instance.state().rows.status, "ready");
     const filteredExport = await instance.export("json");
@@ -199,7 +205,7 @@ if (args[0] === "api") {
     assert.equal(instance.state().metrics.overview.totals.runs, 6001);
     assert.equal(instance.state().steps.result.meta.totalJobs, 6002);
     assert.equal(store.entry(query).dataset.meta.id, state.metrics.meta.dataset.id);
-    assert.equal((await calls()).filter(args => args[2] === "collect").length, 1);
+    assert.equal((await collections()).length, 1);
     await assert.rejects(access(filteredDataset.input));
     const old = store.entry(query).dataset.acquire();
     const previousRevision = store.rows.signature(query);

@@ -14,6 +14,7 @@ import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
+import { beginCollectionProgress, progressDescription } from "../shared/progress.mjs";
 import {
     collectionId,
     datasetQueryId,
@@ -79,6 +80,8 @@ export class DashboardStore {
             entry.dataset = null;
             entry.status = "idle";
             entry.progress = "";
+            entry.collectionProgress = null;
+            entry.progressSignature = null;
             entry.error = null;
             entry.errorCode = null;
             entry.retryAt = null;
@@ -110,6 +113,7 @@ export class DashboardStore {
                 query: canonical,
                 status: "idle",
                 progress: "",
+                collectionProgress: null,
                 error: null,
                 errorCode: null,
                 retryAt: null,
@@ -135,6 +139,7 @@ export class DashboardStore {
             filters: filtersOf(entry.query),
             status: entry.status,
             progress: entry.progress,
+            collectionProgress: entry.collectionProgress,
             error: entry.error,
             // `rate_limited` when the last collection stopped at a rate limit;
             // `retryAt` is when the host accepts requests again.
@@ -241,6 +246,12 @@ export class DashboardStore {
 
         entry.status = "loading";
         entry.progress = "Starting";
+        if (!retained) {
+            entry.collectionProgress = beginCollectionProgress(entry.collectionProgress, {
+                resume: !bypassCache && entry.progressSignature === datasetSignature,
+            });
+            entry.progressSignature = datasetSignature;
+        }
         entry.error = null;
         entry.errorCode = null;
         entry.retryAt = null;
@@ -275,6 +286,15 @@ export class DashboardStore {
                         entry.progress = message;
                         this.emit(entry.key);
                     },
+                    onCollectionProgress: (update) => {
+                        if (generation !== entry.generation) return;
+                        entry.collectionProgress = {
+                            ...entry.collectionProgress, ...update,
+                            updatedAt: new Date().toISOString(),
+                        };
+                        if (update.detail) entry.progress = progressDescription(update.detail);
+                        this.emit(entry.key);
+                    },
                 });
                 if (generation !== entry.generation) {
                     if (snapshot.dataset !== retained) await snapshot.dataset.retire();
@@ -288,6 +308,7 @@ export class DashboardStore {
                 if (previous && previous !== entry.dataset) await previous.retire();
                 entry.status = "ready";
                 entry.progress = "";
+                if (!retained) entry.collectionProgress = { ...entry.collectionProgress, status: "complete" };
                 entry.updatedAt = snapshot.collectedAt;
                 await rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
             } catch (error) {
@@ -302,6 +323,10 @@ export class DashboardStore {
                 entry.error = error?.message ?? String(error);
                 entry.errorCode = error?.code === "rate_limited" ? "rate_limited" : null;
                 entry.retryAt = error?.resetAt ?? null;
+                if (!retained) entry.collectionProgress = {
+                    ...entry.collectionProgress,
+                    status: entry.errorCode === "rate_limited" ? "paused" : "failed",
+                };
                 this.log(`actions-metrics: refresh failed for ${entry.selector}: ${entry.error}`);
             } finally {
                 if (generation === entry.generation) {

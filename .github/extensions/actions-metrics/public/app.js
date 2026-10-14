@@ -3,6 +3,7 @@ import { workflowFileLink } from "./links.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
 import { renderDataBanner } from "./banner.js";
 import { initQueryEditors } from "./query.js";
+import { renderCollectionProgress } from "./progress.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 import { costRunnerTypeLabel, unknownCostText } from "/shared/cost.mjs";
 
@@ -21,6 +22,7 @@ const dom = {
     export: document.getElementById("export"),
     status: document.getElementById("status"),
     banner: document.getElementById("banner"),
+    collectionProgress: document.getElementById("collection-progress"),
     content: document.getElementById("content"),
     tabs: [...document.querySelectorAll(".tab")],
 };
@@ -2481,6 +2483,7 @@ function renderUsage(metrics) {
 /* ---------- shell ---------- */
 
 function renderBanner() {
+    renderCollectionProgress(dom.collectionProgress, state);
     renderDataBanner(dom.banner, state);
 }
 
@@ -2809,6 +2812,9 @@ dom.targetForm.addEventListener("submit", (event) => {
 });
 
 document.addEventListener("actions-metrics:render", () => render());
+setInterval(() => {
+    if (state?.collectionProgress?.status === "paused") renderCollectionProgress(dom.collectionProgress, state);
+}, 1000);
 
 document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {

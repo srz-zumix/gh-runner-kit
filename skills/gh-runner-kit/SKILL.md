@@ -752,7 +752,7 @@ collection in one command.
 
 ```bash
 gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--output PATH]
+  [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--progress] [--output PATH]
 ```
 
 | Option | Default | Description |
@@ -760,6 +760,7 @@ gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type
 | `--all-attempts` | `false` | Retain historical attempt metadata and jobs, deduplicating carried-over execution IDs |
 | `--output` | `-` | Write the snapshot to this file instead of stdout, gzip-compressed when the name ends in `.gz` |
 | `--pricing` | `false` | Collect visibility and hosted machine inventory without per-run billable requests |
+| `--progress` | `false` | Stream stage-local progress NDJSON to stderr, alongside diagnostics; snapshot stdout is unchanged |
 | `--usage` | `false` | Also collect billable usage, repository visibility and hosted machine inventory for `metrics cost --input` |
 
 `collect` does not accept `--input`, `--format`, `--jq` or `--template`: it is the
@@ -772,6 +773,13 @@ count runs, not attempts. Saturated run searches are recursively split into
 nonoverlapping time windows to overcome GitHub's 1,000-result search cap.
 `--max-runs 0` removes the application budget; a saturated single second is an
 explicit incomplete-coverage error.
+
+Progress records have `type: "runner-kit.metrics.progress"` and `version: 1`.
+They identify the stage and repository; jobs, historical attempts and usage
+include processed/total and cached/fetched/skipped listing counts. These are not
+API request counts or a cumulative overall percentage. Even cached historical
+job lists require attempt-metadata requests. The `complete` stage precedes
+snapshot writing, so successful command exit is still required.
 
 ### metrics concurrency
 

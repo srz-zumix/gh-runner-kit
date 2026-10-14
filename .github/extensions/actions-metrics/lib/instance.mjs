@@ -274,6 +274,7 @@ export class DashboardInstance {
             filters: filtersOf(this.effectiveQuery),
             status: stored?.status ?? "idle",
             progress: this.timelineProgress || (stored?.progress ?? ""),
+            collectionProgress: stored?.collectionProgress ?? null,
             error: stored?.error ?? null,
             errorCode: stored?.errorCode ?? null,
             retryAt: stored?.retryAt ?? null,

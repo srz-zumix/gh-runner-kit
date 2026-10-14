@@ -66,6 +66,8 @@ type Options struct {
 	Pricing bool
 	// AllAttempts includes jobs and metadata from every attempt of the selected runs.
 	AllAttempts bool
+	// OnProgress receives serialized, stage-specific updates when supplied.
+	OnProgress func(CollectionProgress) error
 }
 
 // Data holds everything a Collector gathered, together with what it could not gather.
@@ -205,6 +207,12 @@ func NewCachedAttemptJobFetcher(inner JobFetcher, cache *Cache, refresh bool) *C
 
 // Jobs implements JobFetcher.
 func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, error) {
+	jobs, _, err := f.JobsWithCache(ctx, repo, run)
+	return jobs, err
+}
+
+// JobsWithCache also reports whether this particular listing came from disk.
+func (f *CachedJobFetcher) JobsWithCache(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, bool, error) {
 	cacheable := run.GetStatus() == "completed"
 	runID := run.GetID()
 	attempt := run.GetRunAttempt()
@@ -212,13 +220,13 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 	if cacheable && !f.refresh {
 		if jobs, ok := f.load(repo, runID, attempt); ok {
 			logger.Debug("metrics: job cache hit", "run_id", runID, "attempt", attempt)
-			return jobs, nil
+			return jobs, true, nil
 		}
 	}
 
 	jobs, err := f.inner.Jobs(ctx, repo, run)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if cacheable {
@@ -226,7 +234,17 @@ func (f *CachedJobFetcher) Jobs(ctx context.Context, repo repository.Repository,
 			logger.Debug("metrics: failed to cache jobs", "run_id", runID, "error", err)
 		}
 	}
-	return jobs, nil
+	return jobs, false, nil
+}
+
+func fetchJobsWithCache(ctx context.Context, fetcher JobFetcher, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, bool, error) {
+	if cached, ok := fetcher.(interface {
+		JobsWithCache(context.Context, repository.Repository, *github.WorkflowRun) ([]*github.WorkflowJob, bool, error)
+	}); ok {
+		return cached.JobsWithCache(ctx, repo, run)
+	}
+	jobs, err := fetcher.Jobs(ctx, repo, run)
+	return jobs, false, err
 }
 
 // FetchRunAttempt reads one attempt of a workflow run. An attempt of 0 or less reads the
@@ -278,6 +296,7 @@ type Collector struct {
 	jobs        JobFetcher
 	usage       UsageFetcher
 	attemptJobs JobFetcher
+	progress    collectionProgress
 }
 
 // NewCollector builds a Collector for repo. When repo.Name is empty the runner
@@ -287,7 +306,7 @@ func NewCollector(client *gh.GitHubClient, repo repository.Repository, opts Opti
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = DefaultConcurrency
 	}
-	return &Collector{client: client, repo: repo, opts: opts, jobs: jobs}
+	return &Collector{client: client, repo: repo, opts: opts, jobs: jobs, progress: collectionProgress{callback: opts.OnProgress}}
 }
 
 // SetUsageFetcher makes Collect also retrieve the billable usage of every run, which
@@ -318,6 +337,9 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		LatestJobs:       map[int64]bool{},
 	}
 
+	if err := c.progress.stage("inventory", "", "", 0); err != nil {
+		return nil, err
+	}
 	if !c.opts.SkipRunners {
 		runners, err := gh.ListRunners(ctx, c.client, c.repo)
 		switch {
@@ -330,12 +352,20 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 		}
 	}
 
+	if err := c.progress.stage("repositories", "", "", 0); err != nil {
+		return nil, err
+	}
 	repos, err := c.targetRepositories(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, repo := range repos {
+	for index, repo := range repos {
+		repoName := parser.GetRepositoryFullName(repo)
+		c.progress.repository(index+1, len(repos))
+		if err := c.progress.stage("runs", repoName, "", 0); err != nil {
+			return nil, err
+		}
 		runs, truncated, err := c.collectRuns(ctx, repo, c.opts.MaxRuns)
 		if err != nil {
 			if gh.IsHTTPForbidden(err) || gh.IsHTTPNotFound(err) {
@@ -352,8 +382,11 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 
 		// Record which repository every run came from so per-workflow aggregation can
 		// tell equally named workflows of different repositories apart.
-		repoName := parser.GetRepositoryFullName(repo)
+		c.progress.collected(len(data.Runs), len(data.Jobs))
 		if c.opts.Pricing {
+			if err := c.progress.stage("pricing", repoName, "", 0); err != nil {
+				return nil, err
+			}
 			if err := c.collectPricing(ctx, repo, data); err != nil {
 				return nil, err
 			}
@@ -391,8 +424,12 @@ func (c *Collector) Collect(ctx context.Context) (*Data, error) {
 			maps.Copy(data.Usage, usage)
 			data.Warnings = append(data.Warnings, warnings...)
 		}
+		c.progress.collected(len(data.Runs), len(data.Jobs))
 	}
 
+	if err := c.progress.stage("complete", "", "", 0); err != nil {
+		return nil, err
+	}
 	return data, nil
 }
 
@@ -570,6 +607,9 @@ func selectWindowRuns(w Window, runs []*github.WorkflowRun, limit int) ([]*githu
 
 // collectJobs fetches the jobs of every run in parallel, bounded by --concurrency.
 func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository, runs []*github.WorkflowRun) ([]*github.WorkflowJob, []string, error) {
+	if err := c.progress.stage("jobs", parser.GetRepositoryFullName(repo), "runs", len(runs)); err != nil {
+		return nil, nil, err
+	}
 	var (
 		mu       sync.Mutex
 		jobs     []*github.WorkflowJob
@@ -581,7 +621,7 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 
 	for _, run := range runs {
 		g.Go(func() error {
-			runJobs, err := c.jobs.Jobs(ctx, repo, run)
+			runJobs, cached, err := fetchJobsWithCache(ctx, c.jobs, repo, run)
 			if err != nil {
 				if !isSkippableRunRequestError(err) {
 					return err
@@ -589,17 +629,17 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("skipped the jobs of workflow run %d: %v", run.GetID(), err))
 				mu.Unlock()
-				return nil
+				return c.progress.advance(false, true)
 			}
 
 			mu.Lock()
 			jobs = append(jobs, runJobs...)
 			mu.Unlock()
-			return nil
+			return c.progress.advance(cached, false)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	if err := errors.Join(g.Wait(), c.progress.flush()); err != nil {
 		return nil, nil, err
 	}
 	return jobs, warnings, nil
@@ -609,6 +649,9 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 // --concurrency. A run whose usage cannot be read is reported as a warning, exactly as
 // an unreadable job list is, so one run never costs the whole report.
 func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository, runs []*github.WorkflowRun) (map[int64]*github.WorkflowRunUsage, []string, error) {
+	if err := c.progress.stage("usage", parser.GetRepositoryFullName(repo), "runs", len(runs)); err != nil {
+		return nil, nil, err
+	}
 	var (
 		mu       sync.Mutex
 		usage    = make(map[int64]*github.WorkflowRunUsage, len(runs))
@@ -620,7 +663,7 @@ func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository
 
 	for _, run := range runs {
 		g.Go(func() error {
-			runUsage, err := c.usage.Usage(ctx, repo, run)
+			runUsage, cached, err := fetchUsageWithCache(ctx, c.usage, repo, run)
 			if err != nil {
 				if !isSkippableRunRequestError(err) {
 					return err
@@ -628,17 +671,17 @@ func (c *Collector) collectUsage(ctx context.Context, repo repository.Repository
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("skipped the usage of workflow run %d: %v", run.GetID(), err))
 				mu.Unlock()
-				return nil
+				return c.progress.advance(false, true)
 			}
 
 			mu.Lock()
 			usage[run.GetID()] = runUsage
 			mu.Unlock()
-			return nil
+			return c.progress.advance(cached, false)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	if err := errors.Join(g.Wait(), c.progress.flush()); err != nil {
 		return nil, nil, err
 	}
 	return usage, warnings, nil

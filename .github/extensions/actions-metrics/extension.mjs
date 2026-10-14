@@ -549,6 +549,20 @@ const canvas = createCanvas({
     inputSchema: querySchema,
     actions: [
         {
+            name: "get_collection_progress",
+            description:
+                "Read collection stage, actual processed/cache/skipped counts, the last interrupted attempt and rate-limit retry time without refreshing, waiting for collection, or making GitHub requests. Percentages apply only to a known stage, never the whole collection.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            handler: (ctx) => {
+                const state = panelFor(ctx.instanceId).instance.state();
+                return {
+                    target: state.key, scope: state.scope, status: state.status,
+                    message: state.progress, collectionProgress: state.collectionProgress,
+                    errorCode: state.errorCode, retryAt: state.retryAt,
+                };
+            },
+        },
+        {
             name: "refresh",
             description:
                 "Re-collect the metrics shown in the dashboard and return a summary of the refreshed data. Job lists of completed runs that were already fetched are reused, so a collection cut short by a GitHub API rate limit resumes where it stopped; while the rate limit is still in effect the action fails fast with code `rate_limited` instead of sending requests.",

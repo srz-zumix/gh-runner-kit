@@ -52,6 +52,12 @@ func NewCachedUsageFetcher(inner UsageFetcher, cache *Cache, refresh bool) *Cach
 
 // Usage implements UsageFetcher.
 func (f *CachedUsageFetcher) Usage(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, error) {
+	usage, _, err := f.UsageWithCache(ctx, repo, run)
+	return usage, err
+}
+
+// UsageWithCache reports whether this usage record was read from disk.
+func (f *CachedUsageFetcher) UsageWithCache(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error) {
 	cacheable := run.GetStatus() == "completed"
 	runID := run.GetID()
 	attempt := run.GetRunAttempt()
@@ -59,13 +65,13 @@ func (f *CachedUsageFetcher) Usage(ctx context.Context, repo repository.Reposito
 	if cacheable && !f.refresh {
 		if usage, ok := f.cache.LoadUsage(repo, runID, attempt); ok {
 			logger.Debug("metrics: usage cache hit", "run_id", runID)
-			return usage, nil
+			return usage, true, nil
 		}
 	}
 
 	usage, err := f.inner.Usage(ctx, repo, run)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if cacheable {
@@ -73,5 +79,15 @@ func (f *CachedUsageFetcher) Usage(ctx context.Context, repo repository.Reposito
 			logger.Debug("metrics: failed to cache usage", "run_id", runID, "error", err)
 		}
 	}
-	return usage, nil
+	return usage, false, nil
+}
+
+func fetchUsageWithCache(ctx context.Context, fetcher UsageFetcher, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error) {
+	if cached, ok := fetcher.(interface {
+		UsageWithCache(context.Context, repository.Repository, *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error)
+	}); ok {
+		return cached.UsageWithCache(ctx, repo, run)
+	}
+	usage, err := fetcher.Usage(ctx, repo, run)
+	return usage, false, err
 }

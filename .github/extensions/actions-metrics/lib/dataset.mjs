@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { gunzip as gunzipCallback, gzip as gzipCallback } from "node:zlib";
 import { promisify } from "node:util";
+import { assertRateBudget } from "./gh.mjs";
 import { collectFleet, collectRuns, jobRowsCommand, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
 import { filteredWindow, periodTime } from "../shared/period.mjs";
 import { filterSnapshot, parseSnapshot, stringifySnapshot } from "./period.mjs";
+import { parseCollectionProgress, progressDescription } from "../shared/progress.mjs";
 
 /** Compression runs on the libuv threadpool so a large snapshot cannot stall the event loop. */
 const gunzip = promisify(gunzipCallback);
@@ -97,7 +99,7 @@ function nativeJob(row, runs) {
 }
 
 /** One collection supplies every dashboard report and every subsequent tab view. */
-export async function collectSharedSnapshot({ target, filters, limits, cwd, dataset: retained, force = false, signal, onProgress } = {}) {
+export async function collectSharedSnapshot({ target, filters, limits, cwd, dataset: retained, force = false, signal, onProgress, onCollectionProgress } = {}) {
     const started = Date.now();
     if (retained?.source) {
         const base = (retained.base ?? retained).acquire();
@@ -114,8 +116,21 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         const input = join(directory, "snapshot.json.gz");
         onProgress?.("Collecting one shared dataset, including all attempts");
         const command = snapshotCommand({ target, filters, limits, output: input, allAttempts: true, pricing: true, usage: filters.billable === true, force, probe });
-        await ghRaw(command.args, { cwd, env: command.env, host: target.host ?? null, signal });
-        const snapshot = JSON.parse(gunzipSync(await readFile(input)).toString("utf8"));
+        const supported = probe.collectFlags?.has("--progress") === true;
+        const reason = supported ? "" : "Detailed collection progress requires metrics collect --progress; update gh runner-kit.";
+        onCollectionProgress?.({ supported, reason });
+        if (supported) command.args.push("--progress");
+        await runLines(command.args, command.env, cwd, () => true, signal, {
+            host: target.host ?? null,
+            onStderrLine: line => {
+                const detail = parseCollectionProgress(line);
+                if (detail) {
+                    onCollectionProgress?.({ supported: true, reason: "", detail });
+                    if (!onCollectionProgress) onProgress?.(progressDescription(detail));
+                }
+            },
+        });
+        const snapshot = JSON.parse((await gunzip(await readFile(input))).toString("utf8"));
         if (snapshot.Version !== 1 || snapshot.Contents?.AllAttempts !== true || !snapshot.Data || !snapshot.Data.LatestJobs) {
             throw new Error("The CLI did not produce an all-attempts dataset with latest-job coverage; update gh runner-kit");
         }
