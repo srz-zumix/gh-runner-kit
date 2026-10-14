@@ -8,7 +8,7 @@ import (
 func NewBillingCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "billing",
-		Short: "Report GitHub Actions billing usage of an organization, user or enterprise",
+		Short: "Report GitHub billing usage (default product: actions) of an organization, user or enterprise",
 	}
 
 	cmd.AddCommand(billing.NewSummaryCmd())
