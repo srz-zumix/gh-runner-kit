@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { gunzip as gunzipCallback, gzip as gzipCallback } from "node:zlib";
 import { promisify } from "node:util";
-import { assertRateBudget } from "./gh.mjs";
 import { collectFleet, collectRuns, jobRowsCommand, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
@@ -105,7 +104,6 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         const base = (retained.base ?? retained).acquire();
         return readDataset(base, { target, filters, limits, cwd, signal, onProgress, started });
     }
-    await assertRateBudget(target.host, { cwd });
     const probe = await probeRunnerKit(cwd);
     if (!probe.subcommands?.has("collect") || !probe.subcommands?.has("report")) {
         throw new Error("The shared dataset requires gh runner-kit metrics collect and metrics report; update gh runner-kit");
