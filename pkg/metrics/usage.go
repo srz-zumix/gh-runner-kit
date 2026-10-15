@@ -82,10 +82,14 @@ func (f *CachedUsageFetcher) UsageWithCache(ctx context.Context, repo repository
 	return usage, false, nil
 }
 
+// CacheAwareUsageFetcher is a UsageFetcher that can report whether a record came from disk.
+type CacheAwareUsageFetcher interface {
+	UsageFetcher
+	UsageWithCache(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error)
+}
+
 func fetchUsageWithCache(ctx context.Context, fetcher UsageFetcher, repo repository.Repository, run *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error) {
-	if cached, ok := fetcher.(interface {
-		UsageWithCache(context.Context, repository.Repository, *github.WorkflowRun) (*github.WorkflowRunUsage, bool, error)
-	}); ok {
+	if cached, ok := fetcher.(CacheAwareUsageFetcher); ok {
 		return cached.UsageWithCache(ctx, repo, run)
 	}
 	usage, err := fetcher.Usage(ctx, repo, run)

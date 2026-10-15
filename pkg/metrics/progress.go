@@ -61,6 +61,9 @@ func (p *collectionProgress) advance(cached, skipped bool) error {
 	default:
 		p.value.Fetched++
 	}
+	if p.callback == nil {
+		return p.err
+	}
 	if p.value.Completed == p.value.Total || time.Since(p.last) >= 200*time.Millisecond {
 		return p.emit()
 	}

@@ -237,10 +237,14 @@ func (f *CachedJobFetcher) JobsWithCache(ctx context.Context, repo repository.Re
 	return jobs, false, nil
 }
 
+// CacheAwareJobFetcher is a JobFetcher that can report whether a listing came from disk.
+type CacheAwareJobFetcher interface {
+	JobFetcher
+	JobsWithCache(ctx context.Context, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, bool, error)
+}
+
 func fetchJobsWithCache(ctx context.Context, fetcher JobFetcher, repo repository.Repository, run *github.WorkflowRun) ([]*github.WorkflowJob, bool, error) {
-	if cached, ok := fetcher.(interface {
-		JobsWithCache(context.Context, repository.Repository, *github.WorkflowRun) ([]*github.WorkflowJob, bool, error)
-	}); ok {
+	if cached, ok := fetcher.(CacheAwareJobFetcher); ok {
 		return cached.JobsWithCache(ctx, repo, run)
 	}
 	jobs, err := fetcher.Jobs(ctx, repo, run)
