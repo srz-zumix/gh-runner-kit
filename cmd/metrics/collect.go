@@ -36,7 +36,11 @@ so that the snapshot can also serve "metrics cost --input".
 It costs one extra usage request per run plus inventory requests.
 
 The snapshot is written to --output, "-" for stdout by default, and gzip-compressed
-when the name ends in .gz.`,
+when the name ends in .gz.
+
+--progress emits versioned NDJSON progress records on stderr, alongside regular
+diagnostics. Counts describe the current repository and stage, including cache
+hits and skipped records; they are not a percentage of the whole collection.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			snap, err := flags.CollectSnapshot(cmd, usage)
@@ -56,6 +60,7 @@ when the name ends in .gz.`,
 	cmd.Flags().BoolVar(&flags.AllAttempts, "all-attempts", false, "Include jobs and metadata from every attempt of the selected runs")
 	cmd.Flags().BoolVar(&flags.Pricing, "pricing", false, "Collect visibility and hosted machine inventory without per-run billable usage")
 	cmd.Flags().StringVar(&output, "output", "-", "Write the snapshot to this file instead of stdout")
+	cmd.Flags().BoolVar(&flags.Progress, "progress", false, "Emit versioned collection progress as NDJSON on stderr")
 
 	return cmd
 }

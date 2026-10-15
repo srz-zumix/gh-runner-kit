@@ -153,7 +153,15 @@ export async function probeRunnerKit(cwd) {
             } catch {
                 // An unreadable flag list only costs the optional filters.
             }
-            return { available: true, version, subcommands, jobSubcommands, flags, reason: null };
+            let collectFlags = new Set();
+            if (subcommands.has("collect")) {
+                try {
+                    collectFlags = parseFlags(await ghRaw(["runner-kit", "metrics", "collect", "--help"], { cwd }));
+                } catch {
+                    // An unreadable flag list only costs detailed collection progress.
+                }
+            }
+            return { available: true, version, subcommands, jobSubcommands, flags, collectFlags, reason: null };
         })();
     }
     return probeOnce;

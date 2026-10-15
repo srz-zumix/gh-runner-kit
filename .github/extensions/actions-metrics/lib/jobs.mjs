@@ -12,7 +12,7 @@
 // leave this module.
 
 import { spawn } from "node:child_process";
-import { assertRateBudget, ghCliEnv, isRateLimitError, noteRateLimit } from "./gh.mjs";
+import { assertRateBudget, ghCliEnv, isRateLimitError, noteRateLimit, statusFromStderr } from "./gh.mjs";
 import { jobRowsCommand, probeRunnerKit, runnerPattern, runnerPatternMatcher } from "./runnerkit.mjs";
 // One definition of the interval arithmetic, shared with the browser-side
 // explorer so the two tabs cannot report different concurrency for one window.
@@ -192,6 +192,7 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
         let pending = "";
         let stopped = false;
         let aborted = false;
+        let streamError = null;
 
         const stop = () => {
             if (!stopped) {
@@ -202,6 +203,16 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
         const onAbort = () => {
             aborted = true;
             stop();
+        };
+        const dispatch = (callback, line) => {
+            if (streamError) return false;
+            try {
+                return callback(line);
+            } catch (error) {
+                streamError = error instanceof Error ? error : new Error(String(error));
+                stop();
+                return false;
+            }
         };
         signal?.addEventListener?.("abort", onAbort, { once: true });
 
@@ -215,7 +226,7 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
                 pendingStderr += chunk;
                 let cut = pendingStderr.indexOf("\n");
                 while (cut >= 0) {
-                    onStderrLine(pendingStderr.slice(0, cut));
+                    dispatch(onStderrLine, pendingStderr.slice(0, cut));
                     pendingStderr = pendingStderr.slice(cut + 1);
                     cut = pendingStderr.indexOf("\n");
                 }
@@ -232,7 +243,7 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
             while (cut >= 0) {
                 const line = pending.slice(0, cut);
                 pending = pending.slice(cut + 1);
-                if (line.trim() && onLine(line) === false) {
+                if (line.trim() && dispatch(onLine, line) === false) {
                     stop();
                     return;
                 }
@@ -247,8 +258,12 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
         child.on("close", (code) => {
             signal?.removeEventListener?.("abort", onAbort);
             if (onStderrLine && pendingStderr) {
-                onStderrLine(pendingStderr);
+                dispatch(onStderrLine, pendingStderr);
                 pendingStderr = "";
+            }
+            if (streamError) {
+                reject(streamError);
+                return;
             }
             if (aborted) {
                 reject(new Error("The runner timeline was superseded."));
@@ -261,17 +276,22 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
             }
             // A trailing row without its newline is still a row.
             if (pending.trim()) {
-                onLine(pending);
+                dispatch(onLine, pending);
+            }
+            if (streamError) {
+                reject(streamError);
+                return;
             }
             if (code === 0) {
                 resolve({ truncated: false, stderr });
                 return;
             }
             const message = stderr.split("\n").map((line) => line.trim()).find((line) => line.startsWith("Error:"));
-            const error = new Error(message ? message.replace(/^Error:\s*/, "") : `gh runner-kit metrics jobs exited with ${code}`);
+            const error = new Error(message ? message.replace(/^Error:\s*/, "") : `gh ${args.slice(0, 3).join(" ")} exited with ${code}`);
             // Kept so a rate limit is recognized even when the log tail, not
             // the "Error:" line, is what names it.
             error.stderr = stderr;
+            error.status = statusFromStderr(stderr);
             reject(error);
         });
     });

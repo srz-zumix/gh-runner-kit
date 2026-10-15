@@ -67,6 +67,7 @@ text; they do not identify a repository workflow file.
 | --- | --- |
 | `set_filters` | Change the target, the window, the filters or the limits. Collection fields re-collect; display fields, including `filterFrom`/`filterTo`, re-read the retained dataset without GitHub requests. Every field is optional; an omitted field keeps its value. |
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
+| `get_collection_progress` | Read collection status, current attempt, last interrupted stage, numeric counters, error code and retry time. Takes no input; does not wait for completion or make GitHub requests. |
 | `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
 | `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `repository` (exact `OWNER/REPO`; empty/omitted means all), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
@@ -77,6 +78,30 @@ text; they do not identify a repository workflow file.
 carrying `*`), `all` (every runner, the expensive path) or `clear` (restore the
 fleet-wide chart). `exclude` is not one of the three; it narrows whichever of
 the first two runs.
+
+## Collection progress and rate limits
+
+The progress card streams the repository ordinal and current collection stage.
+Jobs, historical attempts and usage have processed/total and
+cached/fetched/skipped listing counts; skipped records are unavailable, not
+successful reads. Percentages apply only to that stage, never the whole
+organization, and no ETA is estimated. Counts are records/listings, not API
+requests: a listing can be paginated, and historical attempt metadata still needs
+requests even when its jobs are cached.
+
+On rate limits the counters remain visible with the retry time and countdown.
+Ordinary Refresh reuses available cached completed job/usage listings and keeps
+one prior interrupted stage separately from the new attempt, never adding counts.
+Cooldown Refresh makes no new collection requests; retry after reset is manual.
+Changed collection settings, hard refresh or changed credentials clear previous
+counters. Display-only settings keep the source collection's progress.
+The API/cache-complete event precedes snapshot/report processing; only a successful
+dashboard collection marks the source dataset complete.
+
+Use `get_collection_progress` to inspect progress while loading or rate-limited.
+Do not refresh to obtain progress. Old CLI versions show an explicit update notice
+instead of numeric counters; detailed telemetry needs `metrics collect --progress`.
+Progress is in-memory and is cleared when the extension restarts.
 
 ## Hosted runner names
 
@@ -380,7 +405,7 @@ a real answer meaning "this repository put no job on the fleet", not a failure.
 | A workflow appears twice with the same name | Two repositories of the organization share the workflow name. Read the `repository` field; the rows are grouped by repository and workflow path. |
 | The runner inventory is missing and a 403 is reported | The token lacks the runner scopes. Everything derived from runs and jobs is still reported; only the inventory is skipped. |
 | A report is named as unavailable in the installed version | The `gh runner-kit` binary predates that subcommand. Run `gh extension upgrade runner-kit`. |
-| Refreshing the panel hits API rate limits | The fleet collection uses `gh runner-kit metrics report` to gather every `fleet` section in one collection when the installed extension supports it, instead of one call per section. An older extension falls back to one call per section and reports a warning suggesting `gh extension upgrade runner-kit`; upgrading removes most of the requests. Reusing an open panel (`set_filters`, not reopening) and narrowing `days`/`includeRepos`/`maxRuns` cut the remaining ones. |
+| Refreshing the panel hits API rate limits | Read `get_collection_progress` for stopped counters and `retryAt`, then wait for reset before ordinary Refresh. Every tab reads one shared `metrics collect` snapshot; available completed job/usage cache entries are reused, but historical metadata still needs requests. Narrowing collection `days`/`includeRepos`/`maxRuns` cuts work; changing these resets prior progress. |
 | An organization collection is very slow | `maxRuns` is per repository and defaults to unlimited. Narrow with `includeRepos`, a shorter `days`, or a `maxRuns` cap. |
 | Run counts disagree with a number the CLI printed earlier | The panel and a bare CLI call cut the window at the same instant, but a cached collection is older. Call `refresh`. |
 | The panel is stale after the extension was edited | `extension.mjs` and `lib/` need an extension reload; `public/` only needs the panel reloaded. |

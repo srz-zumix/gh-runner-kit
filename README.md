@@ -502,7 +502,7 @@ Options:
 ### Collect the workflow activity every other metrics command reports from
 
 ```sh
-gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--output PATH]
+gh runner-kit metrics collect [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--all-attempts] [--pricing] [--usage] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--progress] [--output PATH]
 ```
 
 Collect the runner inventory, the workflow runs and their jobs once, and write the result to a snapshot file.
@@ -523,6 +523,15 @@ bounds fail before API collection.
 
 The snapshot is written to `--output`, `-` for stdout by default, and gzip-compressed when the name ends in `.gz`.
 
+Optional `--progress` (default `false`) writes versioned NDJSON progress records
+to stderr alongside ordinary diagnostics, leaving snapshot stdout unchanged.
+Records have `type: "runner-kit.metrics.progress"` and `version: 1`. They report
+the current stage and repository, with processed/total and cached/fetched/skipped
+listings for jobs, historical attempts and usage. Counts are stage-local records,
+not API requests or an overall percentage. Historical attempt metadata still
+requires requests even when its job list is cached. The `complete` stage means
+API/cache collection finished, not that writing the snapshot succeeded.
+
 Options:
 
 | Option | Default | Description |
@@ -539,12 +548,13 @@ Options:
 | `--no-cache` | `false` | Do not read or write cached per-run metrics data |
 | `--output` | `-` | Write the snapshot to this file instead of stdout |
 | `--pricing` | `false` | Collect repository visibility and hosted machine inventory without billable usage |
+| `--progress` | `false` | Stream versioned stage progress NDJSON to stderr, mixed with diagnostics |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
-| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
+| `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC |
 | `--usage` | `false` | Also collect billable usage, repository visibility and hosted machine inventory for `metrics cost --input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
 

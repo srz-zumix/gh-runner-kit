@@ -50,6 +50,35 @@ body {
     gap: 8px;
 }
 
+.collection-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 12px 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-muted);
+}
+
+.collection-progress--paused {
+    border-color: var(--warning);
+}
+
+.collection-progress p {
+    margin: 0;
+}
+
+.collection-progress small,
+.collection-progress__note {
+    color: var(--muted);
+}
+
+.collection-progress progress {
+    width: 100%;
+    accent-color: var(--accent);
+}
+
 .target-picker {
     position: relative;
     flex: 0 1 auto;

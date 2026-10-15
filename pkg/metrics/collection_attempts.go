@@ -2,11 +2,13 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
+	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -24,6 +26,13 @@ func mergeCollectedJobs(latest, historical []*github.WorkflowJob) []*github.Work
 }
 
 func (c *Collector) collectHistoricalJobs(ctx context.Context, repo repository.Repository, runs []*github.WorkflowRun) ([]*github.WorkflowRun, []*github.WorkflowJob, []string, error) {
+	total := 0
+	for _, run := range runs {
+		total += max(0, run.GetRunAttempt()-1)
+	}
+	if err := c.progress.stage("attempts", parser.GetRepositoryFullName(repo), "attempts", total); err != nil {
+		return nil, nil, nil, err
+	}
 	fetcher := c.attemptJobs
 	if fetcher == nil {
 		fetcher = NewAPIAttemptJobFetcher(c.client)
@@ -39,8 +48,9 @@ func (c *Collector) collectHistoricalJobs(ctx context.Context, repo repository.R
 			group.Go(func() error {
 				run, err := FetchRunAttempt(ctx, c.client, repo, latest.GetID(), attempt)
 				var rows []*github.WorkflowJob
+				var cached bool
 				if err == nil {
-					rows, err = fetcher.Jobs(ctx, repo, run)
+					rows, cached, err = fetchJobsWithCache(ctx, fetcher, repo, run)
 				}
 				if err != nil && !isSkippableRunRequestError(err) {
 					return err
@@ -49,18 +59,18 @@ func (c *Collector) collectHistoricalJobs(ctx context.Context, repo repository.R
 				defer mu.Unlock()
 				if err != nil {
 					warnings = append(warnings, fmt.Sprintf("historical run %d attempt %d is unavailable: %v", latest.GetID(), attempt, err))
-					return nil
+					return c.progress.advance(false, true)
 				}
 				attempts = append(attempts, run)
 				jobs = append(jobs, rows...)
 				if len(rows) == 0 {
 					warnings = append(warnings, fmt.Sprintf("historical run %d attempt %d returned no jobs; GitHub may no longer retain them", latest.GetID(), attempt))
 				}
-				return nil
+				return c.progress.advance(cached, false)
 			})
 		}
 	}
-	if err := group.Wait(); err != nil {
+	if err := errors.Join(group.Wait(), c.progress.flush()); err != nil {
 		return nil, nil, nil, err
 	}
 	return attempts, jobs, warnings, nil
