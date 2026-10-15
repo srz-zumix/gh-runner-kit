@@ -12,7 +12,7 @@
 // leave this module.
 
 import { spawn } from "node:child_process";
-import { assertRateBudget, ghCliEnv, isRateLimitError, noteRateLimit } from "./gh.mjs";
+import { assertRateBudget, ghCliEnv, isRateLimitError, noteRateLimit, statusFromStderr } from "./gh.mjs";
 import { jobRowsCommand, probeRunnerKit, runnerPattern, runnerPatternMatcher } from "./runnerkit.mjs";
 // One definition of the interval arithmetic, shared with the browser-side
 // explorer so the two tabs cannot report different concurrency for one window.
@@ -291,6 +291,7 @@ function streamLines(args, env, cwd, onLine, signal, onStderrLine) {
             // Kept so a rate limit is recognized even when the log tail, not
             // the "Error:" line, is what names it.
             error.stderr = stderr;
+            error.status = statusFromStderr(stderr);
             reject(error);
         });
     });
