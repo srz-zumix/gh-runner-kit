@@ -278,6 +278,7 @@ export class DashboardInstance {
             error: stored?.error ?? null,
             errorCode: stored?.errorCode ?? null,
             retryAt: stored?.retryAt ?? null,
+            autoRetryAt: stored?.autoRetryAt ?? null,
             metrics: stored?.metrics ?? null,
             updatedAt: stored?.updatedAt ?? null,
             timeline: this.timeline,

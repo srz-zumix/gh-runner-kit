@@ -32,6 +32,7 @@ const (
 	// from jobsKind, which holds the jobs the latest attempt reports including the ones
 	// carried over from earlier attempts, so neither listing ever answers for the other.
 	attemptJobsKind = "attempt-jobs"
+	attemptRunsKind = "attempt-runs"
 )
 
 // NewCache prepares the on-disk cache root. Individual entries are placed under a
@@ -70,6 +71,20 @@ func (c *Cache) LoadAttemptJobs(repo repository.Repository, runID int64, attempt
 // SaveAttemptJobs writes the jobs of exactly attempt of repo's runID.
 func (c *Cache) SaveAttemptJobs(repo repository.Repository, runID int64, attempt int, jobs []*github.WorkflowJob) error {
 	return c.save(repo, attemptJobsKind, runID, attempt, jobs)
+}
+
+// LoadRunAttempt returns completed metadata for exactly one historical attempt.
+func (c *Cache) LoadRunAttempt(repo repository.Repository, runID int64, attempt int) (*github.WorkflowRun, bool) {
+	run, ok := load[*github.WorkflowRun](c, repo, attemptRunsKind, runID, attempt)
+	if !ok || run == nil || run.GetID() != runID || run.GetRunAttempt() != attempt || run.GetStatus() != "completed" {
+		return nil, false
+	}
+	return run, true
+}
+
+// SaveRunAttempt writes metadata for one historical attempt.
+func (c *Cache) SaveRunAttempt(repo repository.Repository, runID int64, attempt int, run *github.WorkflowRun) error {
+	return c.save(repo, attemptRunsKind, runID, attempt, run)
 }
 
 // LoadUsage returns the cached billable usage of attempt of repo's runID, reporting

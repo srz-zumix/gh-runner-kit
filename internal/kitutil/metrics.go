@@ -413,6 +413,7 @@ func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window,
 		fetcher := metrics.JobFetcher(metrics.NewAPIAttemptJobFetcher(client))
 		if cache, ok := m.cache(); ok {
 			fetcher = metrics.NewCachedAttemptJobFetcher(fetcher, cache, m.Refresh)
+			collector.SetAttemptCache(cache, m.Refresh)
 		}
 		collector.SetAttemptJobFetcher(fetcher)
 	}

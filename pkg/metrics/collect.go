@@ -294,13 +294,15 @@ func JobAttempt(job *github.WorkflowJob, runID int64) (int, error) {
 
 // Collector gathers the workflow runs, jobs and runners a metrics command needs.
 type Collector struct {
-	client      *gh.GitHubClient
-	repo        repository.Repository
-	opts        Options
-	jobs        JobFetcher
-	usage       UsageFetcher
-	attemptJobs JobFetcher
-	progress    collectionProgress
+	client          *gh.GitHubClient
+	repo            repository.Repository
+	opts            Options
+	jobs            JobFetcher
+	usage           UsageFetcher
+	attemptJobs     JobFetcher
+	attemptCache    *Cache
+	refreshAttempts bool
+	progress        collectionProgress
 }
 
 // NewCollector builds a Collector for repo. When repo.Name is empty the runner
@@ -322,6 +324,12 @@ func (c *Collector) SetUsageFetcher(usage UsageFetcher) {
 // SetAttemptJobFetcher supplies the attempt-specific job listing for history.
 func (c *Collector) SetAttemptJobFetcher(fetcher JobFetcher) {
 	c.attemptJobs = fetcher
+}
+
+// SetAttemptCache enables completed historical metadata caching, honoring refresh.
+func (c *Collector) SetAttemptCache(cache *Cache, refresh bool) {
+	c.attemptCache = cache
+	c.refreshAttempts = refresh
 }
 
 // Collect gathers the runner inventory and the workflow activity of the window.

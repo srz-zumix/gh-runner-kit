@@ -295,7 +295,22 @@ Point the panel at a repository or at an organization. The two are not equivalen
 
 ## Refresh and rate limits
 
-**Refresh** replaces the shared dataset, reusing CLI disk caches for completed jobs and billable usage. Step, Explorer and projections then read that new dataset. If collection stops at a GitHub API rate limit, cached responses let the next Refresh resume rather than fetch every completed run again. **Shift+click** Refresh to bypass the CLI cache (`gh runner-kit metrics collect --refresh`).
+**Refresh** replaces the shared dataset, reusing CLI disk caches for completed jobs,
+historical attempt metadata and billable usage. Step, Explorer and projections then
+read that new dataset. **Shift+click** Refresh to bypass the CLI cache
+(`gh runner-kit metrics collect --refresh`).
+
+Rate-limited collections resume automatically one second after the reported reset
+time while a panel remains on the target. Repeated rate limits schedule another
+retry. Automatic retries keep the original collection period and reuse caches,
+even when the interrupted collection was a hard refresh. A manual Refresh starts a
+new period unless `until` is explicit. The last complete dataset remains visible
+until the replacement collection succeeds.
+
+Manual collection, changed collection settings or credentials, closing the last
+panel for a target, and extension shutdown cancel its pending retry. Reopening a
+paused target can schedule it again; extension restarts lose in-memory retry state
+and start a new collection. They do not discard CLI disk caches.
 
 The **Collection progress** card streams the current stage, repository ordinal,
 processed/total listings, cache hits, fresh reads and skipped records. A progress
@@ -307,8 +322,10 @@ After a rate limit, the last reported counters stay visible with the retry time
 and countdown. The next ordinary Refresh shows the new attempt separately from
 the last interrupted stage; counts are never added across attempts, and a rolling
 window may change the totals. Available cached completed job/usage listings are
-reused, but historical attempt metadata still needs API requests and a listing
-may require several pages. Hard refresh, a changed collection query or changed
+reused. Completed historical metadata is cached separately from jobs; an attempt
+counts as cached only when both are reused. Uncached listings may require several
+pages, and older CLI versions may still request metadata for cached job lists.
+Hard refresh, a changed collection query or changed
 credentials clears the previous attempt's counters. Display-only changes retain
 the source collection's progress.
 
@@ -328,10 +345,10 @@ The panel stops sending requests to a host as soon as one of them is refused for
 
 | Action | What it does |
 | --- | --- |
-| `refresh` | Re-collect the current window, reusing the cached job lists. Pass `bypassCache: true` to discard them and fetch every run again. Fails with `rate_limited` while a rate limit is in effect. |
+| `refresh` | Re-collect the current window, reusing completed job lists and historical metadata. Pass `bypassCache: true` to ignore caches for this attempt. Fails with `rate_limited` during cooldown and schedules automatic resume with caches. |
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
-| `get_collection_progress` | Read collection status, current attempt and last interrupted stage, supported counters, error code and retry time. Takes no input, does not wait for collection and makes no GitHub requests. |
+| `get_collection_progress` | Read collection status, current attempt and last interrupted stage, counters, error code, reset time and scheduled `autoRetryAt`. Takes no input, does not wait for collection and makes no GitHub requests. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
 | `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally including all attempts (`includeAllAttempts`, default false), filtering an exact `repository` (`OWNER/REPO`, empty/default: all), focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner kind, `runs-on` labels, group or name, and returning jobs, steps, timeline, trend or runners JSON. |
 | `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |

@@ -699,8 +699,10 @@ Definitions to be aware of when reading the numbers:
 Job lists of completed runs are cached under the user cache directory
 (`~/Library/Caches/gh-runner-kit/metrics/` on macOS,
 `~/.cache/gh-runner-kit/metrics/` on Linux) with `0700`/`0600` permissions, keyed
-by host, owner, repository and run ID. `metrics cost` caches the billable usage
-of a run the same way. Use `--refresh` to rewrite the entries and `--no-cache`
+by host, owner, repository, run ID and attempt. `metrics cost` caches the billable usage
+of a run the same way. `metrics collect --all-attempts` also caches completed
+historical attempt metadata independently of jobs, so metadata survives a later
+job-request failure. Use `--refresh` to rewrite the entries and `--no-cache`
 to bypass the cache entirely.
 
 The table output always ends with a footer stating the window and the number of
@@ -777,8 +779,10 @@ explicit incomplete-coverage error.
 Progress records have `type: "runner-kit.metrics.progress"` and `version: 1`.
 They identify the stage and repository; jobs, historical attempts and usage
 include processed/total and cached/fetched/skipped listing counts. These are not
-API request counts or a cumulative overall percentage. Even cached historical
-job lists require attempt-metadata requests. The `complete` stage precedes
+API request counts or a cumulative overall percentage. A historical attempt counts
+as cached only when both metadata and jobs are reused. The CLI exits if its
+rate-limit retry budget is exhausted; automatic resume after reset is provided
+by the dashboard, not by a background CLI process. The `complete` stage precedes
 snapshot writing, so successful command exit is still required.
 
 ### metrics concurrency

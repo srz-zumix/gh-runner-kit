@@ -513,6 +513,12 @@ Every other `metrics` command accepts the resulting file through `--input` inste
 
 Optional `--all-attempts` (default `false`) retains historical attempt metadata and jobs as well as the latest listing. Carried-over jobs are deduplicated by execution ID; missing historical job lists produce warnings. Run budgets still count workflow runs, not attempts. Optional `--pricing` (default `false`) collects visibility and hosted machine inventory without requesting billable usage.
 
+Completed historical attempt metadata is cached on disk independently of its job
+list. Retrying after a rate limit reuses that metadata even when the previous job
+request failed. `--refresh` bypasses both caches; `--no-cache` disables both.
+The CLI exits on an exhausted retry budget; automatic resume after reset is a
+dashboard feature, not a background CLI process.
+
 Run searches are split into nonoverlapping time windows when they reach GitHub's 1,000-result search limit. `--max-runs 0` removes the application budget; a single second that still saturates the API limit is an explicit error rather than silently incomplete data.
 
 Optional `--until TIME` sets the exclusive collection end (default now).
@@ -528,8 +534,8 @@ to stderr alongside ordinary diagnostics, leaving snapshot stdout unchanged.
 Records have `type: "runner-kit.metrics.progress"` and `version: 1`. They report
 the current stage and repository, with processed/total and cached/fetched/skipped
 listings for jobs, historical attempts and usage. Counts are stage-local records,
-not API requests or an overall percentage. Historical attempt metadata still
-requires requests even when its job list is cached. The `complete` stage means
+not API requests or an overall percentage. A historical attempt counts as cached
+only when both its metadata and job list are reused. The `complete` stage means
 API/cache collection finished, not that writing the snapshot succeeded.
 
 Options:

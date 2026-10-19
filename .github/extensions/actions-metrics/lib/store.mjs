@@ -14,6 +14,7 @@ import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
+import { probeRunnerKit } from "./runnerkit.mjs";
 import { beginCollectionProgress, progressDescription } from "../shared/progress.mjs";
 import {
     collectionId,
@@ -34,6 +35,7 @@ export class DashboardStore {
         this.log = log ?? (() => {});
         this.entries = new Map();
         this.listeners = new Map();
+        this.disposed = false;
         // Job rows are keyed by their own query rather than by target: the
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
@@ -71,6 +73,8 @@ export class DashboardStore {
         // spending budget, drop the stale snapshot, and notify every panel so
         // none goes on displaying data the new token may not read.
         for (const [key, entry] of this.entries) {
+            this.cancelRetry(entry);
+            entry.collectionUntil = null;
             entry.generation = (entry.generation ?? 0) + 1;
             entry.abort?.abort();
             entry.abort = null;
@@ -117,6 +121,10 @@ export class DashboardStore {
                 error: null,
                 errorCode: null,
                 retryAt: null,
+                autoRetryAt: null,
+                retryTimer: null,
+                collectionUntil: null,
+                fixedPeriodUnsupported: false,
                 metrics: null,
                 updatedAt: null,
                 inflight: null,
@@ -145,6 +153,7 @@ export class DashboardStore {
             // `retryAt` is when the host accepts requests again.
             errorCode: entry.errorCode,
             retryAt: entry.retryAt,
+            autoRetryAt: entry.autoRetryAt,
             metrics: entry.metrics,
             updatedAt: entry.updatedAt,
         };
@@ -154,12 +163,52 @@ export class DashboardStore {
         const set = this.listeners.get(key) ?? new Set();
         set.add(listener);
         this.listeners.set(key, set);
+        const entry = this.entries.get(key);
+        if (entry && !entry.inflight && !entry.retryTimer) this.scheduleRetry(entry, entry.generation);
         return () => {
             set.delete(listener);
             if (set.size === 0) {
                 this.listeners.delete(key);
+                if (entry) this.cancelRetry(entry);
             }
         };
+    }
+
+    cancelRetry(entry) {
+        if (entry.retryTimer) clearTimeout(entry.retryTimer);
+        entry.retryTimer = null;
+        entry.autoRetryAt = null;
+    }
+
+    scheduleRetry(entry, generation) {
+        if (this.disposed || generation !== entry.generation || entry.inflight
+            || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
+        const reset = Date.parse(entry.retryAt);
+        if (!Number.isFinite(reset)) {
+            this.log(`actions-metrics: cannot automatically resume ${entry.selector}: invalid rate-limit reset time`);
+            return;
+        }
+        this.cancelRetry(entry);
+        const when = Math.max(Date.now() + 1000, reset + 1000);
+        if (entry.fixedPeriodUnsupported) {
+            this.log(`actions-metrics: automatic resume is disabled for ${entry.selector}: the installed gh runner-kit lacks --until; update gh runner-kit`);
+            return;
+        }
+        entry.autoRetryAt = new Date(when).toISOString();
+        const timer = setTimeout(() => {
+            if (this.disposed || entry.retryTimer !== timer || generation !== entry.generation
+                || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
+            this.cancelRetry(entry);
+            if (Date.now() < when) {
+                this.scheduleRetry(entry, generation);
+                this.emit(entry.key);
+                return;
+            }
+            void this.refresh(entry.query, { force: true, resume: true })
+                .catch(error => this.log(`actions-metrics: automatic resume failed for ${entry.selector}: ${error?.message ?? error}`));
+        }, Math.min(when - Date.now(), 2_147_483_647));
+        timer.unref?.();
+        entry.retryTimer = timer;
     }
 
     emit(key) {
@@ -174,10 +223,17 @@ export class DashboardStore {
     }
 
     async withDataset(query, callback) {
-        const signature = collectionId(normalizeQuery(query));
+        const normalized = normalizeQuery(query);
+        const signature = collectionId(normalized);
         await this.refresh(query);
         const entry = this.entry(query);
-        if (entry.status !== "ready" || !entry.dataset || collectionId(entry.query) !== signature) {
+        // A retained dataset stays readable while a replacement collection
+        // waits out a rate limit.
+        const readable = entry.status === "ready" || (entry.status === "error" && entry.errorCode === "rate_limited");
+        // The retained dataset must also cover the requested window: after a
+        // rate-limited switch, entry.query is new but the dataset is not.
+        if (!readable || !entry.dataset || collectionId(entry.query) !== signature
+            || entry.datasetSignature !== datasetQueryId(normalized)) {
             throw new Error(entry.error ?? "The shared dataset is not ready");
         }
         const dataset = entry.dataset.acquire();
@@ -189,8 +245,10 @@ export class DashboardStore {
     }
 
     async dispose() {
+        this.disposed = true;
         this.rows.invalidateAll();
         await Promise.all([...this.entries.values()].map(async entry => {
+            this.cancelRetry(entry);
             entry.abort?.abort();
             await entry.inflight;
             await entry.dataset?.retire();
@@ -215,7 +273,8 @@ export class DashboardStore {
      * hand is read, and re-collecting a busy organization to answer them would
      * cost half an hour for rows that would come back identical.
      */
-    async refresh(query, { force = false, bypassCache = false } = {}) {
+    async refresh(query, { force = false, bypassCache = false, resume = false } = {}) {
+        if (this.disposed) throw new Error("The dashboard store has been disposed");
         const entry = this.entry(query);
         const next = normalizeQuery(query ?? entry.query);
         const filtersChanged = collectionId(next) !== collectionId(entry.query);
@@ -244,6 +303,16 @@ export class DashboardStore {
             return this.snapshot(entry.key);
         }
 
+        // Reading retained data does not replace a collection that stopped at a
+        // rate limit, so its error and pending retry are restored afterwards.
+        const interrupted = retained && entry.errorCode === "rate_limited"
+            ? { error: entry.error, errorCode: entry.errorCode, retryAt: entry.retryAt, collectionProgress: entry.collectionProgress }
+            : null;
+        this.cancelRetry(entry);
+        // Freeze relative windows for automatic retries without changing the query.
+        if (!retained && (!resume || !entry.collectionUntil)) {
+            entry.collectionUntil = next.until || new Date().toISOString();
+        }
         entry.status = "loading";
         entry.progress = "Starting";
         if (!retained) {
@@ -271,10 +340,27 @@ export class DashboardStore {
             let snapshot;
             let committed = false;
             try {
+                let until = retained ? null : entry.collectionUntil;
+                if (!retained && !entry.query.until) {
+                    // An implicit bound is only for automatic retries; a build
+                    // without --until collects the relative window unbounded
+                    // and gives up retrying instead of failing the collection.
+                    const probe = await probeRunnerKit(this.cwd);
+                    entry.fixedPeriodUnsupported = probe.available && !probe.flags?.has("--until");
+                    if (entry.fixedPeriodUnsupported) {
+                        until = null;
+                        entry.collectionUntil = null;
+                    }
+                } else if (!retained) {
+                    entry.fixedPeriodUnsupported = false;
+                }
                 snapshot = await collectSharedSnapshot({
                     target: targetOf(entry.query),
                     dataset: retained,
-                    filters: filtersOf(entry.query),
+                    filters: {
+                        ...filtersOf(entry.query),
+                        ...(until ? { until } : {}),
+                    },
                     limits,
                     cwd: this.cwd,
                     force: bypassCache,
@@ -310,6 +396,10 @@ export class DashboardStore {
                 entry.progress = "";
                 if (!retained) entry.collectionProgress = { ...entry.collectionProgress, status: "complete" };
                 entry.updatedAt = snapshot.collectedAt;
+                if (interrupted) {
+                    entry.status = "error";
+                    Object.assign(entry, interrupted);
+                }
                 await rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
             } catch (error) {
                 if (snapshot && !committed && snapshot.dataset !== retained) await snapshot.dataset.retire();
@@ -323,6 +413,9 @@ export class DashboardStore {
                 entry.error = error?.message ?? String(error);
                 entry.errorCode = error?.code === "rate_limited" ? "rate_limited" : null;
                 entry.retryAt = error?.resetAt ?? null;
+                if (entry.errorCode === "rate_limited" && entry.fixedPeriodUnsupported) {
+                    entry.error += " Automatic resume needs gh runner-kit --until; update gh runner-kit.";
+                }
                 if (!retained) entry.collectionProgress = {
                     ...entry.collectionProgress,
                     status: entry.errorCode === "rate_limited" ? "paused" : "failed",
@@ -332,6 +425,7 @@ export class DashboardStore {
                 if (generation === entry.generation) {
                     entry.inflight = null;
                     entry.abort = null;
+                    this.scheduleRetry(entry, generation);
                     this.emit(entry.key);
                 }
             }
