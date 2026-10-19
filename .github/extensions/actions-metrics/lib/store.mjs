@@ -190,11 +190,11 @@ export class DashboardStore {
         }
         this.cancelRetry(entry);
         const when = Math.max(Date.now() + 1000, reset + 1000);
-        entry.autoRetryAt = new Date(when).toISOString();
         if (entry.fixedPeriodUnsupported) {
             this.log(`actions-metrics: automatic resume is disabled for ${entry.selector}: the installed gh runner-kit lacks --until; update gh runner-kit`);
             return;
         }
+        entry.autoRetryAt = new Date(when).toISOString();
         const timer = setTimeout(() => {
             if (this.disposed || entry.retryTimer !== timer || generation !== entry.generation
                 || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
@@ -223,13 +223,17 @@ export class DashboardStore {
     }
 
     async withDataset(query, callback) {
-        const signature = collectionId(normalizeQuery(query));
+        const normalized = normalizeQuery(query);
+        const signature = collectionId(normalized);
         await this.refresh(query);
         const entry = this.entry(query);
         // A retained dataset stays readable while a replacement collection
         // waits out a rate limit.
         const readable = entry.status === "ready" || (entry.status === "error" && entry.errorCode === "rate_limited");
-        if (!readable || !entry.dataset || collectionId(entry.query) !== signature) {
+        // The retained dataset must also cover the requested window: after a
+        // rate-limited switch, entry.query is new but the dataset is not.
+        if (!readable || !entry.dataset || collectionId(entry.query) !== signature
+            || entry.datasetSignature !== datasetQueryId(normalized)) {
             throw new Error(entry.error ?? "The shared dataset is not ready");
         }
         const dataset = entry.dataset.acquire();
