@@ -394,3 +394,35 @@ test("renderer shows stage-only percentages, retained stopped counts and retry c
     renderCollectionProgress(container, {});
     assert.equal(container.hidden, true);
 });
+
+test("reading a retained dataset during a cooldown keeps the interrupted collection's retry", async t => {
+    const {directory, calls} = await fixture(t);
+    t.mock.timers.enable({apis: ["Date", "setTimeout"], now: Date.parse("2026-10-01T00:00:00Z")});
+    const store = new DashboardStore({cwd: directory});
+    t.after(() => store.dispose());
+    const query = normalizeQuery({repo: "example/project"});
+    const entry = store.entry(query);
+    store.subscribe(entry.key, () => {});
+    process.env.PROGRESS_MODE = "success";
+    await store.refresh(query, {force: true, bypassCache: true});
+    assert.equal(entry.status, "ready", entry.error);
+    process.env.PROGRESS_MODE = "rate-limit";
+    await store.refresh(query, {force: true});
+    assert.equal(entry.errorCode, "rate_limited");
+    const until = entry.collectionUntil;
+    const collected = async () => (await calls()).filter(args => args[2] === "collect" && !args.includes("--help")).length;
+    const before = await collected();
+    assert.equal(await store.withDataset(query, () => "read"), "read");
+    assert.equal(await collected(), before, "a retained read must not collect");
+    assert.equal(entry.status, "error");
+    assert.equal(entry.errorCode, "rate_limited");
+    assert.equal(entry.collectionProgress.status, "paused");
+    assert.equal(entry.collectionUntil, until);
+    assert.ok(entry.autoRetryAt);
+    process.env.PROGRESS_MODE = "success";
+    t.mock.timers.tick(Date.parse(entry.autoRetryAt) - Date.now());
+    assert.ok(entry.inflight, "the automatic resume must still fire");
+    await entry.inflight;
+    assert.equal(entry.status, "ready", entry.error);
+    assert.equal(await collected(), before + 1);
+});

@@ -14,6 +14,7 @@ import { jobCache } from "./jobcache.mjs";
 import { RowStore } from "./rowstore.mjs";
 import { buildMetrics } from "./metrics.mjs";
 import { rememberFilters } from "./prefs.mjs";
+import { probeRunnerKit } from "./runnerkit.mjs";
 import { beginCollectionProgress, progressDescription } from "../shared/progress.mjs";
 import {
     collectionId,
@@ -123,6 +124,7 @@ export class DashboardStore {
                 autoRetryAt: null,
                 retryTimer: null,
                 collectionUntil: null,
+                fixedPeriodUnsupported: false,
                 metrics: null,
                 updatedAt: null,
                 inflight: null,
@@ -189,6 +191,10 @@ export class DashboardStore {
         this.cancelRetry(entry);
         const when = Math.max(Date.now() + 1000, reset + 1000);
         entry.autoRetryAt = new Date(when).toISOString();
+        if (entry.fixedPeriodUnsupported) {
+            this.log(`actions-metrics: automatic resume is disabled for ${entry.selector}: the installed gh runner-kit lacks --until; update gh runner-kit`);
+            return;
+        }
         const timer = setTimeout(() => {
             if (this.disposed || entry.retryTimer !== timer || generation !== entry.generation
                 || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
@@ -220,7 +226,10 @@ export class DashboardStore {
         const signature = collectionId(normalizeQuery(query));
         await this.refresh(query);
         const entry = this.entry(query);
-        if (entry.status !== "ready" || !entry.dataset || collectionId(entry.query) !== signature) {
+        // A retained dataset stays readable while a replacement collection
+        // waits out a rate limit.
+        const readable = entry.status === "ready" || (entry.status === "error" && entry.errorCode === "rate_limited");
+        if (!readable || !entry.dataset || collectionId(entry.query) !== signature) {
             throw new Error(entry.error ?? "The shared dataset is not ready");
         }
         const dataset = entry.dataset.acquire();
@@ -290,6 +299,11 @@ export class DashboardStore {
             return this.snapshot(entry.key);
         }
 
+        // Reading retained data does not replace a collection that stopped at a
+        // rate limit, so its error and pending retry are restored afterwards.
+        const interrupted = retained && entry.errorCode === "rate_limited"
+            ? { error: entry.error, errorCode: entry.errorCode, retryAt: entry.retryAt, collectionProgress: entry.collectionProgress }
+            : null;
         this.cancelRetry(entry);
         // Freeze relative windows for automatic retries without changing the query.
         if (!retained && (!resume || !entry.collectionUntil)) {
@@ -322,12 +336,26 @@ export class DashboardStore {
             let snapshot;
             let committed = false;
             try {
+                let until = retained ? null : entry.collectionUntil;
+                if (!retained && !entry.query.until) {
+                    // An implicit bound is only for automatic retries; a build
+                    // without --until collects the relative window unbounded
+                    // and gives up retrying instead of failing the collection.
+                    const probe = await probeRunnerKit(this.cwd);
+                    entry.fixedPeriodUnsupported = probe.available && !probe.flags?.has("--until");
+                    if (entry.fixedPeriodUnsupported) {
+                        until = null;
+                        entry.collectionUntil = null;
+                    }
+                } else if (!retained) {
+                    entry.fixedPeriodUnsupported = false;
+                }
                 snapshot = await collectSharedSnapshot({
                     target: targetOf(entry.query),
                     dataset: retained,
                     filters: {
                         ...filtersOf(entry.query),
-                        ...(!retained ? { until: entry.collectionUntil } : {}),
+                        ...(until ? { until } : {}),
                     },
                     limits,
                     cwd: this.cwd,
@@ -364,6 +392,10 @@ export class DashboardStore {
                 entry.progress = "";
                 if (!retained) entry.collectionProgress = { ...entry.collectionProgress, status: "complete" };
                 entry.updatedAt = snapshot.collectedAt;
+                if (interrupted) {
+                    entry.status = "error";
+                    Object.assign(entry, interrupted);
+                }
                 await rememberFilters(entry.key, entry.selector, scopeOf(entry.query), persistedFields(entry.query)).catch(() => {});
             } catch (error) {
                 if (snapshot && !committed && snapshot.dataset !== retained) await snapshot.dataset.retire();
@@ -377,6 +409,9 @@ export class DashboardStore {
                 entry.error = error?.message ?? String(error);
                 entry.errorCode = error?.code === "rate_limited" ? "rate_limited" : null;
                 entry.retryAt = error?.resetAt ?? null;
+                if (entry.errorCode === "rate_limited" && entry.fixedPeriodUnsupported) {
+                    entry.error += " Automatic resume needs gh runner-kit --until; update gh runner-kit.";
+                }
                 if (!retained) entry.collectionProgress = {
                     ...entry.collectionProgress,
                     status: entry.errorCode === "rate_limited" ? "paused" : "failed",
