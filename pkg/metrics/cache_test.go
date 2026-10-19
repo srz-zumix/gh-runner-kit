@@ -1,12 +1,63 @@
 package metrics
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v90/github"
 )
+
+func TestRunAttemptCache(t *testing.T) {
+	cache := &Cache{base: t.TempDir()}
+	repo := repository.Repository{Host: "github.com", Owner: "example", Name: "project"}
+	run := &github.WorkflowRun{ID: github.Ptr(int64(42)), RunAttempt: github.Ptr(2), Status: github.Ptr("completed")}
+	if _, ok := cache.LoadRunAttempt(repo, 42, 2); ok {
+		t.Fatal("empty cache returned metadata")
+	}
+	if err := cache.SaveRunAttempt(repo, 42, 2, run); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := cache.LoadRunAttempt(repo, 42, 2)
+	if !ok || got.GetID() != 42 || got.GetRunAttempt() != 2 {
+		t.Fatalf("unexpected cached attempt: %v, present=%v", got, ok)
+	}
+	for _, other := range []repository.Repository{
+		{Host: "git.example.test", Owner: repo.Owner, Name: repo.Name},
+		{Host: repo.Host, Owner: "another-owner", Name: repo.Name},
+		{Host: repo.Host, Owner: repo.Owner, Name: "another-project"},
+	} {
+		if _, ok := cache.LoadRunAttempt(other, 42, 2); ok {
+			t.Fatal("metadata crossed repository boundaries")
+		}
+	}
+	if _, ok := cache.LoadRunAttempt(repo, 42, 1); ok {
+		t.Fatal("metadata crossed attempt boundaries")
+	}
+	if _, ok := cache.LoadRunAttempt(repo, 43, 2); ok {
+		t.Fatal("metadata crossed run boundaries")
+	}
+	for _, invalid := range []*github.WorkflowRun{
+		nil,
+		{ID: github.Ptr(int64(43)), RunAttempt: github.Ptr(2), Status: github.Ptr("completed")},
+		{ID: github.Ptr(int64(42)), RunAttempt: github.Ptr(1), Status: github.Ptr("completed")},
+		{ID: github.Ptr(int64(42)), RunAttempt: github.Ptr(2), Status: github.Ptr("in_progress")},
+	} {
+		if err := cache.SaveRunAttempt(repo, 42, 2, invalid); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cache.LoadRunAttempt(repo, 42, 2); ok {
+			t.Fatalf("invalid metadata was reused: %v", invalid)
+		}
+	}
+	if err := os.WriteFile(cache.path(repo, attemptRunsKind, 42, 2), []byte("{"), cacheFilePerm); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.LoadRunAttempt(repo, 42, 2); ok {
+		t.Fatal("corrupt metadata was reused")
+	}
+}
 
 // TestCacheIsolatesRepositories makes sure entries sharing a run ID but belonging to
 // different repositories never collide, even when the same Cache serves every repo.

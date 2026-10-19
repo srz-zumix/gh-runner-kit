@@ -34,6 +34,7 @@ export class DashboardStore {
         this.log = log ?? (() => {});
         this.entries = new Map();
         this.listeners = new Map();
+        this.disposed = false;
         // Job rows are keyed by their own query rather than by target: the
         // explorer asks a different question of the CLI than the fleet
         // metrics do, and the two are collected and superseded separately.
@@ -71,6 +72,8 @@ export class DashboardStore {
         // spending budget, drop the stale snapshot, and notify every panel so
         // none goes on displaying data the new token may not read.
         for (const [key, entry] of this.entries) {
+            this.cancelRetry(entry);
+            entry.collectionUntil = null;
             entry.generation = (entry.generation ?? 0) + 1;
             entry.abort?.abort();
             entry.abort = null;
@@ -117,6 +120,9 @@ export class DashboardStore {
                 error: null,
                 errorCode: null,
                 retryAt: null,
+                autoRetryAt: null,
+                retryTimer: null,
+                collectionUntil: null,
                 metrics: null,
                 updatedAt: null,
                 inflight: null,
@@ -145,6 +151,7 @@ export class DashboardStore {
             // `retryAt` is when the host accepts requests again.
             errorCode: entry.errorCode,
             retryAt: entry.retryAt,
+            autoRetryAt: entry.autoRetryAt,
             metrics: entry.metrics,
             updatedAt: entry.updatedAt,
         };
@@ -154,12 +161,48 @@ export class DashboardStore {
         const set = this.listeners.get(key) ?? new Set();
         set.add(listener);
         this.listeners.set(key, set);
+        const entry = this.entries.get(key);
+        if (entry && !entry.inflight && !entry.retryTimer) this.scheduleRetry(entry, entry.generation);
         return () => {
             set.delete(listener);
             if (set.size === 0) {
                 this.listeners.delete(key);
+                if (entry) this.cancelRetry(entry);
             }
         };
+    }
+
+    cancelRetry(entry) {
+        if (entry.retryTimer) clearTimeout(entry.retryTimer);
+        entry.retryTimer = null;
+        entry.autoRetryAt = null;
+    }
+
+    scheduleRetry(entry, generation) {
+        if (this.disposed || generation !== entry.generation || entry.inflight
+            || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
+        const reset = Date.parse(entry.retryAt);
+        if (!Number.isFinite(reset)) {
+            this.log(`actions-metrics: cannot automatically resume ${entry.selector}: invalid rate-limit reset time`);
+            return;
+        }
+        this.cancelRetry(entry);
+        const when = Math.max(Date.now() + 1000, reset + 1000);
+        entry.autoRetryAt = new Date(when).toISOString();
+        const timer = setTimeout(() => {
+            if (this.disposed || entry.retryTimer !== timer || generation !== entry.generation
+                || !this.listeners.get(entry.key)?.size || entry.errorCode !== "rate_limited") return;
+            this.cancelRetry(entry);
+            if (Date.now() < when) {
+                this.scheduleRetry(entry, generation);
+                this.emit(entry.key);
+                return;
+            }
+            void this.refresh(entry.query, { force: true, resume: true })
+                .catch(error => this.log(`actions-metrics: automatic resume failed for ${entry.selector}: ${error?.message ?? error}`));
+        }, Math.min(when - Date.now(), 2_147_483_647));
+        timer.unref?.();
+        entry.retryTimer = timer;
     }
 
     emit(key) {
@@ -189,8 +232,10 @@ export class DashboardStore {
     }
 
     async dispose() {
+        this.disposed = true;
         this.rows.invalidateAll();
         await Promise.all([...this.entries.values()].map(async entry => {
+            this.cancelRetry(entry);
             entry.abort?.abort();
             await entry.inflight;
             await entry.dataset?.retire();
@@ -215,7 +260,8 @@ export class DashboardStore {
      * hand is read, and re-collecting a busy organization to answer them would
      * cost half an hour for rows that would come back identical.
      */
-    async refresh(query, { force = false, bypassCache = false } = {}) {
+    async refresh(query, { force = false, bypassCache = false, resume = false } = {}) {
+        if (this.disposed) throw new Error("The dashboard store has been disposed");
         const entry = this.entry(query);
         const next = normalizeQuery(query ?? entry.query);
         const filtersChanged = collectionId(next) !== collectionId(entry.query);
@@ -244,6 +290,11 @@ export class DashboardStore {
             return this.snapshot(entry.key);
         }
 
+        this.cancelRetry(entry);
+        // Freeze relative windows for automatic retries without changing the query.
+        if (!retained && (!resume || !entry.collectionUntil)) {
+            entry.collectionUntil = next.until || new Date().toISOString();
+        }
         entry.status = "loading";
         entry.progress = "Starting";
         if (!retained) {
@@ -274,7 +325,10 @@ export class DashboardStore {
                 snapshot = await collectSharedSnapshot({
                     target: targetOf(entry.query),
                     dataset: retained,
-                    filters: filtersOf(entry.query),
+                    filters: {
+                        ...filtersOf(entry.query),
+                        ...(!retained ? { until: entry.collectionUntil } : {}),
+                    },
                     limits,
                     cwd: this.cwd,
                     force: bypassCache,
@@ -332,6 +386,7 @@ export class DashboardStore {
                 if (generation === entry.generation) {
                     entry.inflight = null;
                     entry.abort = null;
+                    this.scheduleRetry(entry, generation);
                     this.emit(entry.key);
                 }
             }

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { beginCollectionProgress, parseCollectionProgress, progressDescription } from "../shared/progress.mjs";
-import { clearRateLimitCooldown } from "../lib/gh.mjs";
+import { clearRateLimitCooldown, setRateLimitCooldown } from "../lib/gh.mjs";
 import { DashboardStore } from "../lib/store.mjs";
 import { runLines } from "../lib/jobs.mjs";
 import { normalizeQuery } from "../lib/query.mjs";
@@ -55,6 +55,7 @@ async function fixture(t) {
     process.env.COPILOT_HOME = directory;
     process.env.PROGRESS_CALLS = join(directory, "calls.jsonl");
     process.env.PROGRESS_MODE = "rate-limit";
+    await writeFile(process.env.PROGRESS_CALLS, "");
     clearRateLimitCooldown(null);
     t.after(async () => {
         clearRateLimitCooldown(null);
@@ -93,6 +94,9 @@ if (args[0] === "api") {
         for (const value of [progress, {...progress, stage:"complete", unit:""}]) {
             process.stderr.write(JSON.stringify({type:"runner-kit.metrics.progress",version:1,...value})+"\\n");
         }
+    } else if (process.env.PROGRESS_MODE === "failure") {
+        process.stderr.write("Error: fixture collection failure\\n");
+        process.exitCode = 1;
     } else {
     const record = ${JSON.stringify(record(detail))};
     process.stderr.write("WARN fixture diagnostic\\n" + record.slice(0, 41));
@@ -111,7 +115,7 @@ if (args[0] === "api") {
 `, {mode: 0o700});
     return {
         directory,
-        calls: async () => (await readFile(process.env.PROGRESS_CALLS, "utf8")).trim().split("\n").map(JSON.parse),
+        calls: async () => (await readFile(process.env.PROGRESS_CALLS, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse),
     };
 }
 
@@ -160,6 +164,144 @@ test("streamed counters survive rate limits and repeated cooldown Refresh, but h
     assert.equal(changed.collectionProgress.interrupted, null);
     store.invalidateAuthCaches();
     assert.equal(entry.collectionProgress, null);
+});
+
+test("automatic retries reuse caches and one fixed period across cooldowns; manual Refresh starts a new period", async t => {
+    const {directory, calls} = await fixture(t);
+    t.mock.timers.enable({apis: ["Date", "setTimeout"], now: Date.parse("2026-10-01T00:00:00Z")});
+    const store = new DashboardStore({cwd: directory});
+    t.after(() => store.dispose());
+    const query = normalizeQuery({repo: "example/project"});
+    const entry = store.entry(query);
+    store.subscribe(entry.key, () => {});
+    const first = await store.refresh(query, {force: true, bypassCache: true});
+    const collected = async () => (await calls()).filter(args => args[2] === "collect" && !args.includes("--help"));
+    assert.equal(first.collectionProgress.status, "paused", first.error);
+    assert.equal(Date.parse(first.autoRetryAt) - Date.now(), 61000);
+    assert.equal(first.query.until, "");
+    t.mock.timers.tick(60000);
+    assert.equal((await collected()).length, 1, "cooldown must not send collection requests");
+    t.mock.timers.tick(1000);
+    assert.ok(entry.inflight);
+    await entry.inflight;
+    assert.equal(entry.collectionProgress.attempt, 2);
+    assert.equal(entry.collectionProgress.status, "paused");
+    assert.equal(Date.parse(entry.autoRetryAt) - Date.now(), 61000);
+    process.env.PROGRESS_MODE = "success";
+    t.mock.timers.tick(61000);
+    await entry.inflight;
+    assert.equal(entry.status, "ready", entry.error);
+    assert.equal(entry.collectionProgress.attempt, 3);
+    assert.equal(entry.autoRetryAt, null);
+    const automatic = await collected();
+    assert.equal(automatic.length, 3);
+    const until = args => args[args.indexOf("--until") + 1];
+    assert.ok(automatic.every(args => args.includes("--all-attempts")));
+    assert.ok(automatic.every(args => until(args) === "2026-10-01T00:00:00.000Z"));
+    assert.equal(automatic[0].includes("--refresh"), true);
+    assert.ok(automatic.slice(1).every(args => !args.includes("--refresh")));
+    t.mock.timers.tick(5000);
+    await store.refresh(query, {force: true});
+    assert.notEqual(until((await collected()).at(-1)), until(automatic[0]));
+    assert.equal(entry.query.until, "", "effective bounds must not overwrite the user's query");
+    setRateLimitCooldown(null, Date.now() + 30000);
+    const primary = await store.refresh(query, {force: true});
+    assert.equal(Date.parse(primary.autoRetryAt) - Date.now(), 31000);
+    t.mock.timers.tick(31000);
+    await entry.inflight;
+    assert.equal(entry.status, "ready", entry.error);
+});
+
+for (const operation of ["manual refresh", "query change", "credentials", "unsubscribe", "dispose"]) {
+    test(`${operation} cancels stale automatic retries`, async t => {
+        const {directory, calls} = await fixture(t);
+        t.mock.timers.enable({apis: ["Date", "setTimeout"], now: Date.parse("2026-10-01T00:00:00Z")});
+        const store = new DashboardStore({cwd: directory});
+        t.after(() => store.dispose());
+        const query = normalizeQuery({repo: "example/project"});
+        const entry = store.entry(query);
+        const unsubscribe = store.subscribe(entry.key, () => {});
+        await store.refresh(query);
+        assert.ok(entry.autoRetryAt);
+        const oldRetry = Date.parse(entry.autoRetryAt);
+        t.mock.timers.tick(1000);
+        if (operation === "manual refresh" || operation === "query change") {
+            clearRateLimitCooldown(null);
+            await store.refresh(operation === "query change" ? {...query, days: 7} : query, {force: true});
+            assert.ok(Date.parse(entry.autoRetryAt) > oldRetry);
+        } else if (operation === "credentials") {
+            store.invalidateAuthCaches();
+            assert.equal(entry.collectionUntil, null);
+        } else if (operation === "unsubscribe") {
+            unsubscribe();
+        } else {
+            await store.dispose();
+        }
+        const count = (await calls()).length;
+        t.mock.timers.tick(oldRetry - Date.now());
+        assert.equal(entry.inflight, null);
+        assert.equal((await calls()).length, count);
+        if (operation !== "manual refresh" && operation !== "query change") assert.equal(entry.autoRetryAt, null);
+    });
+}
+
+test("only the last subscriber cancels a retry and a reopened target schedules one retry", async t => {
+    const {directory} = await fixture(t);
+    t.mock.timers.enable({apis: ["Date", "setTimeout"], now: Date.parse("2026-10-01T00:00:00Z")});
+    const store = new DashboardStore({cwd: directory});
+    t.after(() => store.dispose());
+    const query = normalizeQuery({repo: "example/project"});
+    const entry = store.entry(query);
+    const first = store.subscribe(entry.key, () => {});
+    const second = store.subscribe(entry.key, () => {});
+    await store.refresh(query);
+    const when = entry.autoRetryAt;
+    first();
+    assert.equal(entry.autoRetryAt, when);
+    second();
+    assert.equal(entry.autoRetryAt, null);
+    t.mock.timers.tick(70000);
+    process.env.PROGRESS_MODE = "success";
+    store.subscribe(entry.key, () => {});
+    assert.equal(Date.parse(entry.autoRetryAt), Date.now() + 1000);
+    t.mock.timers.tick(1000);
+    await entry.inflight;
+    assert.equal(entry.status, "ready", entry.error);
+    assert.equal(entry.collectionProgress.attempt, 2);
+});
+
+test("non-rate-limit failures do not schedule automatic retries", async t => {
+    const {directory} = await fixture(t);
+    process.env.PROGRESS_MODE = "failure";
+    const store = new DashboardStore({cwd: directory});
+    t.after(() => store.dispose());
+    const query = normalizeQuery({repo: "example/project"});
+    const entry = store.entry(query);
+    store.subscribe(entry.key, () => {});
+    const state = await store.refresh(query);
+    assert.equal(state.status, "error");
+    assert.match(state.error, /fixture collection failure/);
+    assert.equal(state.errorCode, null);
+    assert.equal(state.autoRetryAt, null);
+    assert.equal(entry.retryTimer, null);
+});
+
+test("disposal during a rate-limited collection cannot re-arm its retry", async t => {
+    const {directory} = await fixture(t);
+    t.mock.timers.enable({apis: ["Date", "setTimeout"], now: Date.parse("2026-10-01T00:00:00Z")});
+    const store = new DashboardStore({cwd: directory});
+    const query = normalizeQuery({repo: "example/project"});
+    const entry = store.entry(query);
+    store.subscribe(entry.key, () => {});
+    setRateLimitCooldown(null, Date.now() + 30000);
+    const pending = store.refresh(query);
+    await store.dispose();
+    await pending;
+    assert.equal(entry.autoRetryAt, null);
+    assert.equal(entry.retryTimer, null);
+    t.mock.timers.tick(60000);
+    assert.equal(entry.inflight, null);
+    await assert.rejects(store.refresh(query), /disposed/);
 });
 
 test("successful telemetry commits with the dataset and survives report-only changes without collecting again", async t => {
@@ -232,7 +374,14 @@ test("renderer shows stage-only percentages, retained stopped counts and retry c
     assert.match(content(), /Last interrupted attempt:.*4\/10 runs/);
     assert.equal(container.children.some(node => node.tag === "progress"), false);
     renderCollectionProgress(container, {collectionProgress: {...progress, detail: {...detail, stage: "attempts", unit: "attempts"}}}, now);
-    assert.match(content(), /still require attempt-metadata requests/);
+    assert.match(content(), /both completed metadata and job lists are reused/);
+    renderCollectionProgress(container, {...state, autoRetryAt: new Date(now + 191000).toISOString()}, now);
+    assert.match(content(), /will resume automatically/);
+    assert.match(content(), /3m 11s remaining/);
+    assert.match(content(), /collection period stays fixed/);
+    assert.doesNotMatch(content(), /Press Refresh/);
+    renderCollectionProgress(container, {...state, autoRetryAt: new Date(now + 191000).toISOString()}, now + 200000);
+    assert.match(content(), /Waiting to resume automatically/);
     renderCollectionProgress(container, {collectionProgress: {...progress, supported: false, reason: "Update gh runner-kit", detail: null}}, now);
     assert.match(content(), /Update gh runner-kit/);
     const complete = {...detail, stage: "complete", unit: "", completed: 0, total: 0, cached: 0, fetched: 0, skipped: 0};

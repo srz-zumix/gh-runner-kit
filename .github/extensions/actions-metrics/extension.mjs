@@ -551,28 +551,28 @@ const canvas = createCanvas({
         {
             name: "get_collection_progress",
             description:
-                "Read collection stage, actual processed/cache/skipped counts, the last interrupted attempt and rate-limit retry time without refreshing, waiting for collection, or making GitHub requests. Percentages apply only to a known stage, never the whole collection.",
+                "Read collection stage, actual processed/cache/skipped counts, the last interrupted attempt and scheduled automatic retry time without refreshing, waiting for collection, or making GitHub requests. Percentages apply only to a known stage, never the whole collection.",
             inputSchema: { type: "object", properties: {}, additionalProperties: false },
             handler: (ctx) => {
                 const state = panelFor(ctx.instanceId).instance.state();
                 return {
                     target: state.key, scope: state.scope, status: state.status,
                     message: state.progress, collectionProgress: state.collectionProgress,
-                    errorCode: state.errorCode, retryAt: state.retryAt,
+                    errorCode: state.errorCode, retryAt: state.retryAt, autoRetryAt: state.autoRetryAt,
                 };
             },
         },
         {
             name: "refresh",
             description:
-                "Re-collect the metrics shown in the dashboard and return a summary of the refreshed data. Job lists of completed runs that were already fetched are reused, so a collection cut short by a GitHub API rate limit resumes where it stopped; while the rate limit is still in effect the action fails fast with code `rate_limited` instead of sending requests.",
+                "Re-collect the metrics shown in the dashboard and return a summary of the refreshed data. Completed job lists and historical attempt metadata are reused. Rate-limited collections resume automatically after reset while a panel remains on the target; during cooldown this action fails fast with code `rate_limited` instead of sending requests.",
             inputSchema: {
                 type: "object",
                 properties: {
                     bypassCache: {
                         type: "boolean",
                         description:
-                            "Discard the cached job lists and fetch every run again (`gh runner-kit metrics --refresh`). Much more expensive against the rate limit; only use it when cached data is suspected to be wrong. Defaults to false.",
+                            "Ignore cached jobs, historical metadata and usage for this collection attempt (`gh runner-kit metrics collect --refresh`). Automatic retries reuse caches. Only use it when cached data is suspected to be wrong. Defaults to false.",
                     },
                 },
                 additionalProperties: false,

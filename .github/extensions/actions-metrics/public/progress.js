@@ -42,7 +42,7 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
                 nodes.push(bar, text("small", `${(detail.completed / detail.total * 100).toFixed(1)}% of this stage only, not of the whole collection.`));
             }
             nodes.push(text("p", counts(detail)));
-            if (detail.stage === "attempts") nodes.push(text("small", "Cached historical job lists still require attempt-metadata requests."));
+            if (detail.stage === "attempts") nodes.push(text("small", "Historical attempts count as cached when both completed metadata and job lists are reused; older CLI versions may still fetch metadata."));
         }
         if (progress.updatedAt) nodes.push(text("small", `Last numeric update: ${new Date(progress.updatedAt).toLocaleString()}`));
     } else {
@@ -54,9 +54,14 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
     }
     if (progress.supported === false) nodes.push(text("p", progress.reason, "collection-progress__note"));
     if (progress.status === "paused" && state.retryAt) {
-        const reset = Date.parse(state.retryAt);
+        const automatic = Boolean(state.autoRetryAt);
+        const reset = Date.parse(state.autoRetryAt || state.retryAt);
         const seconds = Math.max(0, Math.ceil((reset - now) / 1000));
-        nodes.push(text("p", seconds > 0
+        nodes.push(text("p", automatic
+            ? seconds > 0
+                ? `Collection will resume automatically at ${new Date(reset).toLocaleString()} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Completed data is reused and the collection period stays fixed.`
+                : "Waiting to resume automatically. GitHub may still impose a new cooldown."
+            : seconds > 0
             ? `Retry after ${new Date(reset).toLocaleString()} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Refresh during the cooldown does not make new collection requests.`
             : "The reported retry time has passed. Press Refresh to resume; GitHub may still impose a new cooldown."));
     }
