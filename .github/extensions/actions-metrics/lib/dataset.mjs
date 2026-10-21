@@ -45,9 +45,10 @@ export class SharedDataset {
 
 async function datasetView(base, filters, cwd, signal) {
     const resolved = filteredWindow(base.meta.window, filters);
+    // Keep the snapshot's nanoseconds only for omitted boundaries; an explicit end stays exclusive.
     const window = {
         Start: periodTime(resolved.Start) === periodTime(base.meta.window.Start) ? base.meta.window.Start : resolved.Start,
-        End: periodTime(resolved.End) === periodTime(base.meta.window.End) ? base.meta.window.End : resolved.End,
+        End: !filters.filterTo ? base.meta.window.End : resolved.End,
     };
     const filtered = Boolean(filters.filterFrom || filters.filterTo);
     const from = periodTime(window.Start);

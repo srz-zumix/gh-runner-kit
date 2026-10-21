@@ -121,6 +121,23 @@ test("failed metadata loading and period rewriting clean temporary files without
     assert.equal(base.retired, false);
 });
 
+test("an explicit filter end inside the snapshot boundary's millisecond stays exclusive", async t => {
+    const { directory, calls } = await fixture(t);
+    const window = { Start: "2026-10-01T00:00:00Z", End: "2026-10-02T00:00:00.000000001Z" };
+    const runs = [
+        { repository: "example/project", id: 1, created_at: "2026-10-01T12:00:00Z" },
+        { repository: "example/project", id: 2, created_at: "2026-10-02T00:00:00Z" },
+    ];
+    const base = new SharedDataset("invalid", null, runs, [], { id: "synthetic", window });
+    base.source = { warnings: [] };
+    t.after(() => base.retire());
+    const filters = { filterTo: "2026-10-02T00:00:00.000Z" };
+    await assert.rejects(collectSharedSnapshot({ dataset: base, filters, cwd: directory }), /synthetic corrupt snapshot/);
+    const view = (await calls()).find(args => args[2] === "snapshot" && args.includes("--output"));
+    assert.equal(view[view.indexOf("--since") + 1], window.Start);
+    assert.equal(view[view.indexOf("--until") + 1], "2026-10-02T00:00:00.000Z");
+});
+
 test("snapshots exceeding Node's real string limit load and filter without giant strings", {
     skip: process.env.RUNNER_KIT_LARGE_SNAPSHOT_TEST !== "1",
     timeout: 240000,
