@@ -2,10 +2,14 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,11 +223,150 @@ func TestCollectionProgressRepositoryStagesAndUnknownRunTotal(t *testing.T) {
 			t.Fatalf("run discovery claimed a known total: %+v", record)
 		}
 	}
-	if !reflect.DeepEqual(stages, []string{"inventory", "repositories", "runs", "runs", "complete"}) {
+	if !reflect.DeepEqual(stages, []string{"inventory", "repositories", "runs", "runs", "runs", "runs", "runs", "runs", "complete"}) {
 		t.Fatalf("unexpected stages %v", stages)
 	}
+	for _, index := range []int{4, 7} {
+		search := records[index].RunSearch
+		if search == nil || search.Searches != 1 || search.Discovered != 1 || search.Created != "2026-10-01T00:00:00Z..2026-10-01T23:59:59Z" {
+			t.Fatalf("incorrect repository search progress: %+v", search)
+		}
+	}
 	last := records[len(records)-1]
-	if last.RepositoryIndex != 2 || last.Runs != 2 || last.Jobs != 0 {
+	if last.RepositoryIndex != 2 || last.Runs != 2 || last.Jobs != 0 || last.RunSearch != nil {
 		t.Fatalf("invalid completion %+v", last)
+	}
+}
+
+func TestCollectionProgressRunSearchesDeduplicateSplitWindows(t *testing.T) {
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	window := Window{Start: start, End: start.Add(time.Hour)}
+	var records []CollectionProgress
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		created := r.URL.Query().Get("created")
+		mu.Lock()
+		search := records[len(records)-1].RunSearch
+		mu.Unlock()
+		if search == nil || search.Created != created {
+			t.Errorf("request started before its progress update: %+v", search)
+		}
+		bounds := strings.Split(created, "..")
+		from, err := time.Parse(time.RFC3339, bounds[0])
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		to, err := time.Parse(time.RFC3339, bounds[1])
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var rows []*github.WorkflowRun
+		for i := 1999; i >= 0; i-- {
+			at := start.Add(time.Duration(i) * time.Second)
+			if !at.Before(from) && !at.After(to) {
+				rows = append(rows, runCreatedAt(int64(i+1), at))
+			}
+		}
+		if len(rows) > workflowRunSearchCap {
+			rows = rows[:workflowRunSearchCap]
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"workflow_runs": rows}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	base := server.URL + "/"
+	api, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&base, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ghclient.NewClient(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector := NewCollector(client, repository.Repository{}, Options{
+		Window: window,
+		OnProgress: func(progress CollectionProgress) error {
+			mu.Lock()
+			defer mu.Unlock()
+			records = append(records, progress)
+			return nil
+		},
+	}, nil)
+	if err := collector.progress.stage("runs", "example/project", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	runs, truncated, err := collector.collectRuns(context.Background(), repository.Repository{Owner: "example", Name: "project"}, 0)
+	if err != nil || truncated || len(runs) != 2000 {
+		t.Fatalf("runs=%d truncated=%v error=%v", len(runs), truncated, err)
+	}
+	last := records[len(records)-1].RunSearch
+	if last.Searches < 3 || last.Discovered != len(runs) {
+		t.Fatalf("split searches double-counted runs: %+v", last)
+	}
+	previous := 0
+	for index, record := range records[1:] {
+		if record.Total != 0 || record.Completed != 0 || record.Unit != "" || record.RunSearch.Discovered < previous {
+			t.Fatalf("invalid unknown-total search progress: %+v", record)
+		}
+		if record.RunSearch.Searches != index/2+1 {
+			t.Fatalf("incorrect search ordinal: %+v", record.RunSearch)
+		}
+		previous = record.RunSearch.Discovered
+	}
+	if records[1].RunSearch.Discovered != 0 {
+		t.Fatal("later updates mutated an earlier search record")
+	}
+}
+
+func TestCollectionProgressRunSearchFailures(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusForbidden} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+			}))
+			defer server.Close()
+			base := server.URL + "/"
+			api, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&base, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := ghclient.NewClient(api)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+			var records []CollectionProgress
+			collector := NewCollector(client, repository.Repository{}, Options{
+				Window: Window{Start: start, End: start.Add(time.Hour)},
+				OnProgress: func(progress CollectionProgress) error {
+					records = append(records, progress)
+					return nil
+				},
+			}, nil)
+			_, _, err = collector.collectRuns(context.Background(), repository.Repository{Owner: "example", Name: "project"}, 0)
+			want := 2
+			if status == http.StatusForbidden {
+				want = 1
+			}
+			if (err != nil) != (status == http.StatusForbidden) || len(records) != want || records[0].RunSearch.Discovered != 0 {
+				t.Fatalf("empty/failed search progress: records=%+v error=%v", records, err)
+			}
+		})
+	}
+	want := errors.New("example progress failure")
+	collector := NewCollector(nil, repository.Repository{}, Options{
+		Window: Window{Start: time.Now().Add(-time.Hour), End: time.Now()},
+		OnProgress: func(CollectionProgress) error {
+			return want
+		},
+	}, nil)
+	if _, _, err := collector.collectRuns(context.Background(), repository.Repository{}, 0); !errors.Is(err, want) {
+		t.Fatalf("search progress failure was swallowed: %v", err)
 	}
 }

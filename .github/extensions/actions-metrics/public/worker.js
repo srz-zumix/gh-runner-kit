@@ -11,6 +11,7 @@
 
 import { normalizeRows, countRowHealth } from "/shared/rows.mjs";
 import { applyExploreFilters, buildExploreAggregate, buildExploreFacets, sortRows, summarizeExplore } from "/shared/explore.mjs";
+import { decodeRowPayload } from "/shared/rowpayload.mjs";
 
 let rows = [];
 let snapshot = null;
@@ -37,8 +38,7 @@ function post(message, transfer) {
  * algorithm copy several megabytes of parsed rows across the boundary.
  */
 function load(buffer) {
-    const text = new TextDecoder().decode(new Uint8Array(buffer));
-    const payload = JSON.parse(text);
+    const payload = decodeRowPayload(buffer);
     rows = normalizeRows(payload.rows ?? []);
     snapshot = {
         id: payload.id,

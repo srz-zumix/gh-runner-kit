@@ -28,6 +28,18 @@ Do not run the CLI to answer a question about a dashboard that is already open.
 Call `get_metrics` instead: it returns what the user is looking at, so the
 answer cannot disagree with the screen.
 
+The shared dataset requires `metrics snapshot` in addition to collection, reports
+and row commands. Raw snapshots stay in Go; only compact metadata and run/job
+rows enter Node.js. Large snapshots therefore do not need one oversized
+JavaScript string. Period filtering uses the same offline CLI path and retains
+exact int64 IDs, historical attempts, carried-over jobs, usage and inventory
+without reducing coverage or making GitHub requests. Older CLI builds produce
+an explicit update error.
+
+Statistics and chart scales use fixed-argument scans instead of expanding whole
+datasets into function arguments. Large samples therefore do not overflow the
+JavaScript call stack, without sampling jobs or lowering run coverage.
+
 The extension's `gh` subprocesses use stored `gh auth login` credentials by
 default, not Copilot's inherited `GH_TOKEN`. The canvas **GitHub authentication**
 setting accepts a token for the extension's `gh` subprocesses only. It stays in
@@ -70,7 +82,7 @@ text; they do not identify a repository workflow file.
 | `get_collection_progress` | Read collection status, current attempt, last interrupted stage, numeric counters, error code, reset time and scheduled `autoRetryAt`. Takes no input; does not wait for completion or make GitHub requests. |
 | `refresh` | Re-collect the current window, reusing completed jobs and historical metadata. `bypassCache: true` ignores caches for this attempt. Fails with `rate_limited` during cooldown and schedules automatic resume with caches. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
-| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `repository` (exact `OWNER/REPO`; empty/omitted means all), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, `runnerKind` (`all`, `self-hosted`, `github-hosted`), `runsOn` (comma-separated label set), `runnerGroup`, `runner` (name, `*` wildcards), `reuseRows`. |
+| `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `repository` (exact `OWNER/REPO`; empty/omitted means all), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, optional array facets `runnerKinds`, `runsOnSets`, `runnerGroups`, `runnerNames`, legacy scalar filters `runnerKind`, `runsOn`, `runnerGroup`, `runner`, `runnerExact` (boolean, default false), and `reuseRows`. |
 | `show_run_timeline` | Show one workflow run ID or URL as a job/step Gantt in the Step timeline tab. Inputs: required `run`, optional `repo`, optional `attempt`. |
 | `export_metrics` | Publish the window through `gh runner-kit metrics export`, as `prometheus` (default) or `json`. |
 
@@ -90,10 +102,45 @@ requests: a listing can be paginated. Completed historical metadata is cached
 independently of job lists; an attempt counts as cached only when both are reused.
 Older CLI versions may still request metadata even when their jobs are cached.
 
+During **Finding workflow runs**, optional `detail.runSearch` identifies the
+current UTC `created` search period, `searches` ordinal and `discovered` unique
+run IDs in that repository. Split searches deduplicate discovered IDs, but these
+are not final selected totals or job-cache-hit counts. `cachedWindows` counts
+complete UTC days reused from the discovery cache, separately from API searches.
+A fully cached historical window can have zero searches. Updates arrive before and
+after each search, not every API page; run discovery precedes reading cached
+jobs. The card updates elapsed time and last-collector-update age
+every second while collecting, even without new telemetry. An update age alone
+does not prove a stall. Older progress-enabled builds show an explicit notice
+when run-search counters are unavailable.
+
+The existing `jobConcurrency` setting (default 6) also bounds run-list page
+requests. The first page advertises which later pages are needed; those are
+read in parallel without changing result order or the run budget. Set it to 1
+for sequential collection. Servers without a last-page link use sequential
+traversal.
+
+Discovery caches complete UTC days ending at least 24 hours ago for up to one
+hour. The latest 24 hours and partial boundary days are always searched afresh.
+Adjacent misses share a query window, so a quiet cold cache does not add a
+request for every day. Saturated searches prefer UTC-midnight splits and
+checkpoint fully covered days as they finish, before older searches complete.
+Retries after later errors or cancellation can reuse these days until expiry;
+incomplete days and budget-capped prefixes never become full-day entries.
+Freshness uses the earliest request contributing to the saved day, not the
+whole-collection start or callback completion time, and ancestor searches do
+not extend it. `cached days` counts reads, not checkpoint writes: zero on a first
+attempt does not mean checkpointing is disabled. Entries persist across extension restarts and
+are isolated by host, repository, credentials, branch, event and workflow.
+Historical reruns, status changes and deletions can take up to one hour to
+appear. **Shift+click Refresh** / `bypassCache: true` bypasses listing and
+per-run caches. The first collection, an expired cache or changed credentials
+still requires historical discovery; do not promise an instant first refresh.
+
 On rate limits the counters remain visible with the retry time and countdown.
-Ordinary Refresh reuses available cached completed job/usage listings and historical
-metadata and keeps one prior interrupted stage separately from the new attempt,
-never adding counts.
+Ordinary Refresh reuses cached historical run listings, completed job/usage
+listings and historical attempt metadata, and keeps one prior interrupted stage
+separately from the new attempt, never adding counts.
 Cooldown Refresh makes no new collection requests. While a panel remains on the
 target, collection resumes automatically one second after reset, using caches even
 if the interrupted collection was a hard refresh. Further rate limits reschedule.
@@ -245,7 +292,11 @@ An existing workflow selection is preserved even when absent from the chosen
 repository. A single-run Gantt from another repository hides its jobs with
 an explanatory notice. A bare run ID defaults to the selected repository.
 The runner inputs filter jobs after collection; pass `reuseRows: true` to
-re-aggregate the rows already collected without calling the CLI again. Use
+re-aggregate loaded rows without calling the CLI again. The UI uses searchable,
+multiselect checkbox facets, like Job explorer: **Kind**, **Runs-on**, **Group**
+and **Name**. Values within a facet are ORed; facets are ANDed. Empty selections
+mean all values. Name selections are literal, including asterisks; runs-on
+selections match complete label sets, ignoring label order and case. Use
 `section: "runners"` to compare `runs-on` pools (wait/run percentiles,
 cumulative run time and failure rate) and mention `meta.unfilteredJobs`
 when a runner filter is active. Each pool's `duration.total` is the sum of
@@ -255,6 +306,41 @@ Hovering over **Total run** shows minutes with up to two decimal places;
 missing timing samples have no minute tooltip.
 Parallel jobs and included attempts add their durations separately;
 this is cumulative runner time, not elapsed wall-clock time.
+
+Each runner pool also returns `individuals`, grouped by non-hosted runner
+`name`, with job counts, wait/run percentiles, `duration.total` and failure
+rate. Hosted-only pools have no individuals; hosted jobs in mixed pools stay
+in the parent total but not its children. The UI starts these pools collapsed;
+click **+** to expand or **-** to collapse without a data request. Expansion
+survives filter updates. Unassigned jobs remain visible as **(unassigned)**,
+but have no selectable name.
+
+Clicking an individual name or row toggles only its exact **Name**, without
+implicitly selecting its kind or runs-on set. Clicking a pool toggles its
+**Runs-on** set. Other selections remain. Chips remove individual values;
+**Clear runner filter** clears all runner selections. These actions reuse loaded
+rows without applying pending workflow, run-budget or attempt-mode edits.
+Pool and individual summaries reflect repository, job, status and runner
+filters. Facet choices still cover all sampled jobs in the selected repository,
+so hidden runners or pools can be added through the checkboxes. Run samples
+contain runs with matching jobs; not every job in a run must match. The
+single-run Gantt is not narrowed by runner facets.
+
+Agent actions accept optional arrays `runnerKinds` (exact raw kinds:
+`hosted`, `self-hosted`, `unknown`), `runsOnSets` (comma-separated complete label
+sets), `runnerGroups` (exact groups) and `runnerNames` (exact names; literal `*`).
+Each defaults to empty. HTTP requests use `runnerFilter.kinds`, `.labelSets`,
+`.groups` and `.names`. Values within a facet, including any legacy scalar
+value, are ORed; different facets are ANDed.
+
+Legacy scalar filters remain supported: `runnerKind` defaults to `all`, with
+`self-hosted` including unidentified non-hosted jobs as in the CLI and
+`github-hosted` selecting hosted jobs. `runsOn`, `runnerGroup` and `runner`
+default to empty; `runner` accepts `*` wildcards unless `runnerExact: true`
+(default false). HTTP uses `runnerFilter.kind`, `.labels`, `.group`, `.name`
+and optional `.nameExact`. Saved scalar selections appear as checkboxes;
+saved wildcard names have separate removable **Name pattern** chips.
+
 `jobStatus` matches a job lifecycle status (`queued`, `in_progress`,
 `completed`, etc.) or conclusion (`success`, `failure`, `cancelled`,
 `skipped`, etc.) and keeps all steps of matching jobs, not only steps with
@@ -265,6 +351,88 @@ and persists per target. The response echoes `jobStatus` and
 repository, or every repository when the filter is empty. Statistics,
 trends, runner pools and run samples reflect the filter, as does the
 single-run Gantt; **Copy mermaid** still exports the full run.
+
+`jobStatus: "rerun_success"` selects **Succeeded on re-run (all attempts)**.
+A job qualifies when its latest known execution succeeded after an observed
+earlier `failure`, `timed_out` or `startup_failure` in the same run. The filter
+retains all its sampled attempts, including failed jobs and successful steps
+inside failed jobs, for statistics, trends, runner totals and the run list.
+Identity is exact repository, workflow file, run ID and original job name;
+classification precedes matrix merging and runner filtering. A sibling matrix
+variant's success cannot establish recovery. Other repository, job and runner
+filters still narrow the selected history.
+
+Recovery always uses all attempts, even with `includeAllAttempts: false`.
+The UI checks and locks **Include all attempts** while recovery is selected
+but preserves the normal attempt preference, restoring it when the status
+filter changes. Switching scope can reread local shared-snapshot step rows;
+it makes no new GitHub requests. A cancellation alone, or missing evidence
+of an earlier failure, does not qualify. Histories with multiple same-name
+jobs in one attempt cannot be distinguished and are excluded with a collection
+warning; `meta.recovery` reports matched and ambiguous history counts.
+For runs in the loaded run list, the single-run Gantt shows the recovered
+jobs on failed and successful attempts. A manually opened run outside that
+list reports unavailable membership rather than guessing. HTTP accepts the
+same `jobStatus` value; pass `reuseRows: true` to reuse loaded rows.
+
+Use **Step conditions (AND)** to require multiple step outcomes within the
+same job execution and attempt. Choose a step and conclusion and press
+**Add condition** for each requirement; changing the composer choices alone
+does not apply them. Each chip is an AND condition, not an OR selection.
+Remove a chip individually or use **Clear step conditions**.
+In the UI, **Load steps** for a different workflow clears conditions (including
+legacy failed-step selections) and resets the composer. Reloading the same
+workflow preserves them. Other filters and view settings remain unchanged;
+editing the workflow draft alone does not change the loaded sample.
+For `get_step_metrics` / `POST /api/steps`, an equivalent example is:
+
+```json
+{
+  "workflow": "ci.yml",
+  "includeAllAttempts": true,
+  "stepConditions": [
+    { "name": "A", "conclusion": "failure" },
+    { "name": "B", "conclusion": "success" }
+  ],
+  "reuseRows": true
+}
+```
+
+Each condition has an exact case-sensitive `name`, a required nonempty
+`conclusion` normalized to lowercase, and optional `occurrence` (default 1).
+Asterisks are literal. Occurrence distinguishes repeated names, not step
+numbers; the second `Upload` differs from a literal `Upload #2`.
+All conditions must have observed matching steps in one exact repository,
+workflow, run, attempt and job identity, before matrix merging. Another job,
+matrix variant or attempt cannot supply an outcome. Missing or unfinished
+steps do not satisfy success. Step conclusions, not job conclusions, are used;
+`continue-on-error` can leave a failed step in a successful job.
+
+All steps of matching jobs remain, subject to the existing step and
+infrastructure display settings. The current attempt scope is preserved;
+enable **Include all attempts** and **Load steps** for historical executions.
+With `jobStatus: "rerun_success"`, classify recovery from full history before
+narrowing attempts with these conditions. Other job, status, repository and
+runner conditions still intersect. Matching statistics, trends, typical
+timelines, runner totals, run samples and single-run Gantt all use the conditions.
+Gantt checks each job's own steps, including on manually opened runs; Mermaid
+export remains full.
+
+Conditions persist per target and re-aggregate loaded rows without CLI calls.
+Responses echo canonical `stepConditions`. `stepConditionFacets` entries
+contain `name`, `occurrence`, distinct job-attempt `count` and `conclusions`
+(`value` / `count`), covering the selected repository's loaded sample regardless
+of aggregation filters, including success-only steps. Preserve saved zero-match
+conditions so they can be removed. Duplicate identical conditions are deduplicated.
+
+Explicit `stepConditions: []` or `null` clears all conditions and overrides
+legacy `failedStep`. When omitted, a legacy `failedStep` reference becomes
+one failure condition, preserving saved settings; clearing cannot resurrect it.
+The response's legacy `failedStep` is non-null only for a single failure
+condition; `failedStepFacets` remains compatible.
+`meta.stepConditionsSupported` gates the composer, while older providers
+continue to show their legacy failure selector until safely reloaded.
+
 `show_run_timeline` opens a single run, keeps waiting bars, and returns the CLI
 JSON. Use it for a run ID or URL the user names, or after selecting a run from
 the Step timeline run list.
@@ -371,7 +539,11 @@ request per run).
 the window, so an organization collects all retained runs of its repositories),
 `jobConcurrency` (1-20, default 6), `jobKind` (`all`, `self-hosted` (default),
 `github-hosted`), `topRunners` (default 40), `maxRows` (default 400000),
-`rowBudget` (Job explorer rows held in the browser, default 20000).
+`rowBudget` (Job explorer rows held in the browser, 500-1000000, default 20000).
+Higher row budgets increase browser memory use and processing time; they do not
+cap the shared dataset or fleet metrics. Row payloads remain JSON and are
+serialized and decoded in bounded batches, avoiding one oversized JavaScript
+string.
 
 Passing an empty string clears a text filter; passing an empty array clears a
 list one.

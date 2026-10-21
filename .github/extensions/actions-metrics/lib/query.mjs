@@ -355,7 +355,7 @@ export const FIELDS = {
             type: "integer",
             minimum: MIN_CONCURRENCY,
             maximum: MAX_CONCURRENCY,
-            description: `How many per-run API requests to issue in parallel, as \`--concurrency\` (default ${DEFAULTS.jobConcurrency}). It changes only how fast a collection runs, never what it returns, so it applies to the next collection rather than starting one.`,
+            description: `How many run-page or per-run API requests to issue in parallel, as \`--concurrency\` (default ${DEFAULTS.jobConcurrency}). It changes only how fast a collection runs, never what it returns, so it applies to the next collection rather than starting one.`,
         },
     },
     jobKind: {
@@ -402,7 +402,7 @@ export const FIELDS = {
             type: "integer",
             minimum: MIN_ROW_BUDGET,
             maximum: MAX_ROW_BUDGET,
-            description: `How many raw job rows the Job explorer holds in the browser (default ${DEFAULT_ROW_BUDGET}). It sizes the explorer's own collection alone, so changing it never discards the fleet metrics already in hand.`,
+            description: `How many raw job rows the Job explorer holds in the browser (default ${DEFAULT_ROW_BUDGET}, maximum ${MAX_ROW_BUDGET}). It sizes the explorer's own collection alone, so changing it never discards the fleet metrics already in hand.`,
         },
     },
 };

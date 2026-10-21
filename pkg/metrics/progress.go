@@ -8,18 +8,27 @@ import (
 
 // CollectionProgress describes one stage, not a percentage of the whole collection.
 type CollectionProgress struct {
-	Stage             string `json:"stage"`
-	Repository        string `json:"repository,omitempty"`
-	RepositoryIndex   int    `json:"repositoryIndex"`
-	RepositoriesTotal int    `json:"repositoriesTotal"`
-	Unit              string `json:"unit,omitempty"`
-	Completed         int    `json:"completed"`
-	Total             int    `json:"total"`
-	Cached            int    `json:"cached"`
-	Fetched           int    `json:"fetched"`
-	Skipped           int    `json:"skipped"`
-	Runs              int    `json:"runs"`
-	Jobs              int    `json:"jobs"`
+	Stage             string             `json:"stage"`
+	Repository        string             `json:"repository,omitempty"`
+	RepositoryIndex   int                `json:"repositoryIndex"`
+	RepositoriesTotal int                `json:"repositoriesTotal"`
+	Unit              string             `json:"unit,omitempty"`
+	Completed         int                `json:"completed"`
+	Total             int                `json:"total"`
+	Cached            int                `json:"cached"`
+	Fetched           int                `json:"fetched"`
+	Skipped           int                `json:"skipped"`
+	Runs              int                `json:"runs"`
+	Jobs              int                `json:"jobs"`
+	RunSearch         *RunSearchProgress `json:"runSearch,omitempty"`
+}
+
+// RunSearchProgress reports discovery within one repository, before its total is known.
+type RunSearchProgress struct {
+	Created       string `json:"created"`
+	Searches      int    `json:"searches"`
+	Discovered    int    `json:"discovered"`
+	CachedWindows int    `json:"cachedWindows"`
 }
 
 type collectionProgress struct {
@@ -46,6 +55,29 @@ func (p *collectionProgress) stage(stage, repo, unit string, total int) error {
 	p.value.Stage, p.value.Repository, p.value.Unit = stage, repo, unit
 	p.value.Completed, p.value.Total = 0, total
 	p.value.Cached, p.value.Fetched, p.value.Skipped = 0, 0, 0
+	p.value.RunSearch = nil
+	return p.emit()
+}
+
+func (p *collectionProgress) runSearch(created string, searches, discovered int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cached := 0
+	if p.value.RunSearch != nil {
+		cached = p.value.RunSearch.CachedWindows
+	}
+	p.value.RunSearch = &RunSearchProgress{Created: created, Searches: searches, Discovered: discovered, CachedWindows: cached}
+	return p.emit()
+}
+
+func (p *collectionProgress) runCache(created string, searches, discovered int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cached := 1
+	if p.value.RunSearch != nil {
+		cached += p.value.RunSearch.CachedWindows
+	}
+	p.value.RunSearch = &RunSearchProgress{Created: created, Searches: searches, Discovered: discovered, CachedWindows: cached}
 	return p.emit()
 }
 

@@ -17,7 +17,7 @@ const (
 	cacheFilePerm os.FileMode = 0o600
 )
 
-// Cache stores per run data of completed workflow runs on local disk.
+// Cache stores completed per-run data and short-lived historical run listings.
 // Entries are scoped per host/owner/repository and per kind, so that runs from different
 // hosts, accounts or repositories are kept apart for normal GitHub identifiers.
 type Cache struct {
@@ -146,35 +146,39 @@ func load[T any](c *Cache, repo repository.Repository, kind string, runID int64,
 // place, which is atomic on Unix, so an interrupted write never leaves a truncated entry
 // behind. A partial entry would in any case be treated as a cache miss on load.
 func (c *Cache) save(repo repository.Repository, kind string, runID int64, attempt int, value any) error {
+	return writeCacheEntry(c.path(repo, kind, runID, attempt), value)
+}
+
+func writeCacheEntry(target string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("failed to encode the %s of workflow run %d: %w", kind, runID, err)
+		return fmt.Errorf("failed to encode cache entry %s: %w", target, err)
 	}
 
-	dir := c.dir(repo, kind)
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, cacheDirPerm); err != nil {
 		return fmt.Errorf("failed to create the cache directory %s: %w", dir, err)
 	}
 
-	tmp, err := os.CreateTemp(dir, "."+kind+"-*")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(target)+"-*")
 	if err != nil {
-		return fmt.Errorf("failed to create a cache entry for workflow run %d: %w", runID, err)
+		return fmt.Errorf("failed to create cache entry %s: %w", target, err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if err := tmp.Chmod(cacheFilePerm); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("failed to set the permissions of the cache entry for workflow run %d: %w", runID, err)
+		return fmt.Errorf("failed to set the permissions of cache entry %s: %w", target, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("failed to write the cache entry for workflow run %d: %w", runID, err)
+		return fmt.Errorf("failed to write cache entry %s: %w", target, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close the cache entry for workflow run %d: %w", runID, err)
+		return fmt.Errorf("failed to close cache entry %s: %w", target, err)
 	}
-	if err := os.Rename(tmp.Name(), c.path(repo, kind, runID, attempt)); err != nil {
-		return fmt.Errorf("failed to store the cache entry for workflow run %d: %w", runID, err)
+	if err := os.Rename(tmp.Name(), target); err != nil {
+		return fmt.Errorf("failed to store cache entry %s: %w", target, err)
 	}
 	return nil
 }

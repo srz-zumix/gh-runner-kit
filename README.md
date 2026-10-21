@@ -36,6 +36,11 @@ The extension is discovered automatically when you work in a clone of this repos
 
 See [.github/extensions/actions-metrics/README.md](.github/extensions/actions-metrics/README.md).
 
+Large snapshots stay in the Go CLI: the dashboard reads compact metadata through
+`metrics snapshot` and streams run/job rows rather than decoding the entire raw
+snapshot into one Node.js string. Period filtering uses the same offline command,
+preserving exact IDs, historical attempts and pricing inputs without API requests.
+
 ### Install the Actions metrics dashboard
 
 ```sh
@@ -478,7 +483,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -487,9 +492,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--target-utilization` | `0.7` | Highest share of the time a runner may be busy, greater than 0 and at most 1 |
@@ -521,6 +526,28 @@ dashboard feature, not a background CLI process.
 
 Run searches are split into nonoverlapping time windows when they reach GitHub's 1,000-result search limit. `--max-runs 0` removes the application budget; a single second that still saturates the API limit is an explicit error rather than silently incomplete data.
 
+Run discovery reads the first page, then fetches the remaining advertised pages
+in parallel, bounded by `--concurrency` (default `6`; `1` is sequential).
+Only pages needed by `--max-runs` are requested, and results retain page order.
+Servers without a last-page link use sequential pagination.
+
+Run discovery caches complete UTC days ending at least 24 hours ago for up to
+one hour. The latest 24 hours and partial boundary days are always searched
+afresh. Adjacent cache misses use one search window, so a quiet cold or expired
+cache does not add one request per day. Saturated searches prefer UTC-midnight
+splits, and fully covered days are saved as soon as their searches finish,
+without waiting for the rest of the window. A failed or interrupted later search
+leaves these checkpoints available to the next attempt until they expire.
+Incomplete days and capped prefixes are never marked complete. Freshness starts
+at the earliest request contributing to each saved day, not at the start or end
+of the entire collection; ancestor searches do not extend its TTL. Entries are
+isolated by host, owner, repository, credentials, branch, event and workflow,
+with `0700`/`0600` permissions. Expired entries are pruned on collection.
+Historical reruns, status changes and deletions can take up to one hour to
+appear. `--refresh` bypasses and rewrites eligible entries; `--no-cache`
+disables both listing and per-run caches. The first collection still needs
+to read the history, and the cache also survives extension restarts.
+
 Optional `--until TIME` sets the exclusive collection end (default now).
 Use it with `--since TIME` for an explicit `[since, until)` period, or with
 `--days N` for N days ending at that time. Dates without a timezone use UTC.
@@ -538,6 +565,16 @@ not API requests or an overall percentage. A historical attempt counts as cached
 only when both its metadata and job list are reused. The `complete` stage means
 API/cache collection finished, not that writing the snapshot succeeded.
 
+During run discovery, optional `runSearch` reports the current `created` search
+period, its `searches` ordinal and `discovered` unique run IDs seen so far in
+that repository. Updates precede and follow each search, not each API page.
+Split searches may revisit IDs; discovered counts deduplicate them but are not
+the final selected total or a percentage. `cachedWindows` counts complete UTC
+days reused from the discovery cache, separately from API searches; newly saved
+checkpoints do not increase this hit count until a later attempt reads them. A wholly
+cached historical window can have zero searches. Discovery still precedes
+reading the completed-job caches.
+
 Options:
 
 | Option | Default | Description |
@@ -545,18 +582,18 @@ Options:
 | `--all-attempts` | `false` | Retain jobs and metadata from every available run attempt |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--output` | `-` | Write the snapshot to this file instead of stdout |
 | `--pricing` | `false` | Collect repository visibility and hosted machine inventory without billable usage |
 | `--progress` | `false` | Stream versioned stage progress NDJSON to stderr, mixed with diagnostics |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
@@ -583,7 +620,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -593,9 +630,9 @@ Options:
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -627,7 +664,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -636,10 +673,10 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--rate` | automatic SKU pricing | Override a per-minute USD price as `SKU=PRICE` or `OS=PRICE`. Repeatable |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -669,7 +706,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -678,9 +715,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression. Requires `--format json` |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `--summary` | `false` | Also append a Markdown report to `$GITHUB_STEP_SUMMARY` |
@@ -707,7 +744,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -716,9 +753,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -756,7 +793,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -769,9 +806,9 @@ Options:
 | `--label` | all label sets | Keep only the jobs requesting this label. Repeatable, and a job must carry every one of them |
 | `--limit` | `0` | Stop after this many rows, counted after the filters. `0` keeps every row |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--runner` | all runners | Keep only the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and a job matching any of them is kept |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
@@ -800,7 +837,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -810,9 +847,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -838,7 +875,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -847,9 +884,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -876,7 +913,7 @@ Options:
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
 | `--bucket` | `1h` | Width of each concurrency section time bucket, such as `15m` |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -888,10 +925,10 @@ Options:
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--label` | all labels | Keep only the concurrency section jobs whose runs-on set carries this label (repeatable) |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `--rate` | automatic SKU pricing | Override a per-minute USD price in the cost section as `SKU=PRICE` or `OS=PRICE`. Repeatable |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--section` | every section except `cost` | Print only this section: `{capacity\|concurrency\|cost\|label\|queue\|repository\|runner\|summary\|workflow}` (repeatable) |
 | `--self-hosted-only` | `false` | Exclude the workflow section jobs that ran on GitHub-hosted runners |
@@ -921,7 +958,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -930,9 +967,9 @@ Options:
 | `--include-repo` | all repositories | Keep only the repositories matching this pattern, such as `octo/*`, `owner/repo` or `[HOST/]OWNER/REPO` (repeatable) |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -943,12 +980,14 @@ Options:
 ### List workflow runs behind the metrics
 
 ```sh
-gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json|ndjson|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 List every workflow run returned by the collection, one row each. The command uses
 the same run collection as the other metrics commands. It does not fetch per-run jobs
-or usage, so the cache flags do not apply here. It exposes `CREATED` and `STARTED`; it
+or usage. Historical run listings use the same one-hour cache as other metrics
+commands; `--refresh` bypasses it and `--no-cache` disables it. It exposes
+`CREATED` and `STARTED`; it
 does not treat `UPDATED` as an authoritative completion time because GitHub may update
 it after the run finished. Use `--format ndjson` to consume rows one at a time. Under
 `--all-repos`, `--max-runs` applies independently to each repository.
@@ -959,7 +998,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -968,13 +1007,48 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
+| `--no-cache` | `false` | Do not read or write cached run listings |
 | `--owner` | current repository owner | Select an organization by owner name |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
+| `--refresh` | `false` | Ignore cached run listings and fetch them again |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
+
+### Inspect or filter a collected metrics snapshot without API requests
+
+```sh
+gh runner-kit metrics snapshot --input FILE [--since TIME] [--until TIME] [--output FILE]
+```
+
+Read a collected snapshot and print compact JSON metadata, including its version,
+collection time, scope, contents, inventory, latest-job coverage, warnings and
+run/job counts. Raw runs, attempts, jobs and usage stay in the snapshot instead
+of stdout, avoiding JavaScript's single-string size limit for dashboard loading.
+
+`--input` is required; `-` reads uncompressed JSON from stdin. All other options
+are optional. `--since` and `--until` select runs by creation time in a
+closed-open window within the original collection. Omitted boundaries use the
+snapshot's start and end. All attempts, jobs and usage of selected runs remain,
+including carried-over jobs outside the narrower window; inventory and coverage
+warnings remain those of the original collection. IDs and durations retain
+their exact integer values.
+
+`--output` writes the resulting full snapshot atomically to a file and compresses
+names ending in `.gz`. By default no snapshot file is written. `--output -` is
+not allowed because stdout always carries metadata. The input is unchanged
+unless explicitly named as the output. No GitHub requests are made.
+
+Options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--input` | required | Snapshot file, or `-` for uncompressed JSON on stdin |
+| `--output` | none | Also write the full resulting snapshot to this file; `.gz` enables compression |
+| `--since` | snapshot start | Inclusive creation-time boundary as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC |
+| `--until` | snapshot end | Exclusive creation-time boundary as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC |
 
 ### Report how long each step of every job takes
 
@@ -1002,7 +1076,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -1017,9 +1091,9 @@ Options:
 | `--limit` | `0` | Stop after this many rows with `--format json\|ndjson`, or this many table lines, which still aggregates every step. `0` keeps everything |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
 | `--merge-matrix` | `false` | Fold the variants of a matrix job into one job in the table |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--runner` | all runners | Keep only the jobs that ran on this runner name, which accepts a `*` wildcard. Repeatable, and a job matching any of them is kept |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
@@ -1051,7 +1125,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -1060,9 +1134,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -1090,7 +1164,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -1099,9 +1173,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--self-hosted-only` | `false` | Exclude the jobs that ran on GitHub-hosted runners |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
@@ -1126,7 +1200,7 @@ Options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | none | Drop the repositories matching this pattern, such as `octo/*` or `[HOST/]OWNER/REPO` (repeatable) |
@@ -1135,9 +1209,9 @@ Options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |

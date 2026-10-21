@@ -9,6 +9,8 @@
 // range, a facet value - never in pixels, so the explorer's filter state stays
 // the single description of what is on screen.
 
+import { maxOf } from "/shared/extrema.mjs";
+
 const NS = "http://www.w3.org/2000/svg";
 
 export function svg(tag, props = {}, children = []) {
@@ -176,7 +178,7 @@ export function renderStackedTimeline(timeline, { height = 180, onSelect, select
     }
     const width = 960;
     const plot = { x: 48, y: 8, width: width - 60, height: height - 34 };
-    const max = niceCeiling(Math.max(1, ...buckets.map((bucket) => bucket.total)));
+    const max = niceCeiling(maxOf(buckets.map((bucket) => bucket.total), 1));
     const bandWidth = plot.width / buckets.length;
     const root = svg("svg", {
         class: "chart",
@@ -269,7 +271,7 @@ export function renderAreaChart(points, { bucketMs, height = 150, onSelect, sele
     }
     const width = 960;
     const plot = { x: 48, y: 8, width: width - 60, height: height - 34 };
-    const max = niceCeiling(Math.max(1, ...points.map((point) => point.v)));
+    const max = niceCeiling(maxOf(points.map((point) => point.v), 1));
     const step = plot.width / points.length;
     const root = svg("svg", { class: "chart", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img" });
 
@@ -338,7 +340,7 @@ export function renderHistogram(bins, { height = 140, highlight = null } = {}) {
     }
     const width = 960;
     const plot = { x: 8, y: 8, width: width - 16, height: height - 40 };
-    const max = Math.max(...bins.map((bin) => bin.count));
+    const max = maxOf(bins.map((bin) => bin.count));
     const band = plot.width / bins.length;
     const root = svg("svg", { class: "chart", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img" });
 
@@ -378,7 +380,7 @@ export function renderRankedBars(entries, { valueOf, formatValue, onPick, active
     if (!entries || entries.length === 0) {
         return emptyChart("Nothing to rank in this selection.");
     }
-    const max = given ?? Math.max(...entries.map((entry) => valueOf(entry)));
+    const max = given ?? maxOf(entries.map((entry) => valueOf(entry)));
     const list = document.createElement("ul");
     list.className = "ranked";
     for (const entry of entries) {

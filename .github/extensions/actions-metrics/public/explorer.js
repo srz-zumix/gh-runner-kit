@@ -23,6 +23,8 @@ import {
 import { emptyExploreFilters, hasActiveExploreFilters } from "/shared/explore.mjs";
 import { FIELD_SEPARATOR, UNIDENTIFIED } from "/shared/rows.mjs";
 import { toggleSort } from "/shared/sort.mjs";
+import { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET } from "/shared/fields.mjs";
+import { renderFacetPicker } from "/shared/facet.mjs";
 
 /** Facets the reader can narrow on, in the order they are offered. */
 const FACETS = [
@@ -517,85 +519,14 @@ function scopeBanner(state) {
 }
 
 function facetPicker(key, label) {
-    const options = view.facets?.[key] ?? [];
-    const selected = view.filters[key] ?? [];
-    const id = `explore-facet-${key}`;
-    const query = (view.facetQuery.get(key) ?? "").toLowerCase();
-
-    // Chosen values are hoisted to the top and synthesized when the current
-    // filters have driven their count to zero. Without this a selection can
-    // scroll past the 300-option cap or drop out of the list entirely, leaving
-    // a filter that is applied but has no checkbox left to switch it off.
-    const chosen = new Set(selected);
-    const ordered = options.filter((option) => chosen.has(option.value));
-    const present = new Set(ordered.map((option) => option.value));
-    for (const value of selected) {
-        if (!present.has(value)) {
-            ordered.push({ value, label: value, count: 0 });
-        }
-    }
-    for (const option of options) {
-        if (!chosen.has(option.value)) {
-            ordered.push(option);
-        }
-    }
-
-    const shown = query ? ordered.filter((option) => option.label.toLowerCase().includes(query)) : ordered;
-
-    const list = el(
-        "div",
-        { class: "facet__list" },
-        shown.slice(0, 300).map((option) =>
-            el("label", { class: `facet__option${chosen.has(option.value) ? " facet__option--on" : ""}` }, [
-                el("input", {
-                    type: "checkbox",
-                    checked: chosen.has(option.value),
-                    onChange: () => toggleFacet(key, option.value),
-                }),
-                el("span", { class: "facet__name", title: option.value, text: option.label }),
-                el("span", { class: "facet__count", text: number(option.count) }),
-            ]),
-        ),
-    );
-
-    return el(
-        "details",
-        {
-            class: `facet${selected.length ? " facet--on" : ""}`,
-            open: view.openFacets.has(key),
-            onToggle: (event) => {
-                if (event.target.open) {
-                    view.openFacets.add(key);
-                } else {
-                    view.openFacets.delete(key);
-                }
-            },
-        },
-        [
-            el("summary", { class: "facet__summary" }, [
-                el("span", { text: label }),
-                el("span", {
-                    class: "facet__badge",
-                    text: selected.length ? `${selected.length} of ${ordered.length}` : String(ordered.length),
-                }),
-            ]),
-            ordered.length > 12
-                ? el("input", {
-                      class: "facet__search",
-                      id: `${id}-search`,
-                      type: "search",
-                      placeholder: `Find a ${label.toLowerCase()}…`,
-                      value: view.facetQuery.get(key) ?? "",
-                      onInput: (event) => {
-                          view.facetQuery.set(key, event.target.value);
-                          paint();
-                      },
-                  })
-                : null,
-            list,
-            shown.length > 300 ? el("p", { class: "facet__more", text: `${number(shown.length - 300)} more — narrow with the search above.` }) : null,
-        ],
-    );
+    return renderFacetPicker({
+        create: el, id: `explore-facet-${key}`, key, label,
+        options: view.facets?.[key] ?? [], selected: view.filters[key] ?? [],
+        query: view.facetQuery.get(key) ?? "", open: view.openFacets.has(key),
+        onPick: value => toggleFacet(key, value),
+        onQuery: value => { view.facetQuery.set(key, value); paint(); },
+        onToggle: open => { if (open) view.openFacets.add(key); else view.openFacets.delete(key); },
+    });
 }
 
 function activeChips() {
@@ -1048,7 +979,7 @@ function tableCard() {
  * rows were truncated needs the control that fixes it within reach.
  */
 function budgetControl(state) {
-    const current = state?.filters?.rowBudget ?? 20000;
+    const current = state?.filters?.rowBudget ?? DEFAULT_ROW_BUDGET;
     let draft = String(current);
     return el("details", { class: "card card--settings", open: view.snapshot?.truncated === true }, [
         el("summary", { class: "card__header" }, [el("h2", { class: "card__title", text: "Explorer settings" })]),
@@ -1059,8 +990,8 @@ function budgetControl(state) {
                     class: "control__input",
                     id: "explore-row-budget",
                     type: "number",
-                    min: "500",
-                    max: "200000",
+                    min: String(MIN_ROW_BUDGET),
+                    max: String(MAX_ROW_BUDGET),
                     step: "500",
                     value: draft,
                     onInput: (event) => {

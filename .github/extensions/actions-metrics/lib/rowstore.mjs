@@ -12,6 +12,7 @@
 
 import { collectJobRows } from "./jobrows.mjs";
 import { describeScope, filtersOf, limitsOf, rowQueryId, targetOf } from "./query.mjs";
+import { rowPayloadChunks } from "../shared/rowpayload.mjs";
 
 /**
  * How many distinct queries keep their rows.
@@ -231,8 +232,8 @@ export class RowStore {
                 // every iframe reload, and re-stringifying twenty thousand
                 // rows each time is the difference between instant and a
                 // visible pause.
-                entry.payload = Buffer.from(
-                    JSON.stringify({
+                const chunks = Array.from(
+                    rowPayloadChunks({
                         id: entry.id,
                         revision: entry.revision + 1,
                         collectedAt: result.collectedAt,
@@ -244,8 +245,9 @@ export class RowStore {
                         window: result.window,
                         rows: result.rows,
                     }),
-                    "utf8",
+                    chunk => Buffer.from(chunk, "utf8"),
                 );
+                entry.payload = Buffer.concat(chunks);
                 entry.revision += 1;
                 entry.count = result.rows.length;
                 entry.truncated = result.truncated;

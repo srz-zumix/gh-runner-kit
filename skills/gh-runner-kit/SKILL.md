@@ -77,6 +77,7 @@ gh runner-kit                # Root command
 │   ├── queue                 # Wait time per runs-on label set
 │   ├── runner                # Activity per runner, label set or group
 │   ├── runs                  # The collected workflow runs, one row each
+│   ├── snapshot              # Inspect or filter snapshots offline, with compact metadata
 │   ├── steps                 # Duration statistics per step of every job
 │   ├── summary               # Fleet overview
 │   └── workflow              # Failure rate, duration and retry rate per workflow
@@ -638,7 +639,7 @@ Shared options:
 | --- | --- | --- |
 | `--all-repos` | `false` | Collect the workflow runs of every repository in the organization |
 | `--branch` | all branches | Keep only the workflow runs of this branch |
-| `--concurrency` | `6` | Number of per-run API requests to issue in parallel |
+| `--concurrency` | `6` | Maximum parallel requests for run-list pages and per-run data |
 | `--days` | `7` | Aggregate over N days ending at `--until` (now by default). Mutually exclusive with `--since` |
 | `--event` | all events | Keep only the workflow runs triggered by this event |
 | `--exclude-repo` | - | Drop the repositories matching this pattern. Repeatable, accepts `*` wildcards, and matches `[HOST/]OWNER/REPO` or `OWNER/REPO` |
@@ -647,9 +648,9 @@ Shared options:
 | `--input` | - | Read a snapshot `metrics collect` wrote instead of collecting from the API, `-` for stdin. Mutually exclusive with every collection flag |
 | `-q`, `--jq` | - | Filter JSON output using a jq expression |
 | `--max-runs` | `300` | Stop after retrieving this many workflow runs from each repository. `0` retrieves every run |
-| `--no-cache` | `false` | Do not read or write cached per-run metrics data |
+| `--no-cache` | `false` | Do not read or write cached run listings or per-run metrics data |
 | `--owner` | current repository owner | Select an organization by owner name |
-| `--refresh` | `false` | Ignore cached per-run metrics data and fetch it again |
+| `--refresh` | `false` | Ignore cached run listings and per-run metrics data and fetch them again |
 | `-R`, `--repo` | current repository | Select a repository |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
@@ -704,6 +705,22 @@ of a run the same way. `metrics collect --all-attempts` also caches completed
 historical attempt metadata independently of jobs, so metadata survives a later
 job-request failure. Use `--refresh` to rewrite the entries and `--no-cache`
 to bypass the cache entirely.
+
+Run listings also cache fully covered UTC days ending at least 24 hours ago,
+for at most one hour. The latest 24 hours and partial boundary days are always
+searched afresh; adjacent misses are combined, so a quiet cold cache does not
+multiply requests by the day count. Saturated searches split at UTC midnight
+where possible and save fully covered days immediately, before older searches
+finish. Later errors or cancellation preserve these checkpoints for retries
+within their TTL; incomplete days and capped prefixes never become full-day
+entries. Freshness uses the earliest request contributing to each day, excluding
+discarded saturated probes; ancestor completion does not rewrite it. Entries
+are scoped by host, repository, credentials, branch, event and
+workflow, use the same private permissions and survive extension restarts.
+Expired listing files are pruned when collecting. Historical reruns, status
+changes and deletions can take up to one hour to appear. `--refresh` bypasses
+and replaces eligible listings; `--no-cache` disables all metrics caches.
+The initial collection and an expired cache still require historical discovery.
 
 The table output always ends with a footer stating the window and the number of
 runs, and warns when `--max-runs` truncated the data, naming how many
@@ -784,6 +801,21 @@ as cached only when both metadata and jobs are reused. The CLI exits if its
 rate-limit retry budget is exhausted; automatic resume after reset is provided
 by the dashboard, not by a background CLI process. The `complete` stage precedes
 snapshot writing, so successful command exit is still required.
+
+Run discovery optionally includes `runSearch`: `created` is the current search
+period, `searches` its ordinal, and `discovered` the unique run IDs seen so far
+within that repository, deduplicated across split searches. Events arrive before
+and after each search, not every API page. These counts are not the final
+selected total and do not have a known denominator. Optional `cachedWindows`
+counts complete UTC days reused, not API searches or job-cache hits. A fully
+cached historical window can have zero searches. Recent runs and partial
+boundary days are still read from GitHub before job caches are consulted.
+
+Run discovery fetches the first page, then reads the remaining advertised pages
+in parallel with the existing `--concurrency` limit (default 6; 1 is sequential).
+It does not speculate beyond advertised pages or the run budget, preserves page
+order, and falls back to sequential traversal when the server omits a last-page
+link. Historical metadata can be up to one hour old; `--refresh` bypasses it.
 
 ### metrics concurrency
 
@@ -1059,15 +1091,45 @@ Lists every workflow run returned by the collection, one row each.
 
 ```bash
 gh runner-kit metrics runs [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--days N | --since TIME] [--until TIME] [--all-repos] [--format json|ndjson|table]
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--no-cache] [--refresh] \
+  [--format json|ndjson|table]
 ```
 
 The listing uses the same run collection as the other metrics commands. It does not
-fetch per-run jobs or usage, so the cache flags do not apply here. It exposes `CREATED`
+fetch per-run jobs or usage. Historical listings use the same one-hour cache:
+optional `--refresh` (default false) bypasses it, and optional `--no-cache`
+(default false) disables it. It exposes `CREATED`
 and `STARTED`, but does not treat `UPDATED` as an authoritative
 completion time because GitHub may update it after the run finished. Use
 `--format ndjson` for row-by-row consumption. Under `--all-repos`, `--max-runs`
 applies independently to each repository.
+
+### metrics snapshot
+
+Inspect or filter an existing snapshot without API requests. Stdout carries
+compact JSON metadata (version, collection time, scope, contents, inventory,
+latest-job coverage, warnings and run/job counts), not raw run/job/usage payloads.
+The dashboard uses this command to avoid Node.js's single-string size limit.
+
+```bash
+gh runner-kit metrics snapshot --input FILE [--since TIME] [--until TIME] [--output FILE]
+```
+
+`--input` is required; all other options are optional. Omitted boundaries retain
+the collected period. Filtering uses run creation time in `[since, until)` within
+that period and preserves every attempt, job and usage entry of selected runs,
+even when a job executed outside the narrower window. Inventory and original
+coverage warnings remain unchanged. IDs and durations keep exact integer values.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--input` | required | Snapshot file, or `-` for uncompressed JSON on stdin |
+| `--output` | none | Also write the resulting full snapshot atomically; `.gz` compresses it |
+| `--since` | snapshot start | Inclusive creation-time boundary as `YYYY-MM-DD` or RFC3339; timezone-less dates use UTC |
+| `--until` | snapshot end | Exclusive creation-time boundary as `YYYY-MM-DD` or RFC3339; timezone-less dates use UTC |
+
+`--output -` is rejected because stdout always carries metadata. No file is
+written by default, and the input is unchanged unless explicitly named as output.
 
 ### metrics steps
 

@@ -745,8 +745,8 @@ export class DashboardInstance {
             && datasetQueryId(next) === datasetQueryId(this.effectiveQuery)
             && (next.filterFrom !== this.effectiveQuery.filterFrom || next.filterTo !== this.effectiveQuery.filterTo);
         if (periodOnly) {
-            const { dataset, status } = this.store.entry(this.effectiveQuery);
-            if (status === "loading") {
+            const { dataset, status, collectionProgress } = this.store.entry(this.effectiveQuery);
+            if (status === "loading" && (!this.periodViews || collectionProgress?.status === "collecting")) {
                 const error = new Error("Wait for the collection to finish before setting a period filter");
                 error.code = "loading";
                 throw error;

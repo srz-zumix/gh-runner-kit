@@ -7,7 +7,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ghTokenSource, setCanvasGhToken } from "./gh.mjs";
 import { collectStepMetrics } from "./steprows.mjs";
-import { normalizeJobStatus, normalizeRunnerFilter } from "../shared/steps.mjs";
+import { normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters } from "../shared/steps.mjs";
 import { collectRunTimeline } from "./timeline.mjs";
 import { filtersOf, limitsOf, targetOf, targetKey } from "./query.mjs";
 import { loadPrefs, rememberStepSettings } from "./prefs.mjs";
@@ -215,11 +215,19 @@ async function handle(req, res, url, instance) {
     if (req.method === "POST" && url.pathname === "/api/steps") {
         const body = await readBody(req);
         const query = instance.effectiveQuery;
+        let stepFilters;
+        try {
+            stepFilters = normalizeStepFilters(body);
+        } catch (error) {
+            if (error instanceof TypeError || error instanceof RangeError) throw httpError(400, error.message);
+            throw error;
+        }
         const settings = {
             workflow: String(body.workflow ?? body.filters?.workflow ?? query.workflow ?? "").trim(),
             repository: String(body.repository ?? "").trim(),
             job: String(body.job ?? "").trim(),
             jobStatus: normalizeJobStatus(body.jobStatus),
+            ...stepFilters,
             includeAllAttempts: body.includeAllAttempts === true,
             mergeMatrix: body.mergeMatrix !== false,
             showInfra: body.showInfra !== false,

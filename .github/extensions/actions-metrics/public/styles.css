@@ -1608,7 +1608,12 @@ button.heat__name--pick:hover {
     padding-top: 10px;
     border-top: 1px dashed var(--border-color-default, #d0d7de);
 }
+.controls--runner > .facets {
+    flex: 1 1 480px;
+    min-width: 0;
+}
 .controls__label {
+    font-size: var(--text-body-small, 12px);
     font-weight: var(--font-weight-semibold, 600);
 }
 .runners-table__labels {
@@ -1618,6 +1623,20 @@ button.heat__name--pick:hover {
 }
 .runners-table__row--selectable {
     cursor: pointer;
+}
+.runners-table__toggle {
+    min-width: 24px;
+    margin-right: 6px;
+    padding: 2px 6px;
+}
+.runners-table__individual-label {
+    padding-left: 32px;
+    color: var(--text-color-muted, #6e7781);
+}
+.runners-table__runner {
+    padding: 2px 6px;
+    text-align: left;
+    overflow-wrap: anywhere;
 }
 .runners-table__row--selectable:hover,
 .runners-table .row--selected {

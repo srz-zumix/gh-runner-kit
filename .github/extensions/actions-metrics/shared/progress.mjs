@@ -31,9 +31,22 @@ export function parseCollectionProgress(line) {
         || (!record.unit && [record.completed, record.total, record.cached, record.fetched, record.skipped].some(count => count !== 0))) {
         throw new Error("Invalid or unsupported collection progress record; update gh runner-kit and the canvas together");
     }
+    const search = record.runSearch;
+    if (search !== undefined && (record.stage !== "runs" || !search || typeof search !== "object"
+        || typeof search.created !== "string" || !search.created
+        || !Number.isSafeInteger(search.searches) || search.searches < 0
+        || (search.searches === 0 && !(search.cachedWindows > 0))
+        || (search.cachedWindows !== undefined && (!Number.isSafeInteger(search.cachedWindows) || search.cachedWindows < 0))
+        || !Number.isSafeInteger(search.discovered) || search.discovered < 0)) {
+        throw new Error("Invalid or unsupported collection progress record; update gh runner-kit and the canvas together");
+    }
     return {
         stage: record.stage, repository: record.repository ?? "", unit: record.unit ?? "",
         ...Object.fromEntries(COUNTS.map(name => [name, record[name]])),
+        ...(search === undefined ? {} : {runSearch: {
+            created: search.created, searches: search.searches, discovered: search.discovered,
+            ...(search.cachedWindows === undefined ? {} : {cachedWindows: search.cachedWindows}),
+        }}),
     };
 }
 
@@ -57,5 +70,10 @@ export function beginCollectionProgress(previous, { resume = false, now = Date.n
 export function progressDescription(detail) {
     const stage = PROGRESS_STAGES[detail.stage];
     const repository = detail.repository ? ` · ${detail.repository}` : "";
+    if (detail.runSearch) {
+        const search = detail.runSearch;
+        const cached = search.cachedWindows === undefined ? "" : ` · ${search.cachedWindows.toLocaleString()} cached days`;
+        return `${stage}${repository}: search ${search.searches.toLocaleString()} · ${search.discovered.toLocaleString()} unique runs found${cached}`;
+    }
     return detail.unit ? `${stage}${repository}: ${detail.completed}/${detail.total} ${detail.unit}` : `${stage}${repository}`;
 }

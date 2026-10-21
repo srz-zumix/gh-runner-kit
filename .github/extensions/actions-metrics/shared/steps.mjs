@@ -1,7 +1,10 @@
 import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, normalizeRunnerName, parseTime } from "./rows.mjs";
+import { maxOf, minOf } from "./extrema.mjs";
 
 const NS_PER_MS = 1e6;
 const INFRA_STEP_NAMES = new Set(["Set up job", "Complete job"]);
+export const RECOVERED_JOB_STATUS = "rerun_success";
+export const STEP_CONCLUSIONS = ["failure", "success", "skipped", "cancelled", "timed_out", "startup_failure", "neutral", "action_required", "stale"];
 
 function text(value) {
     return typeof value === "string" ? value : "";
@@ -60,22 +63,6 @@ export function stepIdOf(name, key, occurrence) {
 // workflowIdentity tells two workflow files that share a display name apart.
 function workflowIdentity(row) {
     return row.workflowPath || row.workflow;
-}
-
-function maxOf(values) {
-    let result = -Infinity;
-    for (const value of values) {
-        if (value > result) result = value;
-    }
-    return result;
-}
-
-function minOf(values) {
-    let result = Infinity;
-    for (const value of values) {
-        if (value < result) result = value;
-    }
-    return result;
 }
 
 export function isInfrastructureStep(name) {
@@ -193,6 +180,7 @@ export function normalizeJobRow(raw = {}, index = 0) {
         runnerGroup: text(raw.RunnerGroup),
         status: text(raw.Status).toLowerCase(),
         conclusion: text(raw.Conclusion).toLowerCase() || null,
+        latest: raw.Latest !== false,
         failed: FAILURE_CONCLUSIONS.has(text(raw.Conclusion).toLowerCase()),
         queuedAt,
         startedAt,
@@ -313,6 +301,7 @@ function buildTrend(samples) {
 }
 
 const RUNNER_KINDS = new Set(["all", "self-hosted", "github-hosted"]);
+const RUNNER_SELECTION_FIELDS = { kinds: "kind", labelSets: "labels", groups: "group", names: "name" };
 
 function quoteLabel(label) {
     return label === "" || /[,"\r\n]/.test(label) ? `"${label.replaceAll('"', '""')}"` : label;
@@ -341,17 +330,57 @@ export function matchWildcard(pattern, name) {
 // compared and echoed back unchanged.
 export function normalizeRunnerFilter(filter = {}) {
     const kind = String(filter?.kind ?? "all").trim().toLowerCase();
+    const name = String(filter?.name ?? "").trim();
+    const lists = {};
+    for (const key of Object.keys(RUNNER_SELECTION_FIELDS)) {
+        const values = Array.isArray(filter?.[key])
+            ? [...new Set(filter[key].filter(value => typeof value === "string" && value !== ""
+                && (key !== "kinds" || ["hosted", "self-hosted", "unknown"].includes(value))))]
+            : [];
+        if (values.length) lists[key] = values;
+    }
     return {
         kind: RUNNER_KINDS.has(kind) ? kind : "all",
         labels: String(filter?.labels ?? "").trim(),
         group: String(filter?.group ?? "").trim(),
-        name: String(filter?.name ?? "").trim(),
+        name,
+        ...(name && filter?.nameExact === true ? { nameExact: true } : {}),
+        ...lists,
     };
+}
+
+export function runnerFilterSelections(filter) {
+    const value = normalizeRunnerFilter(filter);
+    const kinds = value.kind === "self-hosted" ? ["self-hosted", "unknown"] : value.kind === "github-hosted" ? ["hosted"] : [];
+    const labelSets = new Map();
+    for (const labels of [...(value.labelSets ?? []), ...(value.labels ? [value.labels] : [])]) {
+        labelSets.set(labelSetKey(splitLabelSet(labels)), labels);
+    }
+    return {
+        kinds: [...new Set([...(value.kinds ?? []), ...kinds])],
+        labelSets: [...labelSets.values()],
+        groups: [...new Set([...(value.groups ?? []), ...(value.group ? [value.group] : [])])],
+        names: [...new Set([...(value.names ?? []), ...(value.name && (value.nameExact || !value.name.includes("*")) ? [value.name] : [])])],
+    };
+}
+
+export function toggleRunnerFilterValue(filter, key, value) {
+    if (!Object.hasOwn(RUNNER_SELECTION_FIELDS, key)) throw new Error(`Unknown runner facet: ${key}`);
+    const current = normalizeRunnerFilter(filter);
+    const values = runnerFilterSelections(current)[key];
+    const identity = key === "labelSets" ? labels => labelSetKey(splitLabelSet(labels)) : entry => entry;
+    const selected = values.some(entry => identity(entry) === identity(value));
+    const next = selected ? values.filter(entry => identity(entry) !== identity(value)) : [...values, value];
+    const legacy = key === "kinds" ? { kind: "all" }
+        : key === "names" ? current.nameExact || !current.name.includes("*") ? { name: "", nameExact: false } : {}
+        : { [RUNNER_SELECTION_FIELDS[key]]: "" };
+    return normalizeRunnerFilter({ ...current, ...legacy, [key]: next });
 }
 
 export function isRunnerFilterActive(filter) {
     const value = normalizeRunnerFilter(filter);
-    return value.kind !== "all" || Boolean(value.labels || value.group || value.name);
+    return value.kind !== "all" || Boolean(value.labels || value.group || value.name)
+        || Object.keys(RUNNER_SELECTION_FIELDS).some(key => value[key]?.length);
 }
 
 // effectiveStepSettings lays the settings of a step request still in flight over the
@@ -366,13 +395,24 @@ export function effectiveStepSettings(settings, pending, identity) {
 // matchRunner applies a runner filter to a job or step row. The kind semantics follow
 // the CLI's --kind: self-hosted keeps every job that did not run on a hosted runner.
 export function matchRunner(row, filter) {
+    return runnerMatcher(filter)(row);
+}
+
+function runnerMatcher(filter) {
     const value = normalizeRunnerFilter(filter);
-    if (value.kind === "self-hosted" && row.kind === "hosted") return false;
-    if (value.kind === "github-hosted" && row.kind !== "hosted") return false;
-    if (value.labels && labelSetKey(row.labels) !== labelSetKey(splitLabelSet(value.labels))) return false;
-    if (value.group && row.runnerGroup !== value.group) return false;
-    if (value.name && !matchWildcard(value.name, row.runnerName)) return false;
-    return true;
+    const selected = runnerFilterSelections(value);
+    const kinds = new Set(selected.kinds);
+    const labels = new Set(selected.labelSets.map(labels => labelSetKey(splitLabelSet(labels))));
+    const groups = new Set(selected.groups);
+    const names = new Set(selected.names);
+    const pattern = value.nameExact || !value.name.includes("*") ? "" : value.name;
+    return row => {
+        if (kinds.size && !kinds.has(row.kind || "unknown")) return false;
+        if (labels.size && !labels.has(labelSetKey(row.labels))) return false;
+        if (groups.size && !groups.has(row.runnerGroup)) return false;
+        if ((names.size || pattern) && !names.has(row.runnerName) && !(pattern && matchWildcard(pattern, row.runnerName))) return false;
+        return true;
+    };
 }
 
 // splitLabelSet parses a label set rendered by formatLabelSet back into labels.
@@ -418,14 +458,114 @@ export function normalizeJobStatus(value) {
     return String(value ?? "").trim().toLowerCase();
 }
 
+export function isRecoveredJobStatus(value) {
+    return normalizeJobStatus(value) === RECOVERED_JOB_STATUS;
+}
+
 export function matchJobStatus(row, value) {
     const status = normalizeJobStatus(value);
     return !status || normalizeJobStatus(row.status) === status || normalizeJobStatus(row.conclusion) === status;
 }
 
-export function filterTimelineJobs(timeline, jobStatus = "", repository = "") {
+function normalizeStepReference(value, field) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.name !== "string") {
+        throw new TypeError(`${field} must be an object with a step name`);
+    }
+    const occurrence = value.occurrence ?? 1;
+    if (!Number.isInteger(occurrence) || occurrence < 1) {
+        throw new RangeError(`${field}.occurrence must be a positive integer`);
+    }
+    return { name: value.name, occurrence };
+}
+
+export function normalizeFailedStep(value) {
+    if (value === null || value === undefined) return null;
+    const step = normalizeStepReference(value, "failedStep");
+    return step.name ? step : null;
+}
+
+export function normalizeStepFilters({ stepConditions, failedStep } = {}) {
+    if (stepConditions === undefined) {
+        const legacy = normalizeFailedStep(failedStep);
+        stepConditions = legacy ? [{ ...legacy, conclusion: "failure" }] : [];
+    }
+    if (stepConditions === null) stepConditions = [];
+    if (!Array.isArray(stepConditions)) throw new TypeError("stepConditions must be an array or null");
+    const seen = new Set();
+    const conditions = [];
+    for (const [index, value] of stepConditions.entries()) {
+        const field = `stepConditions[${index}]`;
+        const step = normalizeStepReference(value, field);
+        if (!step.name) throw new TypeError(`${field}.name must not be empty`);
+        if (typeof value.conclusion !== "string" || !value.conclusion.trim()) {
+            throw new TypeError(`${field}.conclusion must be a nonempty string`);
+        }
+        const conclusion = normalizeJobStatus(value.conclusion);
+        const key = keyOf(stepIdOf(step.name, "", step.occurrence), conclusion);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        conditions.push({ ...step, conclusion });
+    }
+    const single = conditions.length === 1 && conditions[0].conclusion === "failure" ? conditions[0] : null;
+    return {
+        stepConditions: conditions,
+        failedStep: single ? { name: single.name, occurrence: single.occurrence } : null,
+    };
+}
+
+function stepConditionKeys(conditions) {
+    return new Set(conditions.map(step => keyOf(stepIdOf(step.name, "", step.occurrence), step.conclusion)));
+}
+
+export function filterTimelineJobs(timeline, jobStatus = "", repository = "", runs = [], failedStep = null, stepConditions) {
+    const { stepConditions: conditions } = normalizeStepFilters({ stepConditions, failedStep });
     if (repository && timeline?.Repo !== repository) return [];
-    return (timeline?.Jobs ?? []).filter((job) => matchJobStatus({ status: job.Status, conclusion: job.Conclusion }, jobStatus));
+    let jobs = timeline?.Jobs ?? [];
+    if (isRecoveredJobStatus(jobStatus)) {
+        const names = new Set(runs.filter(row => row.repo === timeline?.Repo && row.runId === id(timeline?.RunID)
+            && (!timeline?.WorkflowPath || row.workflowPath === timeline.WorkflowPath)).flatMap(row => row.recoveredJobs ?? []));
+        jobs = jobs.filter(job => names.has(job.Name));
+    } else {
+        jobs = jobs.filter(job => matchJobStatus({ status: job.Status, conclusion: job.Conclusion }, jobStatus));
+    }
+    if (!conditions.length) return jobs;
+    const required = stepConditionKeys(conditions);
+    return jobs.filter(job => {
+        const outcomes = new Set((job.Steps ?? []).map(step => keyOf(stepIdOf(step.Name, step.Key, step.Occurrence), normalizeJobStatus(step.Conclusion))));
+        return [...required].every(key => outcomes.has(key));
+    });
+}
+
+function jobHistoryKey(row) {
+    return keyOf(row.repo, workflowIdentity(row), row.runId, row.jobName);
+}
+
+// Classify exact job names before matrix merging or runner filtering. A successful
+// retry can use another runner, but cannot recover a different matrix variant.
+function recoveredJobHistories(rows) {
+    const histories = new Map();
+    for (const row of rows) {
+        if (!row.runId) continue;
+        const key = jobHistoryKey(row);
+        if (!histories.has(key)) histories.set(key, { latest: row, firstFailure: Infinity, attempts: new Map(), ambiguous: false });
+        const history = histories.get(key);
+        const previous = history.attempts.get(row.runAttempt);
+        if (previous && (previous.jobId !== row.jobId || previous.conclusion !== row.conclusion)) history.ambiguous = true;
+        history.attempts.set(row.runAttempt, row);
+        if (row.runAttempt > history.latest.runAttempt) history.latest = row;
+        if (row.failed) history.firstFailure = Math.min(history.firstFailure, row.runAttempt);
+    }
+    const keys = new Set();
+    let ambiguousJobs = 0;
+    for (const [key, history] of histories) {
+        if (!(history.firstFailure < history.latest.runAttempt)) continue;
+        if (history.ambiguous) {
+            ambiguousJobs++;
+        } else if (history.latest.latest && history.latest.conclusion === "success") {
+            keys.add(key);
+        }
+    }
+    return { keys, ambiguousJobs };
 }
 
 function repositoryFacets(jobs, steps) {
@@ -449,29 +589,57 @@ function jobRowKey(row) {
     return keyOf(row.repo, workflowIdentity(row), row.runId, row.runAttempt, row.jobId || row.jobName);
 }
 
-// runnerPools groups jobs by their runs-on set. Wait and duration statistics only use
-// jobs that recorded the timestamps they need, so queued or skipped jobs do not pull
-// the medians toward zero.
-function runnerPools(rows) {
-    const pools = new Map();
+function stepConditionFacets(rows) {
+    const steps = new Map();
     for (const row of rows) {
-        const key = labelSetKey(row.labels);
-        if (!pools.has(key)) {
-            pools.set(key, { key, labels: formatLabelSet(row.labels), kinds: new Map(), groups: new Map(), names: new Map(), jobs: 0, decided: 0, failed: 0, waits: [], durations: [] });
-        }
-        const pool = pools.get(key);
-        pool.jobs += 1;
-        if (isDecided(row.conclusion)) pool.decided += 1;
-        if (row.failed) pool.failed += 1;
-        countInto(pool.kinds, row.kind);
-        countInto(pool.groups, row.runnerGroup);
-        countInto(pool.names, row.runnerName);
-        if (row.startedAt !== null && Number.isFinite(row.waitMs)) pool.waits.push(row.waitMs);
-        if (row.startedAt !== null && row.completedAt !== null && Number.isFinite(row.durationMs)) pool.durations.push(row.durationMs);
+        if (!row.stepName) continue;
+        if (!steps.has(row.stepId)) steps.set(row.stepId, { name: row.stepName, occurrence: row.stepOccurrence, jobs: new Set() });
+        const step = steps.get(row.stepId);
+        step.jobs.add(jobRowKey(row));
+        step.conclusions ??= new Map();
+        if (!row.stepConclusion) continue;
+        if (!step.conclusions.has(row.stepConclusion)) step.conclusions.set(row.stepConclusion, new Set());
+        step.conclusions.get(row.stepConclusion).add(jobRowKey(row));
     }
-    return [...pools.values()].map((pool) => ({
-        key: pool.key,
-        labels: pool.labels,
+    return [...steps.values()].map(({ jobs, conclusions = new Map(), ...step }) => ({
+        ...step, count: jobs.size,
+        conclusions: [...conclusions].map(([value, matches]) => ({ value, count: matches.size }))
+            .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)),
+    }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name) || a.occurrence - b.occurrence);
+}
+
+function matchingStepConditionJobs(rows, conditions) {
+    if (!conditions.length) return null;
+    const required = stepConditionKeys(conditions);
+    const matches = new Map();
+    for (const row of rows) {
+        const outcome = keyOf(row.stepId, row.stepConclusion);
+        if (!required.has(outcome)) continue;
+        const job = jobRowKey(row);
+        if (!matches.has(job)) matches.set(job, new Set());
+        matches.get(job).add(outcome);
+    }
+    return new Set([...matches].filter(([, outcomes]) => outcomes.size === required.size).map(([job]) => job));
+}
+
+function runnerAccumulator() {
+    return { kinds: new Map(), groups: new Map(), names: new Map(), jobs: 0, decided: 0, failed: 0, waits: [], durations: [] };
+}
+
+function addRunnerJob(pool, row) {
+    pool.jobs += 1;
+    if (isDecided(row.conclusion)) pool.decided += 1;
+    if (row.failed) pool.failed += 1;
+    countInto(pool.kinds, row.kind);
+    countInto(pool.groups, row.runnerGroup);
+    countInto(pool.names, row.runnerName);
+    if (row.startedAt !== null && Number.isFinite(row.waitMs)) pool.waits.push(row.waitMs);
+    if (row.startedAt !== null && row.completedAt !== null && Number.isFinite(row.durationMs)) pool.durations.push(row.durationMs);
+}
+
+function runnerStatistics(pool) {
+    return {
         kinds: countedList(pool.kinds),
         groups: countedList(pool.groups),
         runners: countedList(pool.names),
@@ -479,6 +647,31 @@ function runnerPools(rows) {
         wait: { p50: percentile(pool.waits, 50), p90: percentile(pool.waits, 90), samples: pool.waits.length },
         duration: { p50: percentile(pool.durations, 50), p90: percentile(pool.durations, 90), samples: pool.durations.length, total: pool.durations.reduce((sum, duration) => sum + duration, 0) },
         failureRate: pool.decided > 0 ? pool.failed / pool.decided : 0,
+    };
+}
+
+// Pools retain every job; only non-hosted jobs have an individual-runner breakdown.
+// Missing timestamps do not contribute zero-valued wait or duration samples.
+function runnerPools(rows) {
+    const pools = new Map();
+    for (const row of rows) {
+        const key = labelSetKey(row.labels);
+        if (!pools.has(key)) {
+            pools.set(key, { key, labels: formatLabelSet(row.labels), ...runnerAccumulator(), individuals: new Map() });
+        }
+        const pool = pools.get(key);
+        addRunnerJob(pool, row);
+        if (row.kind !== "hosted") {
+            if (!pool.individuals.has(row.runnerName)) pool.individuals.set(row.runnerName, runnerAccumulator());
+            addRunnerJob(pool.individuals.get(row.runnerName), row);
+        }
+    }
+    return [...pools.values()].map((pool) => ({
+        key: pool.key,
+        labels: pool.labels,
+        ...runnerStatistics(pool),
+        individuals: [...pool.individuals.entries()].map(([name, stats]) => ({ name, ...runnerStatistics(stats) }))
+            .sort((a, b) => b.jobs - a.jobs || a.name.localeCompare(b.name)),
     })).sort((a, b) => b.jobs - a.jobs || a.labels.localeCompare(b.labels));
 }
 
@@ -520,10 +713,13 @@ function outranksConclusion(candidate, current) {
     return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
 }
 
-export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", includeAllAttempts = false } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", failedStep = null, stepConditions, includeAllAttempts = false } = {}) {
     const repositoryFilter = String(repository ?? "").trim();
     const runnerFilter = normalizeRunnerFilter(runner);
     const statusFilter = normalizeJobStatus(jobStatus);
+    const { stepConditions: conditions, failedStep: failureFilter } = normalizeStepFilters({ stepConditions, failedStep });
+    const recovered = isRecoveredJobStatus(statusFilter);
+    includeAllAttempts ||= recovered;
     const collectedJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
     const collectedStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
     const allJobRows = repositoryFilter ? collectedJobRows.filter((row) => row.repo === repositoryFilter) : collectedJobRows;
@@ -532,13 +728,25 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
     // so other filters do not rename jobs or hide choices needed to widen them.
     const mergeMap = matrixMergeMap(allJobRows.map((row) => ({ repo: row.repo, workflow: row.workflow, workflowPath: row.workflowPath, jobName: row.jobName })));
     const facets = runnerFacets(allJobRows);
-    const statusRows = allJobRows.filter((row) => matchJobStatus(row, statusFilter));
+    const recovery = recovered ? recoveredJobHistories(allJobRows) : null;
+    const conditionJobs = matchingStepConditionJobs(allStepRows, conditions);
+    const statusRows = allJobRows.filter(row => (!conditionJobs || conditionJobs.has(jobRowKey(row)))
+        && (recovered ? recovery.keys.has(jobHistoryKey(row)) : matchJobStatus(row, statusFilter)));
+    const recoveredNames = new Map();
+    if (recovered) {
+        for (const row of statusRows) {
+            const key = keyOf(row.repo, workflowIdentity(row), row.runId);
+            if (!recoveredNames.has(key)) recoveredNames.set(key, new Set());
+            recoveredNames.get(key).add(row.jobName);
+        }
+    }
     const matchingJobs = new Set(statusRows.map(jobRowKey));
-    const poolRows = statusRows.filter((row) => !selectedJob || groupJobName(row, mergeMap, mergeMatrix) === selectedJob);
-    const jobRows = statusRows.filter((row) => matchRunner(row, runnerFilter));
+    const matchesRunner = runnerMatcher(runnerFilter);
+    const jobRows = statusRows.filter(matchesRunner);
+    const poolRows = jobRows.filter((row) => !selectedJob || groupJobName(row, mergeMap, mergeMatrix) === selectedJob);
     // Step outcomes need not match their job's outcome: a failed job can contain
     // successful or skipped steps. Match the job listing, not JobConclusion.
-    const stepRows = allStepRows.filter((row) => matchRunner(row, runnerFilter) && (!statusFilter || matchingJobs.has(jobRowKey(row))));
+    const stepRows = allStepRows.filter((row) => matchesRunner(row) && (!(statusFilter || conditions.length) || matchingJobs.has(jobRowKey(row))));
     const runIds = new Set([...jobRows, ...stepRows].map((row) => row.runId).filter(Boolean));
     // The run budget caps each repository before any aggregation filters, so
     // whether it was reached is read from the unfiltered rows per repository.
@@ -587,9 +795,14 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
         if (row.failed) failures.failed += 1;
         // Latest mode collapses carried-over jobs into one run row. All-attempt mode
         // keeps each attempt's jobs and outcome together so an earlier timeout stays
-        // selectable even when a later attempt succeeded.
-        const runKey = keyOf(row.repo, workflowIdentity(row), selectedJob ? jobName : "", row.runId, includeAllAttempts ? row.runAttempt : "");
-        const current = runList.get(runKey) ?? { repo: row.repo, workflow: row.workflow, job: jobName, runId: row.runId, runAttempt: row.runAttempt, branch: row.branch, conclusion: row.conclusion, durationMs: 0, url: row.runUrl, jobs: 0, runners: [], labelSets: [] };
+        // selectable even when a later attempt succeeded. Step conditions also separate
+        // carried-over attempts so one attempt cannot supply another's step outcomes.
+        const runKey = keyOf(row.repo, workflowIdentity(row), selectedJob ? jobName : "", row.runId, includeAllAttempts || conditions.length ? row.runAttempt : "");
+        const current = runList.get(runKey) ?? {
+            repo: row.repo, workflow: row.workflow, job: jobName, runId: row.runId, runAttempt: row.runAttempt,
+            branch: row.branch, conclusion: row.conclusion, durationMs: 0, url: row.runUrl, jobs: 0, runners: [], labelSets: [],
+            ...(recovered ? { workflowPath: row.workflowPath, recoveredJobs: [...recoveredNames.get(keyOf(row.repo, workflowIdentity(row), row.runId))] } : {}),
+        };
         if (row.runnerName && !current.runners.includes(row.runnerName)) current.runners.push(row.runnerName);
         const labels = formatLabelSet(row.labels);
         if (row.labels.length && !current.labelSets.some((value) => labelSetKey(splitLabelSet(value)) === labelSetKey(row.labels))) current.labelSets.push(labels);
@@ -771,15 +984,24 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
     // function call accepts as arguments.
     const newest = allTimes.length ? maxOf(allTimes) : null;
     const oldest = allTimes.length ? minOf(allTimes) : null;
+    const stepFacets = stepConditionFacets(allStepRows);
     return {
         stepStats,
         jobStats,
         typicalTimeline,
         runners: runnerPools(poolRows),
         runnerFacets: facets,
+        runnerFilter,
         repository: repositoryFilter,
         repositoryFacets: repositoryFacets(collectedJobRows, collectedStepRows),
         jobStatus: statusFilter,
+        failedStep: failureFilter,
+        failedStepFacets: stepFacets.flatMap(({ name, occurrence, conclusions }) => {
+            const failure = conclusions.find(outcome => outcome.value === "failure");
+            return failure ? [{ name, occurrence, count: failure.count }] : [];
+        }).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name) || a.occurrence - b.occurrence),
+        stepConditions: conditions,
+        stepConditionFacets: stepFacets,
         includeAllAttempts,
         jobStatusFacets: jobStatusFacets(allJobRows),
         runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId)) || b.runAttempt - a.runAttempt).slice(0, 100),
@@ -794,9 +1016,15 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
             repository: repositoryFilter,
             runnerFilter,
             jobStatus: statusFilter,
+            jobRecoverySupported: true,
+            failedStep: failureFilter,
+            failedStepSupported: true,
+            stepConditions: conditions,
+            stepConditionsSupported: true,
             totalStepRows: stepRows.length,
             totalSteps,
             latestAttemptBasis: !includeAllAttempts,
+            ...(recovery ? { recovery: { matchedJobs: recovery.keys.size, ambiguousJobs: recovery.ambiguousJobs } } : {}),
         },
     };
 }

@@ -11,6 +11,7 @@
 
 import { ghRaw, GhError, formatTarget, rateLimitCooldown } from "./gh.mjs";
 import { costRunnerKind } from "../shared/cost.mjs";
+import { runLines } from "./process.mjs";
 
 const NS_PER_MS = 1e6;
 
@@ -503,8 +504,8 @@ function normalizeWorkflowRows(raw) {
  * `RunRow` additionally carries the repository and the workflow path, which the
  * REST payload of a single repository never needed.
  */
-function normalizeRunRows(raw) {
-    return (raw ?? []).map((row) => ({
+function normalizeRunRow(row) {
+    return {
         repository: row.Repository ?? "",
         name: row.Workflow || "(unnamed)",
         workflowPath: row.WorkflowPath ?? "",
@@ -521,7 +522,7 @@ function normalizeRunRows(raw) {
         run_started_at: toTimestamp(row.StartedAt),
         updated_at: toTimestamp(row.UpdatedAt),
         html_url: row.HTMLURL ?? null,
-    }));
+    };
 }
 
 function normalizeRepositoryRows(raw) {
@@ -572,12 +573,12 @@ export async function collectRuns({ target, filters, limits, cwd, input = "", si
         // into `/actions/runs/<id>/jobs`, so a rounded id would fetch the jobs
         // of the wrong run.
         const args = baseArgs("runs", { target, filters, limits, force: false, probe, input }, "ndjson");
-        const stdout = await ghRaw(args, { cwd, env: hostEnv(target), host: input ? undefined : target.host ?? null, signal });
-        const raw = stdout
-            .split(/\r?\n/)
-            .filter((line) => line.trim())
-            .map((line) => JSON.parse(line));
-        return { available: true, rows: normalizeRunRows(raw), reason: null };
+        const rows = [];
+        await runLines(args, hostEnv(target), cwd, line => {
+            rows.push(normalizeRunRow(JSON.parse(line)));
+            return true;
+        }, signal, { host: input ? undefined : target.host ?? null });
+        return { available: true, rows, reason: null };
     } catch (error) {
         const reason = explain(describe(error), target);
         warnings.push(`gh runner-kit workflow runs: ${reason}`);
@@ -1129,6 +1130,14 @@ export function snapshotCommand({ target, filters, limits, workflow, runBudget, 
     if (usage) args.push("--usage");
     args.push("--output", output);
     return { args, env: hostEnv(target) };
+}
+
+/** Keep raw snapshots in Go; Node only receives their compact metadata. */
+export async function prepareSnapshot({ input, output, window, cwd, signal }) {
+    const args = ["runner-kit", "metrics", "snapshot", "--input", input];
+    if (output) args.push("--output", output);
+    if (window) args.push("--since", window.Start, "--until", window.End);
+    return JSON.parse(await ghRaw(args, { cwd, signal }));
 }
 
 export function jobRowsCommand({ target, filters, limits, pattern = "", exclusions = [], kind = "self-hosted", limit = 0, probe = null, input = "" }) {
