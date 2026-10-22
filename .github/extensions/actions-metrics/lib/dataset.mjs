@@ -126,7 +126,7 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         });
         onProgress?.("Reading shared snapshot metadata");
         const snapshot = await prepareSnapshot({ input, cwd, signal });
-        if (snapshot.Version !== 1 || snapshot.Contents?.AllAttempts !== true || !snapshot.Data || !snapshot.Data.LatestJobs) {
+        if (snapshot.Version !== 1 || snapshot.Contents?.AllAttempts !== true || !snapshot.Data) {
             throw new Error("The CLI did not produce an all-attempts dataset with latest-job coverage; update gh runner-kit");
         }
         const warnings = [...(snapshot.Data.Warnings ?? [])];
@@ -136,7 +136,11 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         const rows = jobRowsCommand({ target, filters: { ...filters, labels: [] }, limits, cwd, input, kind: "all", probe });
         await runLines(rows.args, rows.env, cwd, line => {
             const row = JSON.parse(line);
-            jobs.push({ ...row, Latest: snapshot.Data.LatestJobs[String(row.JobID)] === true });
+            // Latest-job coverage streams with each row so metadata stays independent of job count.
+            if (typeof row.Latest !== "boolean") {
+                throw new Error("The CLI did not produce job rows with latest-job coverage; update gh runner-kit");
+            }
+            jobs.push(row);
             return true;
         }, signal);
         const meta = {

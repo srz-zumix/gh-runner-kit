@@ -39,9 +39,9 @@ const jobs = runs.map((run, i) => ({
     Workflow: run.Workflow, WorkflowPath: run.WorkflowPath, JobName: "build",
     Kind: "hosted", Labels: ["ubuntu-latest"], RunnerName: "GitHub Actions",
     Status: "completed", Conclusion: "success", ExecutionStarted: true, StartedAt: time(i), CompletedAt: time(i + 61),
-    Duration: 61000000000,
+    Duration: 61000000000, Latest: true,
 }));
-jobs.push({...jobs[0], JobID: "9007199254740993", RunAttempt: 1, RunnerName: "", Conclusion: "cancelled"});
+jobs.push({...jobs[0], JobID: "9007199254740993", RunAttempt: 1, RunnerName: "", Conclusion: "cancelled", Latest: false});
 if (args[0] === "api") {
     if (args[1] !== "rate_limit") throw new Error("Unexpected direct API: " + args[1]);
     output({resources: {core: {remaining: 10000, reset: Math.floor(Date.now()/1000)+3600}}});
@@ -50,9 +50,8 @@ if (args[0] === "api") {
 } else if (args.includes("--version")) {
     process.stdout.write("fixture\\n");
 } else if (args[2] === "collect") {
-    const latest = Object.fromEntries(jobs.slice(0, 6001).map(job => [job.JobID, true]));
     const snapshot = {Version: 1, CreatedAt: time(7000), Contents: {Jobs: true, AllAttempts: true},
-        Data: {Window: {Start: time(0), End: time(7000)}, LatestJobs: latest, Runners: [], Warnings: [],
+        Data: {Window: {Start: time(0), End: time(7000)}, Runners: [], Warnings: [],
             HostedRunners: {}, RepositoryPublic: {"owner/repo": false}, Truncated: false,
             Runs: runs.map(run => ({id: run.RunID, created_at: run.CreatedAt})),
             Jobs: jobs.map(job => ({id: job.JobID, run_id: job.RunID})),

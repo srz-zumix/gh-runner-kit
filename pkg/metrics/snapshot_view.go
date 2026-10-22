@@ -23,7 +23,6 @@ type SnapshotMetadata struct {
 type SnapshotDataMetadata struct {
 	Window           Window
 	Runners          []*github.Runner
-	LatestJobs       map[int64]bool
 	HostedRunners    map[string][]*github.HostedRunner
 	RepositoryPublic map[string]bool
 	Warnings         []string
@@ -38,7 +37,7 @@ func (s *Snapshot) Metadata() SnapshotMetadata {
 	return SnapshotMetadata{
 		Version: s.Version, CreatedAt: s.CreatedAt, Repo: s.Repo, Contents: s.Contents,
 		Data: SnapshotDataMetadata{
-			Window: data.Window, Runners: data.Runners, LatestJobs: data.LatestJobs,
+			Window: data.Window, Runners: data.Runners,
 			HostedRunners: data.HostedRunners, RepositoryPublic: data.RepositoryPublic,
 			Warnings: data.Warnings, Truncated: data.Truncated,
 			Runs: len(data.Runs), Jobs: len(data.Jobs),

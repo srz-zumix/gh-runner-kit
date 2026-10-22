@@ -25,10 +25,12 @@ var JobKindFilters = []string{JobKindFilterAll, JobKindFilterSelfHosted, JobKind
 // JobRow is one collected workflow job, left unaggregated so that a downstream tool can
 // group the jobs on an axis the aggregated reports do not offer.
 type JobRow struct {
-	Repo             string
-	RunID            int64
-	RunAttempt       int64
-	JobID            int64
+	Repo       string
+	RunID      int64
+	RunAttempt int64
+	JobID      int64
+	// Latest reports whether the job belongs to the latest attempt of its run.
+	Latest           bool
 	Workflow         string
 	WorkflowPath     string
 	JobName          string
@@ -239,6 +241,7 @@ func (b *jobRowBuilder) build(raw *github.WorkflowJob) (JobRow, bool) {
 		RunID:        runID,
 		RunAttempt:   raw.GetRunAttempt(),
 		JobID:        raw.GetID(),
+		Latest:       b.data.LatestJobs[raw.GetID()],
 		Workflow:     raw.GetWorkflowName(),
 		WorkflowPath: run.GetPath(),
 		JobName:      raw.GetName(),

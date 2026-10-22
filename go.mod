@@ -7,7 +7,7 @@ require (
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/google/go-github/v90 v90.0.0
 	github.com/spf13/cobra v1.10.2
-	github.com/srz-zumix/go-gh-extension v0.6.29
+	github.com/srz-zumix/go-gh-extension v0.6.30
 	golang.org/x/sync v0.24.0
 )
 
@@ -72,7 +72,7 @@ require (
 	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
 	github.com/olekukonko/errors v1.2.0 // indirect
 	github.com/olekukonko/ll v0.1.6 // indirect
-	github.com/olekukonko/tablewriter v1.1.4 // indirect
+	github.com/olekukonko/tablewriter v1.1.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
