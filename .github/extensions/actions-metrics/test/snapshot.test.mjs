@@ -188,14 +188,14 @@ test("snapshots exceeding Node's real string limit load and filter without giant
     assert.equal(metadata.Data.Runs, 2);
     assert.equal(metadata.Data.Jobs, 3);
     assert.equal(metadata.Contents.AllAttempts, true);
-    assert.equal(metadata.Data.LatestJobs["9007199254740995"], true);
+    assert.equal(metadata.Data.LatestJobs, undefined);
     assert.deepEqual(metadata.Data.Warnings, ["synthetic partial history"]);
     const window = { Start: "2026-10-02T00:00:00Z", End: "2026-10-03T00:00:00Z" };
     const filtered = await prepareSnapshot({ input, output, window, cwd: directory });
     assert.equal(filtered.Data.Runs, 1);
     assert.equal(filtered.Data.Jobs, 2);
     assert.deepEqual(filtered.Data.Window, window);
-    assert.deepEqual(filtered.Data.LatestJobs, { "9007199254740995": true, "9007199254740997": false });
+    assert.equal(filtered.Data.LatestJobs, undefined);
     let bytes = 0, head = Buffer.alloc(0), tail = Buffer.alloc(0);
     for await (const chunk of createReadStream(output).pipe(createGunzip())) {
         bytes += chunk.length;
