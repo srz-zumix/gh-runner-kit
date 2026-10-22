@@ -50,7 +50,7 @@ export const MIN_TOP_RUNNERS = 5;
 export const MAX_TOP_RUNNERS = 200;
 export const DEFAULT_ROW_BUDGET = 20000;
 export const MIN_ROW_BUDGET = 500;
-export const MAX_ROW_BUDGET = 200000;
+export const MAX_ROW_BUDGET = 1000000;
 
 /** Highest `--max-runs` the setting accepts; 0 means no limit. */
 export const MAX_RUNS_CEILING = 1000000;

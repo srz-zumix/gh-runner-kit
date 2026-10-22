@@ -11,6 +11,11 @@ function counts(detail) {
     return `From cache: ${detail.cached.toLocaleString()} · Read afresh: ${detail.fetched.toLocaleString()} · Skipped: ${detail.skipped.toLocaleString()}`;
 }
 
+function elapsed(since, now) {
+    const seconds = Math.max(0, Math.floor((now - Date.parse(since)) / 1000));
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 /** Progress belongs to the current collection attempt, not the older metrics on screen. */
 export function renderCollectionProgress(container, state, now = Date.now()) {
     const progress = state?.collectionProgress;
@@ -25,6 +30,11 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
     container.className = `collection-progress${progress.status === "paused" ? " collection-progress--paused" : ""}`;
     const nodes = [text("strong", `${headings[progress.status]} · attempt ${progress.attempt}`)];
     const detail = progress.detail;
+    if (progress.status === "collecting") {
+        nodes.push(text("p", `Elapsed: ${elapsed(progress.startedAt, now)} · ${progress.updatedAt
+            ? `Last collector update ${elapsed(progress.updatedAt, now)} ago`
+            : "Waiting for the first collector update"}`));
+    }
     if (progress.status === "collecting" && state.progress) nodes.push(text("p", state.progress));
     if (detail) {
         if (detail.repositoriesTotal > 0) nodes.push(text("p", `Repository ${detail.repositoryIndex}/${detail.repositoriesTotal}${detail.repository ? ` · ${detail.repository}` : ""}`));
@@ -32,6 +42,13 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
             nodes.push(text("p", `${detail.runs.toLocaleString()} runs · ${detail.jobs.toLocaleString()} jobs gathered from API/cache${progress.status !== "complete" ? "; snapshot/report processing is not yet complete" : " in the source dataset"}`));
         } else {
             nodes.push(text("p", progressDescription(detail)));
+        }
+        if (detail.stage === "runs") {
+            if (detail.runSearch) nodes.push(text("p", `Current search period (UTC): ${detail.runSearch.created}`));
+            nodes.push(text("small", detail.runSearch?.cachedWindows !== undefined
+                ? "Recent runs are listed from GitHub. Complete UTC days older than 24 hours can use a one-hour listing cache; boundary periods are read afresh. Cached days are separate from API searches. Older reruns and deletions can take up to one hour to appear; Shift+click Refresh bypasses caches. Unique runs found are not yet the final selected total."
+                : "Workflow runs are listed from GitHub before cached job lists are read. Large periods may need multiple searches and pages; counts update between searches, not on every page. Unique runs found are not yet the final selected total."));
+            if (!detail.runSearch && progress.supported !== false) nodes.push(text("small", "This CLI does not report run-search counters; update gh runner-kit for discovery details."));
         }
         if (detail.unit) {
             if (detail.total > 0) {
@@ -44,13 +61,14 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
             nodes.push(text("p", counts(detail)));
             if (detail.stage === "attempts") nodes.push(text("small", "Historical attempts count as cached when both completed metadata and job lists are reused; older CLI versions may still fetch metadata."));
         }
-        if (progress.updatedAt) nodes.push(text("small", `Last numeric update: ${new Date(progress.updatedAt).toLocaleString()}`));
+        if (progress.updatedAt) nodes.push(text("small", `Last collector update: ${new Date(progress.updatedAt).toLocaleString()}`));
     } else {
         nodes.push(text("p", "No numeric progress has been reported for this attempt yet."));
     }
     if (progress.interrupted) {
         const previous = progress.interrupted;
-        nodes.push(text("p", `Last interrupted attempt: ${progressDescription(previous.detail)}. ${counts(previous.detail)}. Reported ${new Date(previous.updatedAt).toLocaleString()}.`));
+        const previousCounts = previous.detail.unit ? ` ${counts(previous.detail)}.` : "";
+        nodes.push(text("p", `Last interrupted attempt: ${progressDescription(previous.detail)}.${previousCounts} Reported ${new Date(previous.updatedAt).toLocaleString()}.`));
     }
     if (progress.supported === false) nodes.push(text("p", progress.reason, "collection-progress__note"));
     if (progress.status === "paused" && state.retryAt) {

@@ -1,6 +1,8 @@
 import { svg } from "./charts.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
-import { displayStepName, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, isRunnerFilterActive, labelSetKey, normalizeJobStatus, normalizeRunnerFilter, splitLabelSet, stepIdOf, timelineMatchesWorkflow } from "/shared/steps.mjs";
+import { maxOf } from "/shared/extrema.mjs";
+import { RECOVERED_JOB_STATUS, STEP_CONCLUSIONS, displayStepName, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, isRecoveredJobStatus, isRunnerFilterActive, labelSetKey, normalizeFailedStep, normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters, runnerFilterSelections, splitLabelSet, stepIdOf, timelineMatchesWorkflow, toggleRunnerFilterValue } from "/shared/steps.mjs";
+import { renderFacetPicker } from "/shared/facet.mjs";
 
 function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -51,6 +53,15 @@ let closingRunTimeline = Promise.resolve();
 const prefsByIdentity = new Map();
 const prefsLoading = new Set();
 const draftsByIdentity = new Map();
+const expandedRunnerPools = new Set();
+const runnerFacetViews = new Map();
+const conditionComposers = new Map();
+const RUNNER_FACETS = [
+    { key: "kinds", label: "Kind", format: kindLabel },
+    { key: "labelSets", label: "Runs-on" },
+    { key: "groups", label: "Group" },
+    { key: "names", label: "Name" },
+];
 
 function draftStepSettings(state, patch) {
     draftsByIdentity.set(state?.identity, { ...draftsByIdentity.get(state?.identity), ...patch });
@@ -94,28 +105,44 @@ function summaryCell(values, props = {}) {
     return el("td", { ...props, title: summary.title, text: summary.text });
 }
 
-function runnerFilterFromControls(patch = {}) {
-    return normalizeRunnerFilter({
-        kind: document.getElementById("steps-runner-kind")?.value ?? "all",
-        labels: document.getElementById("steps-runner-labels")?.value ?? "",
-        group: document.getElementById("steps-runner-group")?.value ?? "",
-        name: document.getElementById("steps-runner-name")?.value ?? "",
-        ...patch,
-    });
+function currentRunnerFilter(state, settings = state?.steps?.settings ?? prefsByIdentity.get(state?.identity)) {
+    const pending = pendingStepRequest && pendingStepRequest.identity === state?.identity ? pendingStepRequest.settings.runnerFilter : undefined;
+    return normalizeRunnerFilter(pending ?? state?.steps?.result?.runnerFilter ?? settings?.runnerFilter);
+}
+
+function runnerFilterFromControls(patch = {}, state) {
+    return normalizeRunnerFilter({ ...currentRunnerFilter(state), ...patch });
 }
 
 // Filter changes always use the loaded collection, not edits waiting for Load steps.
 function applyRunnerFilter(state, patch = {}) {
-    void loadSteps(state, { reuseRows: true, runnerFilter: runnerFilterFromControls(patch) });
+    void loadSteps(state, { reuseRows: true, runnerFilter: runnerFilterFromControls(patch, state) });
 }
 
-async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilterFromControls() } = {}) {
+function toggleRunnerFacet(state, key, value) {
+    void loadSteps(state, {
+        reuseRows: true,
+        runnerFilter: toggleRunnerFilterValue(currentRunnerFilter(state), key, value),
+    });
+}
+
+function currentStepSettings(state) {
+    return {
+        ...effectiveStepSettings(state?.steps?.settings ?? prefsByIdentity.get(state?.identity), pendingStepRequest, state?.identity),
+        ...draftsByIdentity.get(state?.identity),
+    };
+}
+
+async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilterFromControls({}, state), failedStep, stepConditions } = {}) {
     if (reuseRows && !canFilterSteps(state)) return;
+    const jobStatus = normalizeJobStatus(document.getElementById("steps-job-status")?.value);
     const budgetInput = document.getElementById("steps-budget")?.value?.trim() ?? "";
     const budget = budgetInput === "" ? 500 : Number(budgetInput);
     const collection = reuseRows ? state.steps.settings : {
         workflow: document.getElementById("steps-workflow")?.value?.trim() ?? "",
-        includeAllAttempts: document.getElementById("steps-all-attempts")?.checked === true,
+        includeAllAttempts: isRecoveredJobStatus(jobStatus)
+            ? currentStepSettings(state).includeAllAttempts === true
+            : document.getElementById("steps-all-attempts")?.checked === true,
         mergeMatrix: document.getElementById("steps-merge")?.checked !== false,
         showInfra: document.getElementById("steps-infra")?.checked !== false,
         runBudget: Number.isFinite(budget) ? budget : 500,
@@ -127,15 +154,21 @@ async function loadSteps(state, { reuseRows = false, runnerFilter = runnerFilter
         renderSoon();
         return;
     }
+    const previousSettings = state.steps?.settings ?? prefsByIdentity.get(state?.identity);
+    const workflowChanged = !reuseRows && workflow !== previousSettings?.workflow;
+    const stepFilters = normalizeStepFilters(workflowChanged ? { stepConditions: [] }
+        : stepConditions !== undefined || failedStep !== undefined ? { stepConditions, failedStep } : currentStepSettings(state));
     const body = {
         ...collection,
         workflow,
         repository: state?.scope === "org" ? document.getElementById("steps-repository")?.value?.trim() ?? "" : "",
         job: document.getElementById("steps-job")?.value?.trim() ?? "",
-        jobStatus: normalizeJobStatus(document.getElementById("steps-job-status")?.value),
+        jobStatus,
+        ...stepFilters,
         runnerFilter,
         reuseRows,
     };
+    if (workflowChanged) conditionComposers.delete(JSON.stringify([state.identity, workflow, body.repository]));
     const seq = ++stepRequestSeq;
     const { reuseRows: _reuse, ...settings } = body;
     pendingStepRequest = { seq, identity: state?.identity, settings, reuseRows };
@@ -212,11 +245,76 @@ function renderSoon() {
     document.dispatchEvent(new CustomEvent("actions-metrics:render"));
 }
 
+function stepLabel(step) {
+    return `${displayStepName(step.name)}${step.occurrence > 1 ? ` · occurrence ${step.occurrence}` : ""}`;
+}
+
+function stepConditionsSummary(conditions) {
+    return conditions.map(step => `${stepLabel(step)} = ${step.conclusion}`).join(" AND ");
+}
+
+function stepConditionControls(state, settings) {
+    if (!state?.steps?.result?.meta?.stepConditionsSupported) return null;
+    const conditions = normalizeStepFilters(settings).stepConditions;
+    const disabled = !canFilterSteps(state);
+    const context = JSON.stringify([state.identity, state.steps?.settings?.workflow, settings.repository ?? ""]);
+    if (!conditionComposers.has(context)) conditionComposers.set(context, { step: null, conclusion: "failure" });
+    const composer = conditionComposers.get(context);
+    const options = [...(state.steps.result.stepConditionFacets ?? [])];
+    for (const step of [...conditions, composer.step].filter(Boolean)) {
+        if (!options.some(option => stepIdOf(option.name, "", option.occurrence) === stepIdOf(step.name, "", step.occurrence))) {
+            options.push({ name: step.name, occurrence: step.occurrence, count: 0, conclusions: [] });
+        }
+    }
+    const selected = composer.step ? stepIdOf(composer.step.name, "", composer.step.occurrence) : "";
+    const conclusions = [...new Set([...STEP_CONCLUSIONS, ...options.flatMap(step => (step.conclusions ?? []).map(outcome => outcome.value)), composer.conclusion])];
+    const apply = stepConditions => void loadSteps(state, { reuseRows: true, stepConditions });
+    return el("section", { "aria-label": "Step conditions" }, [
+        el("div", { class: "controls" }, [
+            el("span", { class: "controls__label", text: "Step conditions (AND)" }),
+            el("label", { class: "inline-field" }, [
+                el("span", { text: "Step" }),
+                el("select", { id: "steps-condition-step", disabled, onchange: event => {
+                    const step = options.find(option => stepIdOf(option.name, "", option.occurrence) === event.target.value);
+                    composer.step = step ? { name: step.name, occurrence: step.occurrence } : null;
+                    renderSoon();
+                } }, [
+                    el("option", { value: "", text: "Select a step" }),
+                    ...options.map(step => el("option", {
+                        value: stepIdOf(step.name, "", step.occurrence), text: `${stepLabel(step)} (${number(step.count)})`,
+                        title: `${step.name} · occurrence ${step.occurrence}`, selected: selected === stepIdOf(step.name, "", step.occurrence),
+                    })),
+                ]),
+            ]),
+            el("label", { class: "inline-field" }, [
+                el("span", { text: "Conclusion" }),
+                el("select", { id: "steps-condition-conclusion", disabled, onchange: event => {
+                    composer.conclusion = event.target.value;
+                } }, conclusions.map(value => el("option", { value, text: value, selected: composer.conclusion === value }))),
+            ]),
+            el("button", {
+                id: "steps-condition-add", type: "button", class: "ghost", text: "Add condition", disabled: disabled || !composer.step,
+                onclick: () => {
+                    if (disabled || !composer.step) return;
+                    apply([...normalizeStepFilters(currentStepSettings(state)).stepConditions, { ...composer.step, conclusion: composer.conclusion }]);
+                },
+            }),
+        ]),
+        conditions.length ? el("div", { class: "chips" }, [
+            ...conditions.map(condition => el("button", {
+                type: "button", class: "chip", disabled, text: `${stepLabel(condition)} = ${condition.conclusion} ×`,
+                title: `Remove condition: ${condition.name} · occurrence ${condition.occurrence} = ${condition.conclusion}`,
+                onclick: () => apply(normalizeStepFilters(currentStepSettings(state)).stepConditions.filter(step =>
+                    step.name !== condition.name || step.occurrence !== condition.occurrence || step.conclusion !== condition.conclusion)),
+            })),
+            el("button", { id: "steps-conditions-clear", type: "button", class: "chip chip--clear", disabled, text: "Clear step conditions", onclick: () => apply([]) }),
+        ]) : null,
+        el("p", { class: "card__note", text: "Every condition must match in the same job attempt. Add a step and conclusion, then add more conditions; remove a chip to drop one. All steps of matching jobs remain. Missing steps do not match. Choices cover the loaded sample, not just matching jobs." }),
+    ]);
+}
+
 function controlPanel(state) {
-    const settings = {
-        ...effectiveStepSettings(state?.steps?.settings ?? prefsByIdentity.get(state?.identity), pendingStepRequest, state?.identity),
-        ...draftsByIdentity.get(state?.identity),
-    };
+    const settings = currentStepSettings(state);
     const filtersDisabled = !canFilterSteps(state);
     const repository = state?.scope === "org" ? settings.repository ?? "" : "";
     const repositories = (state?.steps?.result?.repositoryFacets ?? []).map((item) => ({ value: item.value, text: `${item.value} (${number(item.count)} jobs)` }));
@@ -228,10 +326,19 @@ function controlPanel(state) {
     const jobOptions = jobs.map((job) => ({ value: job.job, text: job.variants?.length > 1 ? `${job.job} (${job.variants.length} variants)` : job.job }));
     if (settings.job && !jobOptions.some((option) => option.value === settings.job)) jobOptions.unshift({ value: settings.job, text: `${settings.job} (0 jobs)` });
     const jobStatus = normalizeJobStatus(settings.jobStatus);
+    const failedStep = normalizeFailedStep(settings.failedStep);
+    const conditions = normalizeStepFilters(settings).stepConditions;
+    const failedStepId = failedStep ? stepIdOf(failedStep.name, "", failedStep.occurrence) : "";
+    const failedStepOptions = [...(state?.steps?.result?.failedStepFacets ?? [])];
+    if (failedStep && !failedStepOptions.some(step => stepIdOf(step.name, "", step.occurrence) === failedStepId)) {
+        failedStepOptions.unshift({ ...failedStep, count: 0 });
+    }
+    const recovered = isRecoveredJobStatus(jobStatus);
     const statusFacets = state?.steps?.result?.jobStatusFacets;
     const statusOptions = statusFacets
         ? statusFacets.map((item) => ({ value: item.value, text: `${item.value} (${number(item.count)})` }))
         : ["success", "failure", "cancelled", "skipped", "timed_out", "completed", "in_progress", "queued", "waiting"].map((value) => ({ value, text: value }));
+    if (state?.steps?.result?.meta?.jobRecoverySupported) statusOptions.unshift({ value: RECOVERED_JOB_STATUS, text: "Succeeded on re-run (all attempts)" });
     if (jobStatus && !statusOptions.some((option) => option.value === jobStatus)) statusOptions.unshift({ value: jobStatus, text: `${jobStatus} (0)` });
     return el("section", { class: "card" }, [
         el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Step timeline" })]),
@@ -254,21 +361,41 @@ function controlPanel(state) {
                 ]),
                 el("label", { class: "inline-field" }, [
                     el("span", { text: "Job status" }),
-                    el("select", { id: "steps-job-status", disabled: filtersDisabled, title: "Filter by job lifecycle status or conclusion, keeping all steps of matching jobs", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
+                    el("select", { id: "steps-job-status", disabled: filtersDisabled, title: "Filter by status or conclusion, or select jobs that succeeded after a failed attempt and retain their attempt history", onchange: () => void loadSteps(state, { reuseRows: true }) }, [
                         el("option", { value: "", text: "All statuses" }),
                         ...statusOptions.map((option) => el("option", { value: option.value, text: option.text, selected: jobStatus === option.value })),
                     ]),
                 ]),
+                !state?.steps?.result?.meta?.stepConditionsSupported && state?.steps?.result?.meta?.failedStepSupported ? el("label", { class: "inline-field" }, [
+                    el("span", { text: "Failed step" }),
+                    el("select", {
+                        id: "steps-failed-step", disabled: filtersDisabled,
+                        title: "Keep job attempts where this exact step concluded failure; show all steps of matching jobs",
+                        onchange: event => {
+                            const choice = failedStepOptions.find(step => stepIdOf(step.name, "", step.occurrence) === event.target.value);
+                            void loadSteps(state, { reuseRows: true, failedStep: choice ? { name: choice.name, occurrence: choice.occurrence } : null });
+                        },
+                    }, [
+                        el("option", { value: "", text: "Any step outcome" }),
+                        ...failedStepOptions.map(step => el("option", {
+                            value: stepIdOf(step.name, "", step.occurrence), text: `${stepLabel(step)} (${number(step.count)})`,
+                            title: `${step.name} · occurrence ${step.occurrence}`, selected: failedStepId === stepIdOf(step.name, "", step.occurrence),
+                        })),
+                    ]),
+                ]) : null,
                 el("label", { class: "inline-field", title: "0 reads every run in the selected window when you press Load steps" }, [el("span", { text: "Runs" }), el("input", { id: "steps-budget", type: "number", min: "0", max: "5000", value: String(settings.runBudget ?? 500), oninput: (event) => draftStepSettings(state, { runBudget: event.target.value }) })]),
-                el("label", { class: "inline-field inline-field--check", title: "Include every retained attempt when you press Load steps; no API collection" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: settings.includeAllAttempts === true, onchange: (event) => draftStepSettings(state, { includeAllAttempts: event.target.checked }) }), el("span", { text: "Include all attempts" })]),
+                el("label", { class: "inline-field inline-field--check", title: recovered ? "The re-run success filter always includes failed and successful attempts; your normal attempt preference is preserved" : "Include every retained attempt when you press Load steps; no API collection" }, [el("input", { id: "steps-all-attempts", type: "checkbox", checked: recovered || settings.includeAllAttempts === true, disabled: recovered, onchange: (event) => draftStepSettings(state, { includeAllAttempts: event.target.checked }) }), el("span", { text: "Include all attempts" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-merge", type: "checkbox", checked: settings.mergeMatrix !== false, onchange: (event) => draftStepSettings(state, { mergeMatrix: event.target.checked }) }), el("span", { text: "Merge matrix" })]),
                 el("label", { class: "inline-field inline-field--check" }, [el("input", { id: "steps-infra", type: "checkbox", checked: settings.showInfra !== false, onchange: (event) => draftStepSettings(state, { showInfra: event.target.checked }) }), el("span", { text: "Show infra" })]),
                 el("button", { type: "button", class: "button button--primary", disabled: loading, text: loading ? "Loading…" : "Load steps", onclick: () => void loadSteps(state) }),
             ]),
+            stepConditionControls(state, settings),
             runnerControls(state, settings),
+            recovered ? el("p", { class: "notice", text: "Keeps jobs whose latest execution succeeded after an earlier failure, timeout or startup failure in the same run. Failed and successful attempts remain unless narrowed by other filters; matrix variants are classified separately, before runner filters. Only observed history in the retained sample can qualify." }) : null,
+            conditions.length ? el("p", { class: "notice", text: `Step conditions: ${stepConditionsSummary(conditions)}. All conditions must match in the same job attempt; all steps of matching jobs remain. Other attempts are not added. ${recovered ? "Re-run success is evaluated from the full history before these attempt conditions." : "The current attempt scope still applies; enable Include all attempts and press Load steps to search earlier attempts."}` }) : null,
             error ? el("p", { class: "notice notice--warn", text: error }) : null,
         ]),
-        el("p", { class: "card__note", text: "Runs defaults to 500 newest runs per repository; 0 removes the run-count limit within the selected window. Changes apply when you press Load steps. Workflow display names are not accepted by the CLI; use the file name such as ci.yml." }),
+        el("p", { class: "card__note", text: "Runs defaults to 500 newest runs per repository; 0 removes the run-count limit within the selected window. Changes apply when you press Load steps. Loading another workflow clears step conditions. Workflow display names are not accepted by the CLI; use the file name such as ci.yml." }),
     ]);
 }
 
@@ -276,36 +403,91 @@ function runnerControls(state, settings) {
     const facets = state?.steps?.result?.runnerFacets;
     if (!facets) return null;
     const disabled = !canFilterSteps(state);
-    const pendingFilter = pendingStepRequest?.identity === state?.identity ? pendingStepRequest.settings.runnerFilter : undefined;
-    const filter = normalizeRunnerFilter(pendingFilter ?? state?.steps?.result?.runnerFilter ?? settings.runnerFilter);
-    if (filter.labels) {
-        const key = labelSetKey(splitLabelSet(filter.labels));
-        filter.labels = (facets.labelSets ?? []).find((item) => labelSetKey(splitLabelSet(item.value)) === key)?.value ?? filter.labels;
+    const filter = currentRunnerFilter(state, settings);
+    const selected = runnerFilterSelections(filter);
+    const context = JSON.stringify([state.identity, state.steps?.settings?.workflow, state.steps?.settings?.repository ?? ""]);
+    if (!runnerFacetViews.has(context)) runnerFacetViews.set(context, { open: new Set(), queries: new Map() });
+    const view = runnerFacetViews.get(context);
+    const chips = [];
+    const pickers = RUNNER_FACETS.map(({ key, label, format = value => value }) => {
+        const options = facets[key] ?? [];
+        const values = key === "labelSets" ? selected[key].map(value =>
+            options.find(option => labelSetKey(splitLabelSet(option.value)) === labelSetKey(splitLabelSet(value)))?.value ?? value) : selected[key];
+        for (const value of values) {
+            chips.push(el("button", {
+                type: "button", class: "chip", disabled, title: `Remove ${label}: ${value}`,
+                text: `${label}: ${format(value)} ×`, onclick: () => toggleRunnerFacet(state, key, value),
+            }));
+        }
+        return renderFacetPicker({
+            create: el, id: `steps-runner-${key}`, key, label, options, selected: values, format,
+            disabled, open: view.open.has(key), query: view.queries.get(key) ?? "",
+            onPick: value => toggleRunnerFacet(state, key, value),
+            onQuery: value => { view.queries.set(key, value); renderSoon(); },
+            onToggle: open => { if (open) view.open.add(key); else view.open.delete(key); },
+        });
+    });
+    if (filter.name && !filter.nameExact && filter.name.includes("*")) {
+        chips.push(el("button", {
+            type: "button", class: "chip", disabled, text: `Name pattern: ${filter.name} ×`,
+            title: "Remove the saved wildcard name filter",
+            onclick: () => applyRunnerFilter(state, { name: "", nameExact: false }),
+        }));
     }
-    const choice = (values, current, allText, format = (value) => value) => {
-        const options = values.map((item) => ({ value: item.value, text: `${format(item.value)} (${number(item.count)})` }));
-        if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, text: `${format(current)} (0)` });
-        return [el("option", { value: "", text: allText }), ...options.map((option) => el("option", { value: option.value, text: option.text, selected: option.value === current }))];
-    };
-    const onChange = () => applyRunnerFilter(state);
-    return el("div", { class: "controls controls--runner" }, [
-        el("span", { class: "controls__label", text: "Runner" }),
-        el("label", { class: "inline-field" }, [
-            el("span", { text: "Kind" }),
-            el("select", { id: "steps-runner-kind", disabled, onchange: onChange }, [
-                ["all", "All kinds"],
-                ["self-hosted", "Self-hosted"],
-                ["github-hosted", "GitHub-hosted"],
-            ].map(([value, text]) => el("option", { value, text, selected: filter.kind === value }))),
+    if (isRunnerFilterActive(filter)) {
+        chips.push(el("button", {
+            type: "button", class: "chip chip--clear", disabled, text: "Clear runner filter",
+            onclick: () => void loadSteps(state, { reuseRows: true, runnerFilter: normalizeRunnerFilter() }),
+        }));
+    }
+    return el("div", {}, [
+        el("div", { class: "controls controls--runner" }, [
+            el("span", { class: "controls__label", text: "Runner" }),
+            el("div", { class: "facets" }, pickers),
         ]),
-        el("label", { class: "inline-field" }, [el("span", { text: "Runs-on" }), el("select", { id: "steps-runner-labels", disabled, onchange: onChange }, choice(facets.labelSets ?? [], filter.labels, "All label sets", (value) => value || "(no labels)"))]),
-        el("label", { class: "inline-field" }, [el("span", { text: "Group" }), el("select", { id: "steps-runner-group", disabled, onchange: onChange }, choice(facets.groups ?? [], filter.group, "All groups"))]),
-        el("label", { class: "inline-field" }, [
-            el("span", { text: "Name" }),
-            el("input", { id: "steps-runner-name", disabled, type: "search", list: "steps-runner-names", placeholder: "runner name, * wildcard", value: filter.name, onchange: onChange }),
-            el("datalist", { id: "steps-runner-names" }, (facets.names ?? []).map((item) => el("option", { value: item.value }))),
-        ]),
-        isRunnerFilterActive(filter) ? el("button", { type: "button", class: "ghost", disabled, text: "Clear runner filter", onclick: () => applyRunnerFilter(state, normalizeRunnerFilter()) }) : null,
+        chips.length ? el("div", { class: "chips" }, chips) : null,
+        el("p", { class: "card__note", text: "Select multiple values: OR within a runner facet, AND between facets. Sample statistics, including Runners, use the selection. Choices remain available so more runners can be added." }),
+    ]);
+}
+
+function runnerMetricCells(pool) {
+    return [
+        el("td", { class: "num", text: number(pool.jobs) }),
+        el("td", { class: "num", text: pool.wait.samples ? formatDuration(pool.wait.p50) : "–" }),
+        el("td", { class: "num", text: pool.wait.samples ? formatDuration(pool.wait.p90) : "–" }),
+        el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p50) : "–" }),
+        el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p90) : "–" }),
+        el("td", {
+            class: "num",
+            text: pool.duration.samples ? formatDuration(pool.duration.total) : "–",
+            title: pool.duration.samples && Number.isFinite(pool.duration.total)
+                ? `${(pool.duration.total / 60000).toLocaleString(undefined, { maximumFractionDigits: 2 })} min`
+                : null,
+        }),
+        el("td", { class: "num", text: percent(pool.failureRate) }),
+    ];
+}
+
+function individualRunnerRow(state, runner, selected) {
+    const active = selected.names.includes(runner.name);
+    const selectable = runner.name !== "" && canFilterSteps(state);
+    const select = () => toggleRunnerFacet(state, "names", runner.name);
+    const title = !runner.name ? "This job has no assigned runner to select."
+        : active ? "Click to clear the individual runner selection" : "Click to filter the statistics by this individual runner";
+    return el("tr", {
+        class: `runners-table__row--individual${active ? " row--selected" : ""}${selectable ? " runners-table__row--selectable" : ""}`,
+        title,
+        onclick: selectable ? select : null,
+    }, [
+        el("td", { class: "runners-table__individual-label", text: "Runner" }),
+        summaryCell(runner.kinds.map((item) => kindLabel(item.value))),
+        summaryCell(runner.groups),
+        el("td", {}, [el("button", {
+            type: "button", class: "ghost runners-table__runner", disabled: !selectable,
+            text: runner.name || "(unassigned)", "aria-pressed": String(active), title,
+            onclick: (event) => { event.stopPropagation(); if (selectable) select(); },
+        })]),
+        ...runnerMetricCells(runner),
     ]);
 }
 
@@ -313,46 +495,52 @@ function runnersCard(state) {
     const result = state?.steps?.result;
     const pools = result?.runners ?? [];
     if (!result?.runnerFacets) return null;
-    const filter = normalizeRunnerFilter(result.runnerFilter);
-    const filterKey = filter.labels ? labelSetKey(splitLabelSet(filter.labels)) : null;
+    const selected = runnerFilterSelections(result.runnerFilter);
+    const filterKeys = new Set(selected.labelSets.map(value => labelSetKey(splitLabelSet(value))));
     const body = pools.length === 0
         ? el("p", { class: "empty", text: "No jobs to group by runner." })
         : el("table", { class: "runners-table" }, [
             el("thead", {}, [el("tr", {}, [el("th", { text: "Runs-on" }), el("th", { text: "Kind" }), el("th", { text: "Group" }), el("th", { text: "Runners" }), el("th", { class: "num", text: "Jobs" }), el("th", { class: "num", text: "Wait p50" }), el("th", { class: "num", text: "Wait p90" }), el("th", { class: "num", text: "Run p50" }), el("th", { class: "num", text: "Run p90" }), el("th", { class: "num", text: "Total run" }), el("th", { class: "num", text: "Fail" })])]),
-            el("tbody", {}, pools.map((pool) => {
-                const active = filterKey !== null && filterKey === pool.key;
+            el("tbody", {}, pools.flatMap((pool) => {
+                const active = filterKeys.has(pool.key);
+                const expansionKey = JSON.stringify([state.identity, state.steps?.settings?.workflow, state.steps?.settings?.repository ?? "", pool.key]);
+                const individuals = pool.individuals ?? [];
+                const expanded = individuals.length > 0 && expandedRunnerPools.has(expansionKey);
+                const labels = el("td", { class: "runners-table__labels" }, [
+                    individuals.length > 0 ? el("button", {
+                        type: "button", class: "ghost runners-table__toggle",
+                        text: expanded ? "-" : "+", "aria-expanded": String(expanded),
+                        "aria-label": `${expanded ? "Hide" : "Show"} individual runners for ${pool.labels || "(no labels)"}`,
+                        onclick: (event) => {
+                            event.stopPropagation();
+                            if (expanded) expandedRunnerPools.delete(expansionKey);
+                            else expandedRunnerPools.add(expansionKey);
+                            renderSoon();
+                        },
+                    }) : null,
+                    el("span", { text: pool.labels || "(no labels)" }),
+                ]);
                 // A job without runs-on labels cannot be selected, because an empty
                 // label filter means every label set.
                 const selectable = pool.labels !== "" && canFilterSteps(state);
-                return el("tr", {
+                const row = el("tr", {
                     class: `${active ? "row--selected" : ""}${selectable ? " runners-table__row--selectable" : ""}`.trim() || null,
-                    title: !selectable ? null : active ? "Click to show every runs-on set" : "Click to filter the statistics by this runs-on set",
-                    onclick: selectable ? () => applyRunnerFilter(state, { labels: active ? "" : pool.labels }) : null,
+                    title: !selectable ? null : active ? "Click to remove this runs-on set from the selection" : "Click to add this runs-on set to the selection",
+                    onclick: selectable ? () => toggleRunnerFacet(state, "labelSets", pool.labels) : null,
                 }, [
-                    el("td", { class: "runners-table__labels", text: pool.labels || "(no labels)" }),
+                    labels,
                     summaryCell(pool.kinds.map((item) => kindLabel(item.value))),
                     summaryCell(pool.groups),
                     summaryCell(pool.runners.map((item) => `${item.value} (${number(item.count)})`)),
-                    el("td", { class: "num", text: number(pool.jobs) }),
-                    el("td", { class: "num", text: pool.wait.samples ? formatDuration(pool.wait.p50) : "–" }),
-                    el("td", { class: "num", text: pool.wait.samples ? formatDuration(pool.wait.p90) : "–" }),
-                    el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p50) : "–" }),
-                    el("td", { class: "num", text: pool.duration.samples ? formatDuration(pool.duration.p90) : "–" }),
-                    el("td", {
-                        class: "num",
-                        text: pool.duration.samples ? formatDuration(pool.duration.total) : "–",
-                        title: pool.duration.samples && Number.isFinite(pool.duration.total)
-                            ? `${(pool.duration.total / 60000).toLocaleString(undefined, { maximumFractionDigits: 2 })} min`
-                            : null,
-                    }),
-                    el("td", { class: "num", text: percent(pool.failureRate) }),
+                    ...runnerMetricCells(pool),
                 ]);
+                return [row, ...(expanded ? individuals.map((runner) => individualRunnerRow(state, runner, selected)) : [])];
             })),
         ]);
     return el("section", { class: "card" }, [
         el("header", { class: "card__header" }, [el("h2", { class: "card__title", text: "Runners" })]),
         el("div", { class: "card__body" }, [body]),
-        el("p", { class: "card__note", text: "Jobs grouped by their runs-on label set, before the runner filter is applied. Hosted runners are reported as GitHub Actions. Wait and run statistics only use jobs that started or finished. Total run sums completed job execution times, excluding wait; parallel jobs and included attempts are added separately, not measured as elapsed wall-clock time." }),
+        el("p", { class: "card__note", text: "Matching jobs grouped by their runs-on label set, after all job and runner filters. Expand a pool to see non-hosted runners grouped by name; click a runner or pool to toggle its selection. Add more values with the Runner checkboxes above. GitHub-hosted runners stay aggregated. Wait and run statistics only use jobs that started or finished. Total run sums completed job execution times, excluding wait; parallel jobs and included attempts are added separately, not measured as elapsed wall-clock time." }),
     ]);
 }
 
@@ -375,7 +563,8 @@ function footnote(result) {
     if (!result?.meta) return null;
     const meta = result.meta;
     const range = meta.oldest && meta.newest ? `${new Date(meta.oldest).toLocaleString()} – ${new Date(meta.newest).toLocaleString()}` : "no timestamp range";
-    const selections = [meta.repository ? `repository: ${meta.repository}` : "", meta.jobStatus ? `status: ${meta.jobStatus}` : ""].filter(Boolean);
+    const conditions = normalizeStepFilters(meta).stepConditions;
+    const selections = [meta.repository ? `repository: ${meta.repository}` : "", meta.jobStatus ? `status: ${meta.jobStatus}` : "", conditions.length ? `steps: ${stepConditionsSummary(conditions)}` : ""].filter(Boolean);
     const filtered = isRunnerFilterActive(meta.runnerFilter) || selections.length ? ` The job filters${selections.length ? ` (${selections.join("; ")})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
     const basis = meta.latestAttemptBasis === false
         ? `Attempt scope: all; ${number(meta.analysedAttempts)} attempts have matching rows. Earlier attempts with jobs: ${number(meta.historicalAttemptsWithJobs)} of ${number(meta.historicalAttemptsRequested)} requested.`
@@ -389,7 +578,9 @@ function footnote(result) {
 // The CLI reports skipped repositories and job lists on stderr; without them a partial
 // collection would look complete.
 function collectionWarnings(result) {
-    const warnings = result?.meta?.warnings ?? [];
+    const warnings = [...(result?.meta?.warnings ?? [])];
+    const ambiguous = result?.meta?.recovery?.ambiguousJobs ?? 0;
+    if (ambiguous) warnings.push(`Cannot classify ${number(ambiguous)} job histories with multiple same-name jobs in one attempt. They are excluded from re-run recovery matching; distinct job names are required.`);
     if (!warnings.length) return null;
     return el("details", { class: "notice notice--warn collection-warnings" }, [
         el("summary", { text: `Collection warnings (${number(warnings.length)})` }),
@@ -428,7 +619,7 @@ function ganttStepRow({ name, tooltip, duration, segments }) {
 function typicalTimeline(result) {
     const jobs = result?.typicalTimeline ?? [];
     if (jobs.length === 0) return el("p", { class: "empty", text: "Load a workflow to draw the typical step timeline." });
-    const max = Math.max(1000, ...jobs.flatMap((job) => job.steps.map((step) => Math.max(job.startOffsetMs + step.offsetMs + step.durationMs, job.startOffsetMs + step.offsetP90Ms + step.durationP90Ms))));
+    const max = maxOf(jobs.flatMap((job) => job.steps.map((step) => Math.max(job.startOffsetMs + step.offsetMs + step.durationMs, job.startOffsetMs + step.offsetP90Ms + step.durationP90Ms))), 1000);
     const rows = [ganttAxis(max)];
     for (const job of jobs) {
         rows.push(el("div", { class: "gantt__group", text: job.job }));
@@ -504,7 +695,7 @@ function trendChart(step) {
     const width = 960;
     const height = 180;
     const plot = { x: 50, y: 10, width: width - 70, height: height - 38 };
-    const max = Math.max(1000, ...daily.flatMap((day) => [day.p50Ms, day.p90Ms]), ...points.map((point) => point.durationMs));
+    const max = Math.max(maxOf(daily.flatMap((day) => [day.p50Ms, day.p90Ms]), 1000), maxOf(points.map((point) => point.durationMs)));
     const root = svg("svg", { class: "chart", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" });
     for (const ratio of [0, 0.5, 1]) {
         const y = plot.y + plot.height * (1 - ratio);
@@ -552,9 +743,10 @@ function runList(result, state) {
     ]);
 }
 
-function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", repository = "") {
+function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", repository = "", failedStep = null, stepConditions) {
     if (!timeline) return el("p", { class: "empty", text: "Open a run to show a single-run Gantt." });
-    const jobs = filterTimelineJobs(timeline, jobStatus, repository);
+    const conditions = normalizeStepFilters({ stepConditions, failedStep }).stepConditions;
+    const jobs = filterTimelineJobs(timeline, jobStatus, repository, stats?.runs, failedStep, conditions);
     const sameRepository = !repository || timeline.Repo === repository;
     const sameWorkflow = timelineMatchesWorkflow(timeline, workflow);
     // Keyed by repository, the job name the run reports and the step id: a merged matrix
@@ -570,7 +762,7 @@ function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", reposit
         }
     }
     const ms = (value) => Number(value) / 1e6 || 0;
-    const max = Math.max(1000, ms(timeline.Duration), ...jobs.map((job) => ms(job.QueuedOffset) + ms(job.Wait) + ms(job.Duration)));
+    const max = Math.max(1000, ms(timeline.Duration), maxOf(jobs.map((job) => ms(job.QueuedOffset) + ms(job.Wait) + ms(job.Duration))));
     const rows = [
         el("div", { class: "gantt__header" }, [
             el("span", { class: "gantt__title", text: `${timeline.Workflow} #${timeline.RunID} attempt ${timeline.RunAttempt}` }),
@@ -579,6 +771,9 @@ function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", reposit
         sameWorkflow ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.WorkflowPath || timeline.Workflow}, not ${workflow}; slow-step highlighting against p90 is off.` }),
         sameRepository ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.Repo || "an unknown repository"}, not ${repository}. Clear the repository filter to show its jobs. Copy mermaid exports the full run.` }),
         jobStatus ? el("p", { class: "notice", text: `Job status: ${jobStatus}; showing ${number(jobs.length)} of ${number(timeline.Jobs?.length ?? 0)} jobs. Copy mermaid exports the full run.` }) : null,
+        conditions.length ? el("p", { class: "notice", text: `Step conditions: ${stepConditionsSummary(conditions)}; showing ${number(jobs.length)} of ${number(timeline.Jobs?.length ?? 0)} jobs matching every condition in their own attempt. Copy mermaid exports the full run.` }) : null,
+        isRecoveredJobStatus(jobStatus) && !(stats?.runs ?? []).some(row => row.repo === timeline.Repo && row.runId === String(timeline.RunID))
+            ? el("p", { class: "notice notice--warn", text: "Re-run recovery membership is unavailable for this run in the loaded run list. Choose a matching run from that list or clear the job status filter." }) : null,
         jobs.length === 0 ? el("p", { class: "empty", text: "No jobs match the selected filters." }) : null,
         ganttAxis(max),
     ].filter(Boolean);
@@ -679,7 +874,7 @@ export function renderSteps(state) {
                 state?.steps?.timeline ? el("button", { type: "button", class: "ghost", text: "Close run", onclick: () => void closeRunTimeline(state) }) : null,
             ]),
             runList(result, state),
-            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state), state?.steps?.settings?.jobStatus ?? "", state?.steps?.settings?.repository ?? ""),
+            runTimeline(state?.steps?.timeline, result, state?.steps?.settings?.workflow ?? result?.meta?.workflow ?? "", () => void closeRunTimeline(state), state?.steps?.settings?.jobStatus ?? "", state?.steps?.settings?.repository ?? "", state?.steps?.settings?.failedStep ?? null, state?.steps?.settings?.stepConditions),
         ])]),
     ].filter(Boolean);
 }

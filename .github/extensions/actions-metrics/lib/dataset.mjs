@@ -1,19 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { gunzip as gunzipCallback, gzip as gzipCallback } from "node:zlib";
-import { promisify } from "node:util";
-import { collectFleet, collectRuns, jobRowsCommand, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
+import { collectFleet, collectRuns, jobRowsCommand, prepareSnapshot, probeRunnerKit, snapshotCommand } from "./runnerkit.mjs";
 import { runLines } from "./jobs.mjs";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
-import { filteredWindow, periodTime } from "../shared/period.mjs";
-import { filterSnapshot, parseSnapshot, stringifySnapshot } from "./period.mjs";
+import { filteredWindow, periodNanoseconds, periodTime } from "../shared/period.mjs";
 import { parseCollectionProgress, progressDescription } from "../shared/progress.mjs";
-
-/** Compression runs on the libuv threadpool so a large snapshot cannot stall the event loop. */
-const gunzip = promisify(gunzipCallback);
-const gzip = promisify(gzipCallback);
 
 /** A retained snapshot owns its file until the last active reader releases it. */
 export class SharedDataset {
@@ -50,14 +43,20 @@ export class SharedDataset {
     }
 }
 
-async function datasetView(base, filters, signal) {
-    const window = filteredWindow(base.meta.window, filters);
+async function datasetView(base, filters, cwd, signal) {
+    const resolved = filteredWindow(base.meta.window, filters);
+    // Keep the snapshot's nanoseconds only for omitted boundaries; an explicit end stays exclusive.
+    const window = {
+        Start: periodTime(resolved.Start) === periodTime(base.meta.window.Start) ? base.meta.window.Start : resolved.Start,
+        End: !filters.filterTo ? base.meta.window.End : resolved.End,
+    };
     const filtered = Boolean(filters.filterFrom || filters.filterTo);
     const from = periodTime(window.Start);
     const to = periodTime(window.End);
+    const start = periodNanoseconds(window.Start), end = periodNanoseconds(window.End);
     const runs = filtered ? base.runs.filter(run => {
-        const created = periodTime(run.created_at);
-        return created >= from && created < to;
+        const created = periodNanoseconds(run.created_at);
+        return created !== null && created >= start && created < end;
     }) : base.runs;
     const selected = new Set(runs.map(run => JSON.stringify([run.repository, String(run.id)])));
     const jobs = filtered ? base.jobs.filter(job => selected.has(JSON.stringify([job.Repo, String(job.RunID)]))) : base.jobs;
@@ -72,11 +71,8 @@ async function datasetView(base, filters, signal) {
     const directory = await mkdtemp(join(tmpdir(), "actions-metrics-period-"));
     try {
         signal?.throwIfAborted();
-        const snapshot = parseSnapshot((await gunzip(await readFile(base.input))).toString("utf8"));
         const input = join(directory, "snapshot.json.gz");
-        const body = await gzip(stringifySnapshot(filterSnapshot(snapshot, runs, window)));
-        signal?.throwIfAborted();
-        await writeFile(input, body, { mode: 0o600 });
+        await prepareSnapshot({ input: base.input, output: input, window, cwd, signal });
         signal?.throwIfAborted();
         return new SharedDataset(input, directory, runs, jobs, meta, base);
     } catch (error) {
@@ -105,8 +101,8 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         return readDataset(base, { target, filters, limits, cwd, signal, onProgress, started });
     }
     const probe = await probeRunnerKit(cwd);
-    if (!probe.subcommands?.has("collect") || !probe.subcommands?.has("report")) {
-        throw new Error("The shared dataset requires gh runner-kit metrics collect and metrics report; update gh runner-kit");
+    if (!["collect", "report", "snapshot"].every(name => probe.subcommands?.has(name))) {
+        throw new Error("The shared dataset requires gh runner-kit metrics collect, metrics report and metrics snapshot; update gh runner-kit");
     }
     const directory = await mkdtemp(join(tmpdir(), "actions-metrics-dataset-"));
     let dataset;
@@ -128,8 +124,9 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
                 }
             },
         });
-        const snapshot = JSON.parse((await gunzip(await readFile(input))).toString("utf8"));
-        if (snapshot.Version !== 1 || snapshot.Contents?.AllAttempts !== true || !snapshot.Data || !snapshot.Data.LatestJobs) {
+        onProgress?.("Reading shared snapshot metadata");
+        const snapshot = await prepareSnapshot({ input, cwd, signal });
+        if (snapshot.Version !== 1 || snapshot.Contents?.AllAttempts !== true || !snapshot.Data) {
             throw new Error("The CLI did not produce an all-attempts dataset with latest-job coverage; update gh runner-kit");
         }
         const warnings = [...(snapshot.Data.Warnings ?? [])];
@@ -139,7 +136,11 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
         const rows = jobRowsCommand({ target, filters: { ...filters, labels: [] }, limits, cwd, input, kind: "all", probe });
         await runLines(rows.args, rows.env, cwd, line => {
             const row = JSON.parse(line);
-            jobs.push({ ...row, Latest: snapshot.Data.LatestJobs[String(row.JobID)] === true });
+            // Latest-job coverage streams with each row so metadata stays independent of job count.
+            if (typeof row.Latest !== "boolean") {
+                throw new Error("The CLI did not produce job rows with latest-job coverage; update gh runner-kit");
+            }
+            jobs.push(row);
             return true;
         }, signal);
         const meta = {
@@ -173,7 +174,7 @@ export async function collectSharedSnapshot({ target, filters, limits, cwd, data
 async function readDataset(base, { target, filters, limits, cwd, signal, onProgress, started }) {
     let dataset;
     try {
-        dataset = await datasetView(base, filters, signal);
+        dataset = await datasetView(base, filters, cwd, signal);
         const warnings = [...base.source.warnings];
         const days = (periodTime(dataset.meta.window.End) - periodTime(dataset.meta.window.Start)) / 86400000;
         const fleet = await collectFleet({ target, filters: { ...filters, days }, limits, cwd, input: dataset.input, signal, onProgress, warnings });

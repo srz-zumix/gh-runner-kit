@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 test("collection switches attempt scope, caches matching rows and reports historical coverage without GitHub requests", async (t) => {
     const dir = await mkdtemp(join(tmpdir(), "actions-metrics-attempt-test-"));
-    const previous = { PATH: process.env.PATH, COPILOT_HOME: process.env.COPILOT_HOME, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404, FAKE_STEP_UNLIMITED: process.env.FAKE_STEP_UNLIMITED };
+    const previous = { PATH: process.env.PATH, COPILOT_HOME: process.env.COPILOT_HOME, FAKE_GH_LOG: process.env.FAKE_GH_LOG, FAKE_TIMELINE_EMPTY: process.env.FAKE_TIMELINE_EMPTY, FAKE_TIMELINE_404: process.env.FAKE_TIMELINE_404, FAKE_STEP_UNLIMITED: process.env.FAKE_STEP_UNLIMITED, FAKE_STEP_CONDITIONS: process.env.FAKE_STEP_CONDITIONS };
     t.after(async () => {
         for (const [key, value] of Object.entries(previous)) {
             if (value === undefined) delete process.env[key];
@@ -26,11 +26,13 @@ const at = (seconds) => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOStr
 const job = {
     Repo: "owner/repo", RunID: "42", RunAttempt: 2, JobID: "102",
     Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", JobName: "build",
+    RunnerName: "box*", Kind: "self-hosted", Labels: ["self-hosted", "linux"], RunnerGroup: "Default",
     Status: "completed", Conclusion: "success", StartedAt: at(102), CompletedAt: at(112),
 };
 const snapshotJobs = () => {
-    if (!process.env.FAKE_STEP_UNLIMITED) return [job];
-    const { budget } = JSON.parse(fs.readFileSync(args[args.indexOf("--input") + 1], "utf8"));
+    const { budget, sharedHistory } = JSON.parse(fs.readFileSync(args[args.indexOf("--input") + 1], "utf8"));
+    if (!process.env.FAKE_STEP_UNLIMITED) return sharedHistory
+        ? [{ ...job, JobID: "101", RunAttempt: 1, Conclusion: "timed_out", StartedAt: at(2), CompletedAt: at(22) }, job] : [job];
     const count = budget === 0 ? 6001 : Math.min(6001, budget);
     return Array.from({ length: count }, (_, index) => ({
         ...job, RunID: String(1000 + index), JobID: String(2000 + index), RunAttempt: 1,
@@ -51,9 +53,15 @@ if (args.join(" ") === "runner-kit metrics --help") {
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "jobs" && args.includes("--input")) {
     for (const row of snapshotJobs()) output(row);
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "steps" && args.includes("--input")) {
-    for (const row of snapshotJobs()) output({ ...row, RunStartedAt: at(100), JobStartedAt: row.StartedAt, JobCompletedAt: row.CompletedAt,
-        JobConclusion: "success", StepNumber: 1, StepName: "Compile", StepKey: "Compile", StepOccurrence: 1,
-        StepStatus: "completed", StepConclusion: "success", StartedAt: at(103), CompletedAt: at(108), Duration: 5000000000, Offset: 1000000000 });
+    for (const row of snapshotJobs()) {
+        const step = { ...row, RunStartedAt: at(100), JobStartedAt: row.StartedAt, JobCompletedAt: row.CompletedAt,
+        JobConclusion: row.Conclusion, StepNumber: 1, StepName: "Compile", StepKey: "Compile", StepOccurrence: 1,
+        StepStatus: "completed", StepConclusion: row.Conclusion === "timed_out" ? "failure" : "success",
+        StartedAt: new Date(Date.parse(row.StartedAt) + 1000).toISOString(),
+        CompletedAt: new Date(Date.parse(row.StartedAt) + 6000).toISOString(), Duration: 5000000000, Offset: 1000000000 };
+        output(step);
+        if (process.env.FAKE_STEP_CONDITIONS) output({ ...step, StepName: "Cleanup", StepKey: "Cleanup", StepNumber: 2, StepConclusion: "success" });
+    }
 } else if (args[0] === "runner-kit" && args[1] === "metrics" && args[2] === "runs" && args.includes("--input")) {
     output({ Repository: "owner/repo", RunID: "42", RunAttempt: 2 });
 } else if (args[0] === "runner-kit" && args[1] === "job" && args[2] === "timeline" && process.env.FAKE_TIMELINE_404) {
@@ -62,6 +70,7 @@ if (args.join(" ") === "runner-kit metrics --help") {
 } else if (args[0] === "runner-kit" && args[1] === "job" && args[2] === "timeline" && args[args.indexOf("--attempt") + 1] === "1") {
     output({ Repo: "owner/repo", RunID: "42", RunAttempt: 1, Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", StartedAt: at(0),
         Jobs: process.env.FAKE_TIMELINE_EMPTY ? [] : [{ JobID: "101", Name: "build", Status: "completed", Conclusion: "timed_out",
+            Kind: "self-hosted", Labels: ["self-hosted", "linux"], RunnerName: "box*", RunnerGroup: "Default",
             StartedAt: at(2), CompletedAt: at(22), Duration: 20000000000, Steps: [{ Number: 1, Name: "Compile", Key: "Compile", Occurrence: 1,
                 Status: "completed", Conclusion: "success", StartedAt: at(3), CompletedAt: at(8), Duration: 5000000000, JobOffset: 1000000000 }] }] });
 } else {
@@ -139,7 +148,7 @@ if (args.join(" ") === "runner-kit metrics --help") {
     assert.equal(gone.meta.totalJobs, 1);
     assert.equal(gone.meta.warnings.length, 1);
     assert.match(gone.meta.warnings[0], /attempt 1: .*404 Not Found/);
-    const { normalizeQuery, targetOf, filtersOf, limitsOf } = await import("../lib/query.mjs");
+    const { datasetQueryId, normalizeQuery, targetOf, filtersOf, limitsOf } = await import("../lib/query.mjs");
     const { DashboardStore } = await import("../lib/store.mjs");
     const { DashboardInstance } = await import("../lib/instance.mjs");
     const { startInstanceServer } = await import("../lib/server.mjs");
@@ -148,21 +157,25 @@ if (args.join(" ") === "runner-kit metrics --help") {
     const { SharedDataset } = await import("../lib/dataset.mjs");
     const sharedDir = await mkdtemp(join(dir, "shared-"));
     const sharedInput = join(sharedDir, "snapshot.json");
-    await writeFile(sharedInput, JSON.stringify({ budget: 2 }));
+    await writeFile(sharedInput, JSON.stringify({ budget: 2, sharedHistory: true }));
     const dataset = new SharedDataset(
         sharedInput, sharedDir,
         [{ repository: "owner/repo", id: "42", workflowPath: ".github/workflows/ci.yml", run_attempt: 2, created_at: "2026-01-01T00:00:00Z" }],
-        [{ ...all.rows.jobs.rows.find(row => row.JobID === "102"), Latest: true }],
+        all.rows.jobs.rows.map(row => ({ ...row, Latest: row.JobID === "102" })),
         { id: "shared-fixture", collectedAt: "2026-01-01T00:00:00Z", truncated: false, warnings: [] },
     );
     const snapshot = await collectStepMetrics({ cwd: dir, target: targetOf(query), filters: filtersOf(query), limits: limitsOf(query), dataset, ...settings });
     assert.equal(snapshot.available, true, snapshot.reason);
     const panel = new DashboardInstance({ instanceId: "repository-filter", store: new DashboardStore({ cwd: dir }), query });
-    Object.assign(panel.store.entry(query), { status: "ready", dataset, metrics: { meta: { dataset: dataset.meta } } });
+    Object.assign(panel.store.entry(query), { status: "ready", dataset, datasetSignature: datasetQueryId(query), metrics: { meta: { dataset: dataset.meta } } });
     const { generation } = panel.beginStepRequest();
     panel.setStepMetrics(settings, snapshot, generation);
     const { server, url } = await startInstanceServer(panel);
     try {
+        const facetModule = await fetch(`${url}shared/facet.mjs`);
+        assert.equal(facetModule.status, 200);
+        assert.match(facetModule.headers.get("content-type"), /javascript/);
+        assert.match(await facetModule.text(), /export function renderFacetPicker/);
         const beforeFilters = (await calls()).length;
         for (const repository of ["owner/missing", "owner/repo", ""]) {
             const response = await fetch(`${url}api/steps`, {
@@ -180,6 +193,147 @@ if (args.join(" ") === "runner-kit metrics --help") {
             assert.equal((await (await fetch(`${url}api/step-prefs`)).json()).repository, repository);
             assert.equal((await calls()).length, beforeFilters);
         }
+        for (const [runnerFilter, expectedJobs] of [
+            [{ kind: "self-hosted", name: "box*", nameExact: true }, 1],
+            [{ kind: "self-hosted", name: "box-02", nameExact: true }, 0],
+            [{ kind: "self-hosted", name: "box*" }, 1],
+            [{ kind: "self-hosted", name: "", nameExact: true }, 1],
+            [{
+                kinds: ["hosted", "self-hosted"], labelSets: ["macos", "LINUX,SELF-HOSTED"],
+                groups: ["Other", "Default"], names: ["box*", "box-02"],
+            }, 1],
+            [{ names: ["box-02"] }, 0],
+            [{ names: ["box*"], groups: ["Other"] }, 0],
+            [{ name: "box-02", names: ["box*"] }, 1],
+            [{ kinds: [], labelSets: [], groups: [], names: [] }, 1],
+        ]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, runnerFilter, reuseRows: true }),
+            });
+            const result = await response.json();
+            assert.equal(response.status, 200, result.reason);
+            assert.equal(result.meta.reusedRows, true);
+            assert.equal(result.meta.totalJobs, expectedJobs);
+            assert.equal(result.meta.totalStepRows, expectedJobs);
+            assert.equal(result.runners.reduce((sum, pool) => sum + pool.jobs, 0), expectedJobs);
+            assert.deepEqual(result.runnerFacets, snapshot.runnerFacets);
+            assert.equal(Object.hasOwn(result.runnerFilter, "nameExact"), Boolean(runnerFilter.name && runnerFilter.nameExact));
+            assert.deepEqual(panel.state().steps.settings.runnerFilter, result.runnerFilter);
+            assert.deepEqual((await (await fetch(`${url}api/step-prefs`)).json()).runnerFilter, result.runnerFilter);
+            assert.equal((await calls()).length, beforeFilters);
+        }
+        for (const runnerFilter of [{}, { names: ["box*"] }]) {
+            const before = (await calls()).length;
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, jobStatus: "rerun_success", runnerFilter, reuseRows: true }),
+            });
+            const result = await response.json();
+            assert.equal(response.status, 200, result.reason);
+            assert.equal(result.includeAllAttempts, true);
+            assert.equal(result.meta.latestAttemptBasis, false);
+            assert.equal(result.meta.totalJobs, 2);
+            assert.equal(result.meta.totalStepRows, 2);
+            assert.equal(result.stepStats[0].samples, 2);
+            assert.deepEqual(result.runs.map(row => [row.runAttempt, row.conclusion]), [[2, "success"], [1, "timed_out"]]);
+            assert.equal(panel.state().steps.settings.includeAllAttempts, false);
+            const prefs = await (await fetch(`${url}api/step-prefs`)).json();
+            assert.equal(prefs.jobStatus, "rerun_success");
+            assert.equal(prefs.includeAllAttempts, false);
+            const recorded = (await calls()).slice(before);
+            assert.ok(recorded.every(args => args[0] !== "api" && args[2] !== "collect"));
+            if (runnerFilter.names) {
+                assert.equal(result.meta.reusedRows, true);
+                assert.equal(recorded.length, 0);
+            }
+        }
+        const beforeFailedSteps = (await calls()).length;
+        for (const [failedStep, expectedJobs, jobStatus] of [
+            [{ name: "Compile" }, 1, "rerun_success"],
+            [{ name: "Compile", occurrence: 2 }, 0, "rerun_success"],
+            [{ name: "compile" }, 0, "rerun_success"],
+            [{ name: "Compile*" }, 0, "rerun_success"],
+            [null, 2, "rerun_success"],
+            [{ name: "Compile" }, 0, "success"],
+            [{ name: "Compile" }, 1, ""],
+        ]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, includeAllAttempts: true, failedStep, jobStatus, reuseRows: true }),
+            });
+            const result = await response.json();
+            assert.equal(response.status, 200, result.reason);
+            const normalized = failedStep ? { occurrence: 1, ...failedStep } : null;
+            assert.deepEqual(result.failedStep, normalized);
+            assert.deepEqual(result.meta.failedStep, normalized);
+            assert.equal(result.meta.totalJobs, expectedJobs);
+            assert.equal(result.meta.totalStepRows, expectedJobs);
+            assert.equal(result.runners.reduce((sum, pool) => sum + pool.jobs, 0), expectedJobs);
+            assert.deepEqual(result.failedStepFacets, [{ name: "Compile", occurrence: 1, count: 1 }]);
+            if (failedStep && expectedJobs) assert.deepEqual(result.runs.map(row => row.runAttempt), [1]);
+            assert.deepEqual(panel.state().steps.settings.failedStep, normalized);
+            assert.deepEqual((await (await fetch(`${url}api/step-prefs`)).json()).failedStep, normalized);
+            assert.equal(result.meta.reusedRows, true);
+            assert.equal((await calls()).length, beforeFailedSteps);
+        }
+        const beforeInvalid = await (await fetch(`${url}api/step-prefs`)).json();
+        for (const failedStep of ["Compile", {}, { name: "Compile", occurrence: 0 }]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, failedStep, reuseRows: true }),
+            });
+            assert.equal(response.status, 400);
+            assert.match((await response.json()).error, /failedStep/);
+            assert.deepEqual(await (await fetch(`${url}api/step-prefs`)).json(), beforeInvalid);
+            assert.equal((await calls()).length, beforeFailedSteps);
+        }
+        process.env.FAKE_STEP_CONDITIONS = "1";
+        const conditions = [{ name: "Compile", conclusion: "failure" }, { name: "Cleanup", conclusion: "success" }];
+        const beforeCompound = (await calls()).length;
+        const initialConditions = await fetch(`${url}api/steps`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...settings, includeAllAttempts: true, stepConditions: conditions, failedStep: { name: "Missing" } }),
+        });
+        const initial = await initialConditions.json();
+        assert.equal(initialConditions.status, 200, initial.reason);
+        assert.equal(initial.meta.totalJobs, 1);
+        assert.equal(initial.meta.totalStepRows, 2);
+        assert.equal(initial.failedStep, null);
+        assert.deepEqual(initial.stepConditions, conditions.map(condition => ({ ...condition, occurrence: 1 })));
+        assert.equal(initial.meta.stepConditionsSupported, true);
+        assert.deepEqual(initial.runs.map(row => row.runAttempt), [1]);
+        assert.ok((await calls()).slice(beforeCompound).every(args => args[0] !== "api" && args[2] !== "collect"));
+        const afterCompound = (await calls()).length;
+        for (const [stepConditions, expectedJobs] of [[conditions, 1], [[...conditions, { name: "missing", conclusion: "success" }], 0], [[], 2], [null, 2]]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, includeAllAttempts: true, stepConditions, failedStep: { name: "Missing" }, reuseRows: true }),
+            });
+            const result = await response.json();
+            assert.equal(response.status, 200, result.reason);
+            assert.equal(result.meta.totalJobs, expectedJobs);
+            assert.equal(result.meta.totalStepRows, expectedJobs * 2);
+            assert.equal(result.meta.reusedRows, true);
+            assert.equal(result.failedStep, null);
+            assert.deepEqual(result.stepConditionFacets, initial.stepConditionFacets);
+            assert.deepEqual((await (await fetch(`${url}api/step-prefs`)).json()).stepConditions, result.stepConditions);
+            assert.deepEqual(panel.state().steps.settings.stepConditions, result.stepConditions);
+            assert.equal((await calls()).length, afterCompound);
+        }
+        const beforeInvalidConditions = await (await fetch(`${url}api/step-prefs`)).json();
+        for (const stepConditions of ["A", [{}], [null], [{ name: "A", conclusion: "" }], [{ name: "A", conclusion: "failure", occurrence: 0 }]]) {
+            const response = await fetch(`${url}api/steps`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...settings, stepConditions, reuseRows: true }),
+            });
+            assert.equal(response.status, 400);
+            assert.match((await response.json()).error, /stepConditions/);
+            assert.deepEqual(await (await fetch(`${url}api/step-prefs`)).json(), beforeInvalidConditions);
+            assert.equal((await calls()).length, afterCompound);
+        }
+        delete process.env.FAKE_STEP_CONDITIONS;
         const response = await fetch(`${url}api/steps`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -190,6 +344,8 @@ if (args.join(" ") === "runner-kit metrics --help") {
         assert.equal(result.runBudget, 0);
         assert.equal(result.meta.runBudget, 0);
         assert.equal(result.meta.truncated, false);
+        assert.equal(result.meta.totalJobs, 1);
+        assert.equal(result.meta.latestAttemptBasis, true);
         assert.equal(panel.state().steps.settings.runBudget, 0);
         assert.equal((await (await fetch(`${url}api/step-prefs`)).json()).runBudget, 0);
     } finally {

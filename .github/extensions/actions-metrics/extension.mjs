@@ -30,7 +30,7 @@ import { DashboardInstance } from "./lib/instance.mjs";
 import { startInstanceServer } from "./lib/server.mjs";
 import { loadPrefs, rememberStepSettings } from "./lib/prefs.mjs";
 import { collectStepMetrics } from "./lib/steprows.mjs";
-import { normalizeJobStatus, normalizeRunnerFilter } from "./shared/steps.mjs";
+import { normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters } from "./shared/steps.mjs";
 import { collectRunTimeline } from "./lib/timeline.mjs";
 
 /** instanceId -> { instance, server, url } */
@@ -752,9 +752,33 @@ const canvas = createCanvas({
                     workflow: { type: "string", description: "Workflow file name/path or ID, for example ci.yml. Defaults to the dashboard workflow filter when set." },
                     repository: { type: "string", description: "Keep only sampled jobs and steps from this exact OWNER/REPO, after collection. Empty or omitted means all repositories. Combine with reuseRows to filter without collecting again." },
                     job: { type: "string", description: "Optional job name or merged matrix base to focus on." },
-                    jobStatus: { type: "string", description: "Keep jobs matching this lifecycle status or conclusion, such as in_progress, completed, success, failure or cancelled, and all their steps. Empty or omitted means all statuses." },
-                    includeAllAttempts: { type: "boolean", description: "Include every retained attempt of sampled runs without collecting again. Defaults to false (latest-attempt job listing, including carried-over jobs)." },
-                    section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns per runs-on pool job counts, wait, duration percentiles, cumulative execution time in duration.total (milliseconds) and failure rate." },
+                    jobStatus: { type: "string", description: "Keep jobs matching a lifecycle status or conclusion, or use rerun_success for exact jobs whose latest execution succeeded after an earlier failure, timeout or startup failure in the same run. rerun_success includes all their retained attempts, even when includeAllAttempts is false. Matrix variants are classified separately before runner filters. Empty or omitted means all statuses." },
+                    failedStep: {
+                        type: ["object", "null"],
+                        description: "Legacy alias for one stepConditions item with conclusion failure. Used only when stepConditions is omitted. Existing saved selections migrate automatically; prefer stepConditions for multiple AND conditions.",
+                        properties: {
+                            name: { type: "string", description: "Exact, case-sensitive step name; asterisks are literal." },
+                            occurrence: { type: "integer", minimum: 1, description: "Which occurrence of this name within the job. Defaults to 1; not the step number." },
+                        },
+                        required: ["name"],
+                        additionalProperties: false,
+                    },
+                    stepConditions: {
+                        type: ["array", "null"],
+                        description: "AND conditions on exact step names, occurrences and conclusions within the SAME job attempt, for example [{name: 'A', conclusion: 'failure'}, {name: 'B', conclusion: 'success'}]. Retains all steps of matching jobs and intersects other filters without another collection. Uses the current attempt scope. Empty array or null clears conditions and overrides failedStep; omission falls back to legacy failedStep. Choices and observed outcome counts are returned in stepConditionFacets.",
+                        items: {
+                            type: "object",
+                            properties: {
+                                name: { type: "string", minLength: 1, description: "Exact case-sensitive step name; asterisks are literal." },
+                                occurrence: { type: "integer", minimum: 1, description: "Occurrence of this name within the job, not the step number. Defaults to 1." },
+                                conclusion: { type: "string", minLength: 1, description: "Step conclusion such as failure, success, skipped, cancelled or timed_out. Normalized to lowercase; not a job conclusion or lifecycle status." },
+                            },
+                            required: ["name", "conclusion"],
+                            additionalProperties: false,
+                        },
+                    },
+                    includeAllAttempts: { type: "boolean", description: "Include every retained attempt of sampled runs without collecting again. Defaults to false (latest-attempt job listing, including carried-over jobs). jobStatus: rerun_success always uses all attempts without changing this preference." },
+                    section: { type: "string", enum: ["jobs", "steps", "timeline", "trend", "runners"], description: "Which part to emphasize in the returned JSON. Defaults to steps. runners returns runs-on pool statistics and non-hosted individuals grouped by runner name, including job counts, wait and duration percentiles, cumulative duration.total (milliseconds) and failure rate." },
                     limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum rows returned in the requested section. Defaults to 50." },
                     mergeMatrix: { type: "boolean", description: "Merge matrix job variants when at least two variants share a base name. Defaults to true." },
                     showInfra: { type: "boolean", description: "Include Set up job, Complete job and Post-* steps. Defaults to true." },
@@ -762,8 +786,13 @@ const canvas = createCanvas({
                     runnerKind: { type: "string", enum: ["all", "self-hosted", "github-hosted"], description: "Keep only the jobs of this runner kind. Defaults to all." },
                     runsOn: { type: "string", description: "Keep only the jobs whose runs-on label set equals this comma-separated set, ignoring order and case, for example self-hosted,linux." },
                     runnerGroup: { type: "string", description: "Keep only the jobs that ran in this runner group." },
-                    runner: { type: "string", description: "Keep only the jobs that ran on a runner whose name matches this pattern; * matches any characters. Hosted runners are named GitHub Actions." },
-                    reuseRows: { type: "boolean", description: "Re-aggregate the rows of the previous collection instead of calling the CLI again when the workflow and run budget are unchanged. Defaults to false." },
+                    runner: { type: "string", description: "Keep only the jobs that ran on a runner whose name matches this pattern; * matches any characters unless runnerExact is true. Hosted instance IDs are removed from names when identified." },
+                    runnerExact: { type: "boolean", description: "Match runner as an exact name instead of a wildcard pattern. Defaults to false." },
+                    runnerKinds: { type: "array", items: { type: "string", enum: ["hosted", "self-hosted", "unknown"] }, description: "Select multiple exact runner kinds. Empty or omitted means no additional selection. Values within a facet are ORed; different facets are ANDed." },
+                    runsOnSets: { type: "array", items: { type: "string" }, description: "Select multiple exact comma-separated runs-on label sets, ignoring label order and case." },
+                    runnerGroups: { type: "array", items: { type: "string" }, description: "Select multiple exact runner groups." },
+                    runnerNames: { type: "array", items: { type: "string" }, description: "Select multiple exact runner names. Asterisks are literal. Legacy scalar inputs add another value to the same facet." },
+                    reuseRows: { type: "boolean", description: "Reuse retained rows when the collection scope is unchanged. Switching into or out of rerun_success can read local all-attempt snapshot rows, without new GitHub requests. Defaults to false." },
                 },
                 additionalProperties: false,
             },
@@ -777,12 +806,16 @@ const canvas = createCanvas({
                     repository: String(input.repository ?? "").trim(),
                     job: input.job ?? "",
                     jobStatus: normalizeJobStatus(input.jobStatus),
+                    ...normalizeStepFilters(input),
                     includeAllAttempts: input.includeAllAttempts === true,
                     mergeMatrix: input.mergeMatrix !== false,
                     showInfra: input.showInfra !== false,
                     runBudget: input.runBudget,
                     kind: "all",
-                    runnerFilter: normalizeRunnerFilter({ kind: input.runnerKind, labels: input.runsOn, group: input.runnerGroup, name: input.runner }),
+                    runnerFilter: normalizeRunnerFilter({
+                        kind: input.runnerKind, labels: input.runsOn, group: input.runnerGroup, name: input.runner, nameExact: input.runnerExact,
+                        kinds: input.runnerKinds, labelSets: input.runsOnSets, groups: input.runnerGroups, names: input.runnerNames,
+                    }),
                 };
                 const { generation, signal } = instance.beginStepRequest();
                 let result;
@@ -821,6 +854,10 @@ const canvas = createCanvas({
                     repositoryFacets: result.repositoryFacets,
                     job: result.job,
                     jobStatus: result.jobStatus,
+                    failedStep: result.failedStep,
+                    failedStepFacets: result.failedStepFacets,
+                    stepConditions: result.stepConditions,
+                    stepConditionFacets: result.stepConditionFacets,
                     includeAllAttempts: result.includeAllAttempts,
                     jobStatusFacets: result.jobStatusFacets,
                     meta: result.meta,

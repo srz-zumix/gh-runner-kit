@@ -14,6 +14,10 @@ const detail = {
     unit: "runs", completed: 4, total: 10, cached: 2, fetched: 1, skipped: 1, runs: 10, jobs: 0,
 };
 const record = value => JSON.stringify({type: "runner-kit.metrics.progress", version: 1, ...value});
+const discovery = {
+    ...detail, stage: "runs", unit: "", completed: 0, total: 0, cached: 0, fetched: 0, skipped: 0,
+    runSearch: {created: "2026-10-01T00:00:00Z..2026-10-01T23:59:59Z", searches: 3, discovered: 1200},
+};
 
 test("progress schema validates real stage counts and ignores ordinary diagnostics", () => {
     assert.deepEqual(parseCollectionProgress(record(detail)), detail);
@@ -28,6 +32,19 @@ test("progress schema validates real stage counts and ignores ordinary diagnosti
     assert.throws(() => parseCollectionProgress('{"type":"runner-kit.metrics.progress",'), /Invalid collection progress JSON/);
     assert.equal(parseCollectionProgress(record({...detail, stage: "runs", unit: "", completed: 0, total: 0, cached: 0, fetched: 0, skipped: 0})).unit, "");
     assert.equal(Object.hasOwn(parseCollectionProgress(record({...detail, extra: "example-extra"})), "extra"), false);
+});
+
+test("run discovery accepts optional unknown-total counters without treating searches as pages or final totals", () => {
+    assert.deepEqual(parseCollectionProgress(record(discovery)), discovery);
+    assert.match(progressDescription(discovery), /search 3.*1,200 unique runs found/);
+    const {runSearch, ...legacy} = discovery;
+    assert.deepEqual(parseCollectionProgress(record(legacy)), legacy);
+    for (const invalid of [
+        null, [], {}, {...runSearch, created: ""}, {...runSearch, searches: 0},
+        {...runSearch, searches: 0.5}, {...runSearch, discovered: -1},
+        {...runSearch, discovered: Number.MAX_SAFE_INTEGER + 1},
+    ]) assert.throws(() => parseCollectionProgress(record({...discovery, runSearch: invalid})), /Invalid or unsupported/);
+    assert.throws(() => parseCollectionProgress(record({...detail, runSearch})), /Invalid or unsupported/);
 });
 
 test("ordinary retries retain one interrupted stage without summing counts or growing history", () => {
@@ -46,6 +63,24 @@ test("ordinary retries retain one interrupted stage without summing counts or gr
     assert.equal(hard.attempt, 1);
     assert.equal(hard.interrupted, null);
     assert.equal(beginCollectionProgress({...previous, status: "complete"}, {resume: true}).interrupted, null);
+});
+
+test("run discovery reports cached days separately, including a cache-only historical window", () => {
+    for (const searches of [0, 2]) {
+        const cached = {...discovery, runSearch: {...discovery.runSearch, searches, cachedWindows: 3}};
+        assert.deepEqual(parseCollectionProgress(record(cached)), cached);
+        assert.match(progressDescription(cached), /1,200 unique runs found.*3 cached days/);
+    }
+    for (const cachedWindows of [-1, 1.5, "3", null, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.throws(() => parseCollectionProgress(record({
+            ...discovery, runSearch: {...discovery.runSearch, cachedWindows},
+        })), /Invalid or unsupported/);
+    }
+    const empty = {...discovery, runSearch: {...discovery.runSearch, cachedWindows: 0}};
+    assert.deepEqual(parseCollectionProgress(record(empty)), empty);
+    assert.throws(() => parseCollectionProgress(record({
+        ...empty, runSearch: {...empty.runSearch, searches: 0},
+    })), /Invalid or unsupported/);
 });
 
 async function fixture(t) {
@@ -72,7 +107,7 @@ fs.appendFileSync(process.env.PROGRESS_CALLS, JSON.stringify(args) + "\\n");
 if (args[0] === "api") {
     process.stdout.write(JSON.stringify({resources:{core:{remaining:10000, reset:Math.floor(Date.now()/1000)+3600}}}) + "\\n");
 } else if (args.includes("--help")) {
-    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n\\nFlags:\\n  --progress\\n  --until string\\n");
+    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  snapshot Snapshot\\n\\nFlags:\\n  --progress\\n  --until string\\n");
 } else if (args.includes("--version")) {
     process.stdout.write("fixture\\n");
 } else if (args[0] === "invalid-progress") {
@@ -99,12 +134,14 @@ if (args[0] === "api") {
         process.exitCode = 1;
     } else {
     const record = ${JSON.stringify(record(detail))};
-    process.stderr.write("WARN fixture diagnostic\\n" + record.slice(0, 41));
+    process.stderr.write("WARN fixture diagnostic\\n" + ${JSON.stringify(record(discovery))} + "\\n" + record.slice(0, 41));
     setTimeout(() => {
         process.stderr.write(record.slice(41) + "\\nError: API rate limit exceeded [rate reset in 30s]\\n");
         process.exitCode = 1;
     }, 10);
     }
+} else if (args[2] === "snapshot") {
+    process.stdout.write(zlib.gunzipSync(fs.readFileSync(args[args.indexOf("--input")+1])));
 } else if (args.includes("--input") && ["runs","jobs","report"].includes(args[2])) {
     if (args[2] === "report") process.stdout.write(JSON.stringify({
         summary:{Window:{Start:"2026-10-01T00:00:00Z",End:"2026-10-02T00:00:00Z"}, Runs:0}, concurrency:[],
@@ -136,6 +173,7 @@ test("streamed counters survive rate limits and repeated cooldown Refresh, but h
     assert.equal(first.collectionProgress.supported, true);
     assert.deepEqual(first.collectionProgress.detail, detail);
     assert.ok(notices.some(value => value?.status === "collecting" && value?.detail?.completed === 4));
+    assert.ok(notices.some(value => value?.detail?.runSearch?.discovered === 1200));
     assert.deepEqual(first.metrics, {previous: true});
     const count = (await calls()).filter(args => args[2] === "collect" && !args.includes("--help")).length;
     assert.equal(count, 1);
@@ -393,6 +431,54 @@ test("renderer shows stage-only percentages, retained stopped counts and retry c
     assert.doesNotMatch(content(), /not yet complete/);
     renderCollectionProgress(container, {});
     assert.equal(container.hidden, true);
+});
+
+test("discovery renderer updates elapsed and last-update times even while the collector is silent", t => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+    t.after(() => {
+        if (original) Object.defineProperty(globalThis, "document", original); else delete globalThis.document;
+    });
+    class Node {
+        constructor(tag) { this.tag = tag; this.textContent = ""; }
+        replaceChildren(...children) { this.children = children; }
+    }
+    globalThis.document = {createElement: tag => new Node(tag)};
+    const container = new Node("section");
+    const now = Date.parse("2026-10-01T00:00:00Z");
+    const progress = {
+        ...beginCollectionProgress(null, {now}),
+        supported: true, detail: discovery, updatedAt: new Date(now + 5000).toISOString(),
+    };
+    const content = () => container.children.map(node => node.textContent).join("\n");
+    renderCollectionProgress(container, {collectionProgress: progress}, now + 65000);
+    assert.match(content(), /Elapsed: 1m 5s.*Last collector update 1m 0s ago/);
+    assert.match(content(), /search 3.*1,200 unique runs found/);
+    assert.match(content(), /Current search period \(UTC\): 2026-10-01/);
+    assert.match(content(), /before cached job lists are read/);
+    assert.match(content(), /between searches, not on every page/);
+    renderCollectionProgress(container, {collectionProgress: {
+        ...progress, detail: {...discovery, runSearch: {...discovery.runSearch, cachedWindows: 27}},
+    }}, now + 65000);
+    assert.match(content(), /27 cached days/);
+    assert.match(content(), /older than 24 hours.*one-hour listing cache/);
+    assert.match(content(), /Older reruns and deletions can take up to one hour/);
+    assert.match(content(), /Shift\+click Refresh bypasses caches/);
+    assert.equal(container.children.some(node => node.tag === "progress"), false);
+    assert.doesNotMatch(content(), /%|ETA.*\d/);
+    renderCollectionProgress(container, {collectionProgress: progress}, now + 125000);
+    assert.match(content(), /Elapsed: 2m 5s.*Last collector update 2m 0s ago/);
+    assert.equal(progress.detail.runSearch.discovered, 1200, "a timer tick must not invent collector progress");
+    const {runSearch, ...legacy} = discovery;
+    renderCollectionProgress(container, {collectionProgress: {...progress, detail: legacy}}, now + 125000);
+    assert.match(content(), /does not report run-search counters/);
+    renderCollectionProgress(container, {collectionProgress: beginCollectionProgress(null, {now})}, now + 15000);
+    assert.match(content(), /Elapsed: 0m 15s.*Waiting for the first collector update/);
+    renderCollectionProgress(container, {collectionProgress: {...progress, status: "failed"}}, now + 125000);
+    assert.doesNotMatch(content(), /Elapsed:/);
+    assert.match(content(), /search 3.*1,200 unique runs found/);
+    renderCollectionProgress(container, {collectionProgress: beginCollectionProgress({...progress, status: "paused"}, {resume: true, now})}, now + 125000);
+    assert.match(content(), /Last interrupted attempt:.*search 3.*1,200 unique runs found/);
+    assert.doesNotMatch(content(), /From cache:/, "discovery has not checked the job cache yet");
 });
 
 test("reading a retained dataset during a cooldown keeps the interrupted collection's retry", async t => {

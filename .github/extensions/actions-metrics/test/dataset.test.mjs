@@ -39,28 +39,39 @@ const jobs = runs.map((run, i) => ({
     Workflow: run.Workflow, WorkflowPath: run.WorkflowPath, JobName: "build",
     Kind: "hosted", Labels: ["ubuntu-latest"], RunnerName: "GitHub Actions",
     Status: "completed", Conclusion: "success", ExecutionStarted: true, StartedAt: time(i), CompletedAt: time(i + 61),
-    Duration: 61000000000,
+    Duration: 61000000000, Latest: true,
 }));
-jobs.push({...jobs[0], JobID: "9007199254740993", RunAttempt: 1, RunnerName: "", Conclusion: "cancelled"});
+jobs.push({...jobs[0], JobID: "9007199254740993", RunAttempt: 1, RunnerName: "", Conclusion: "cancelled", Latest: false});
 if (args[0] === "api") {
     if (args[1] !== "rate_limit") throw new Error("Unexpected direct API: " + args[1]);
     output({resources: {core: {remaining: 10000, reset: Math.floor(Date.now()/1000)+3600}}});
 } else if (args.includes("--help")) {
-    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n  --until string\\n");
+    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  snapshot Snapshot\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n  --until string\\n");
 } else if (args.includes("--version")) {
     process.stdout.write("fixture\\n");
 } else if (args[2] === "collect") {
-    const latest = Object.fromEntries(jobs.slice(0, 6001).map(job => [job.JobID, true]));
     const snapshot = {Version: 1, CreatedAt: time(7000), Contents: {Jobs: true, AllAttempts: true},
-        Data: {Window: {Start: time(0), End: time(7000)}, LatestJobs: latest, Runners: [], Warnings: [],
+        Data: {Window: {Start: time(0), End: time(7000)}, Runners: [], Warnings: [],
             HostedRunners: {}, RepositoryPublic: {"owner/repo": false}, Truncated: false,
-            Runs: runs.map(run => ({id: run.RunID})),
+            Runs: runs.map(run => ({id: run.RunID, created_at: run.CreatedAt})),
             Jobs: jobs.map(job => ({id: job.JobID, run_id: job.RunID})),
             RunRepositories: Object.fromEntries(runs.map(run => [run.RunID, run.Repository]))}};
     fs.writeFileSync(args[args.indexOf("--output")+1], zlib.gzipSync(JSON.stringify(snapshot)));
 } else {
     if (!args.includes("--input")) throw new Error("A report attempted an independent collection: " + args.join(" "));
     const snapshot = JSON.parse(zlib.gunzipSync(fs.readFileSync(args[args.indexOf("--input")+1])));
+    if (args[2] === "snapshot") {
+        if (args.includes("--since")) {
+            const start = args[args.indexOf("--since")+1], end = args[args.indexOf("--until")+1];
+            snapshot.Data.Window = {Start:start, End:end};
+            snapshot.Data.Runs = snapshot.Data.Runs.filter(run => run.created_at >= start && run.created_at < end);
+        }
+        if (args.includes("--output")) fs.writeFileSync(args[args.indexOf("--output")+1], zlib.gzipSync(JSON.stringify(snapshot)));
+        delete snapshot.Data.Jobs;
+        delete snapshot.Data.Attempts;
+        delete snapshot.Data.Usage;
+        output(snapshot);
+    } else {
     const selected = new Set(snapshot.Data.Runs.map(run => String(run.id)));
     const selectedRuns = runs.filter(run => selected.has(run.RunID));
     const selectedJobs = jobs.filter(job => selected.has(job.RunID));
@@ -78,6 +89,7 @@ if (args[0] === "api") {
     }
     else if (args[2] === "export") output({Runs: selectedRuns.length});
     else throw new Error("Unexpected command: " + args.join(" "));
+    }
 }
 `, { mode: 0o700 });
     const { DashboardStore } = await import("../lib/store.mjs");
@@ -103,6 +115,7 @@ if (args[0] === "api") {
     const calls = async () => (await readFile(process.env.SHARED_CALLS, "utf8")).trim().split("\n").map(JSON.parse);
     const collections = async () => (await calls()).filter(args => args[2] === "collect" && !args.includes("--help"));
     assert.equal((await collections()).length, 1);
+    assert.ok((await calls()).some(args => args[2] === "snapshot" && !args.includes("--help")));
     const instance = new DashboardInstance({instanceId: "shared-rows-test", store, query});
     const {server, url} = await startInstanceServer(instance);
     t.after(async () => {
@@ -110,6 +123,12 @@ if (args[0] === "api") {
         server.closeAllConnections();
         await new Promise(resolve => server.close(resolve));
     });
+    for (const name of ["extrema", "rowpayload"]) {
+        const response = await fetch(`${url}shared/${name}.mjs`);
+        assert.equal(response.status, 200);
+        assert.match(response.headers.get("content-type"), /javascript/);
+        assert.equal(await response.text(), await readFile(new URL(`../shared/${name}.mjs`, import.meta.url), "utf8"));
+    }
     const notices = [];
     instance.onState(value => notices.push(value.rows?.status));
     const request = await fetch(`${url}api/rows`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
@@ -198,6 +217,7 @@ if (args[0] === "api") {
     assert.equal(filteredTimeline.status, 502);
     const filterCalls = (await calls()).slice(beforeFilter);
     assert.ok(filterCalls.every(args => args[0] !== "api" && args[2] !== "collect"));
+    assert.ok(filterCalls.some(args => args[2] === "snapshot" && args.includes("--output") && args.includes("--since") && args.includes("--until")));
     assert.throws(() => instance.apply({patch: {filterFrom: time(-1)}}), /within the collected period/);
     assert.equal(instance.state().metrics.overview.totals.runs, 2);
     const filteredDataset = store.entry(query).dataset;
@@ -209,7 +229,9 @@ if (args[0] === "api") {
     await assert.rejects(access(filteredDataset.input));
     const old = store.entry(query).dataset.acquire();
     const previousRevision = store.rows.signature(query);
-    await store.refresh(query, {force: true});
+    const refresh = store.refresh(query, {force: true});
+    assert.throws(() => instance.apply({patch: {filterFrom: time(1), filterTo: time(3)}}), {code: "loading"});
+    await refresh;
     assert.notEqual(store.rows.signature(query), previousRevision);
     assert.equal(instance.state().rows.stale, true);
     instance.requestRows();

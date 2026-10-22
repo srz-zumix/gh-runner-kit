@@ -23,7 +23,7 @@ const (
 	DefaultDays = 7
 	// DefaultMaxRuns caps how many workflow runs a single command retrieves per repository.
 	DefaultMaxRuns = 300
-	// DefaultConcurrency is the number of per-run API requests issued in parallel.
+	// DefaultConcurrency bounds parallel API requests within each collection stage.
 	DefaultConcurrency = 6
 
 	// maxRetries is how often a rate limited request is retried before giving up.
@@ -302,6 +302,7 @@ type Collector struct {
 	attemptJobs     JobFetcher
 	attemptCache    *Cache
 	refreshAttempts bool
+	runCache        *runListingCache
 	progress        collectionProgress
 }
 
@@ -579,9 +580,21 @@ func matchesRepositoryPattern(pattern string, repo repository.Repository) bool {
 // collectRuns lists the workflow runs of repo that started inside the window, reporting
 // whether limit stopped the listing before the window did.
 func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository, limit int) ([]*github.WorkflowRun, bool, error) {
-	runs, err := collectWindowRuns(ctx, c.opts.Window, limit, func(created string, cap int) ([]*github.WorkflowRun, error) {
+	var discovered map[int64]bool
+	if c.opts.OnProgress != nil {
+		discovered = make(map[int64]bool)
+	}
+	searches := 0
+	list := func(created string, cap int) ([]*github.WorkflowRun, error) {
+		if discovered != nil {
+			searches++
+			if err := c.progress.runSearch(created, searches, len(discovered)); err != nil {
+				return nil, err
+			}
+		}
 		options := &gh.ListWorkflowRunsOptions{
 			Branch: c.opts.Branch, Event: c.opts.Event, Created: created, Limit: cap,
+			Concurrency: c.opts.Concurrency,
 		}
 		var rows []*github.WorkflowRun
 		err := withRetry(ctx, func() error {
@@ -593,8 +606,35 @@ func (c *Collector) collectRuns(ctx context.Context, repo repository.Repository,
 			}
 			return err
 		})
+		if err == nil && discovered != nil {
+			for _, run := range rows {
+				discovered[run.GetID()] = true
+			}
+			if err := c.progress.runSearch(created, searches, len(discovered)); err != nil {
+				return nil, err
+			}
+		}
 		return rows, err
-	})
+	}
+	search := func(window Window, budget int, checkpoint *runWindowCheckpoint) ([]*github.WorkflowRun, error) {
+		return collectWindowRuns(ctx, window, budget, list, checkpoint)
+	}
+	var runs []*github.WorkflowRun
+	var err error
+	if c.runCache == nil {
+		runs, err = search(c.opts.Window, limit, nil)
+	} else {
+		runs, err = c.runCache.collect(ctx, repo, c.opts.Window, limit, search, func(window Window, rows []*github.WorkflowRun) error {
+			if discovered == nil {
+				return nil
+			}
+			for _, run := range rows {
+				discovered[run.GetID()] = true
+			}
+			created := window.Start.UTC().Format(time.RFC3339) + ".." + window.End.Add(-time.Second).UTC().Format(time.RFC3339)
+			return c.progress.runCache(created, searches, len(discovered))
+		})
+	}
 	if err != nil {
 		return nil, false, err
 	}

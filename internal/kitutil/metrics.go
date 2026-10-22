@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-runner-kit/pkg/metrics"
@@ -98,7 +99,7 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 	f.StringVar(&m.Since, "since", "", "Aggregate since this time, as YYYY-MM-DD or RFC3339 (cannot be used with --days)")
 	f.StringVar(&m.Until, "until", "", "Exclusive end time, as YYYY-MM-DD or RFC3339 (default now; --days counts back from this time)")
 	f.IntVar(&m.MaxRuns, "max-runs", metrics.DefaultMaxRuns, "Stop after retrieving this many workflow runs per repository (0 for no limit)")
-	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of per-run API requests to issue in parallel")
+	f.IntVar(&m.Concurrency, "concurrency", metrics.DefaultConcurrency, "Number of API requests to issue in parallel for run pages and per-run data")
 	f.StringVar(&m.Branch, "branch", "", "Keep only the workflow runs of this branch")
 	f.StringVar(&m.Event, "event", "", "Keep only the workflow runs triggered by this event")
 	f.StringVar(&m.Workflow, "workflow", "", "Keep only the runs of this workflow file, such as ci.yml")
@@ -106,8 +107,8 @@ func (m *MetricsFlags) Add(cmd *cobra.Command, opts ...AddOption) {
 	f.StringArrayVar(&m.IncludeRepos, "include-repo", nil, "Keep only the repositories matching this pattern, such as octo/*, owner/repo or [HOST/]OWNER/REPO (repeatable)")
 	f.StringArrayVar(&m.ExcludeRepos, "exclude-repo", nil, "Drop the repositories matching this pattern, such as octo/* or [HOST/]OWNER/REPO (repeatable)")
 	if options.cacheFlags {
-		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached per-run metrics data")
-		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached per-run metrics data and fetch it again")
+		f.BoolVar(&m.NoCache, "no-cache", false, "Do not read or write cached run listings or per-run metrics data")
+		f.BoolVar(&m.Refresh, "refresh", false, "Ignore cached run listings and per-run metrics data and fetch them again")
 	}
 	if options.inputFlag {
 		f.StringVar(&m.Input, "input", "", "Read a snapshot metrics collect wrote instead of collecting from the API (- for stdin)")
@@ -409,6 +410,10 @@ func (m *MetricsFlags) buildCollector(cmd *cobra.Command, window metrics.Window,
 		OnProgress:   onProgress,
 	}, jobs)
 
+	if cache, ok := m.cache(); ok {
+		token, _ := auth.TokenForHost(repo.Host)
+		collector.SetRunCache(cache, m.Refresh, token)
+	}
 	if m.AllAttempts {
 		fetcher := metrics.JobFetcher(metrics.NewAPIAttemptJobFetcher(client))
 		if cache, ok := m.cache(); ok {

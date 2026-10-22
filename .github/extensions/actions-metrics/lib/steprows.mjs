@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { assertRateBudget, ghRaw, isRateLimitError, noteRateLimit } from "./gh.mjs";
 import { runLines } from "./jobs.mjs";
 import { jobRowsCommand, probeRunnerKit, snapshotCommand, stepRowsCommand } from "./runnerkit.mjs";
-import { aggregateSteps, normalizeRunnerFilter } from "../shared/steps.mjs";
+import { aggregateSteps, isRecoveredJobStatus, normalizeRunnerFilter } from "../shared/steps.mjs";
 import { collectEarlierAttempts } from "./stepattempts.mjs";
 
 const DEFAULT_STEP_RUN_BUDGET = 500;
@@ -135,7 +135,8 @@ async function streamFromSnapshot({ common, budget, workflowFile, cwd, target, s
             });
             jobs.rows = history.jobs;
             steps.rows = history.steps;
-            jobs.warnings.push(...runs.warnings, ...history.warnings);
+            for (const warning of runs.warnings) jobs.warnings.push(warning);
+            for (const warning of history.warnings) jobs.warnings.push(warning);
             jobs.historicalAttemptsRequested = history.historicalAttemptsRequested;
             jobs.historicalAttemptsWithJobs = history.historicalAttemptsWithJobs;
         }
@@ -154,6 +155,8 @@ export async function collectStepMetrics({
     repository = "",
     job = "",
     jobStatus = "",
+    failedStep = null,
+    stepConditions,
     includeAllAttempts = false,
     mergeMatrix = true,
     showInfra = true,
@@ -170,6 +173,7 @@ export async function collectStepMetrics({
     signal,
     onProgress,
 } = {}) {
+    includeAllAttempts ||= isRecoveredJobStatus(jobStatus);
     const probe = await probeRunnerKit(cwd);
     if (!probe.available) {
         return { available: false, reason: `${probe.reason}. Install it with \`gh extension install srz-zumix/gh-runner-kit\`.` };
@@ -207,7 +211,7 @@ export async function collectStepMetrics({
         const jobs = { rows: selection.jobs, malformed: 0, warnings: dataset.meta.warnings };
         const aggregate = aggregateSteps({
             jobs: jobs.rows, steps: steps.rows, repository, mergeMatrix, showInfra,
-            selectedJob: job, jobStatus, includeAllAttempts, stepPattern: step, limit,
+            selectedJob: job, jobStatus, failedStep, stepConditions, includeAllAttempts, stepPattern: step, limit,
             runner: normalizeRunnerFilter(runnerFilter),
         });
         const truncated = dataset.meta.truncated || selection.sampled || steps.truncated;
@@ -233,7 +237,8 @@ export async function collectStepMetrics({
         };
     }
     // Everything that changes which rows the CLI returns is part of the key; repository,
-    // job, status, step, matrix, infra and runner filters only change the aggregation.
+    // Job, status, step conditions, matrix, infra and runner filters only change aggregation.
+    // Recovery's required all-attempt scope is already reflected in includeAllAttempts.
     const rowsKey = JSON.stringify({ target, filters, limits, workflowFile, budget, kind, runner, excludeRunners, includeAllAttempts });
     const cached = reuseRows && cache?.key === rowsKey ? cache : null;
     if (!cached) {
@@ -274,6 +279,8 @@ export async function collectStepMetrics({
             showInfra,
             selectedJob: job,
             jobStatus,
+            failedStep,
+            stepConditions,
             includeAllAttempts,
             stepPattern: step,
             limit,

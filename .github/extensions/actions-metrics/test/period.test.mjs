@@ -1,11 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filteredWindow, localPeriodValue, normalizePeriodTime, periodTime, periodPreset, PERIOD_PRESETS } from "../shared/period.mjs";
+import { filteredWindow, localPeriodValue, normalizePeriodTime, periodNanoseconds, periodTime, periodPreset, PERIOD_PRESETS } from "../shared/period.mjs";
 import { applyQueryPatch, collectionId, datasetQueryId, normalizeQuery, persistedFields, rowQueryId, validateQuery, windowFor } from "../lib/query.mjs";
 import { DATASET_FIELDS, FIELDS, TARGET_FIELDS } from "../lib/query.mjs";
 import { fieldByName, fieldsOfEditor, queryFieldNames, readFieldValue, writeFieldValue } from "../shared/fields.mjs";
 import { snapshotCommand } from "../lib/runnerkit.mjs";
-import { filterSnapshot, parseSnapshot, stringifySnapshot } from "../lib/period.mjs";
 
 test("date boundaries validate calendars, offsets, one-sided filters and exclusive ends", () => {
     assert.equal(normalizePeriodTime("2026-10-01"), "2026-10-01T00:00:00.000Z");
@@ -42,6 +41,16 @@ test("query collection bounds and dataset filters have separate identities", () 
     assert.equal(days, 1);
 });
 
+test("retained snapshot comparisons preserve Go nanoseconds and timezone offsets", () => {
+    const start = periodNanoseconds("2026-10-01T00:00:00Z");
+    assert.equal(periodNanoseconds("2026-10-01T00:00:00.000000001Z"), start + 1n);
+    assert.equal(periodNanoseconds("2026-10-01T09:00:00.000123456+09:00"), start + 123456n);
+    assert.equal(periodNanoseconds("2026-10-01T00:00:00.123456789Z"), start + 123456789n);
+    assert.equal(periodNanoseconds("2026-10-01"), start);
+    assert.equal(periodNanoseconds(null), null);
+    assert.equal(periodNanoseconds("invalid"), null);
+});
+
 test("collection commands use since and until without conflicting days or silent fallback", () => {
     const options = {
         target: {kind: "repo", owner: "owner", name: "repo", nwo: "owner/repo"},
@@ -72,38 +81,6 @@ test("every period field is editable and local controls round-trip absolute time
         assert.equal(writeFieldValue(field, ""), "");
     }
     assert.equal(localPeriodValue("invalid"), "");
-});
-
-test("filtered snapshot preserves exact int64 literals, attempts, jobs and usage", () => {
-    const snapshot = parseSnapshot(`{
-        "Data": {
-            "Runs": [{"id":9007199254740993},{"id":2}],
-            "Attempts": [{"id":9007199254740993,"run_attempt":1}],
-            "Jobs": [{"id":9007199254740995,"run_id":9007199254740993,"name":"quoted \\"9007199254740997\\"","steps":[]},{"id":12,"run_id":2}],
-            "LatestJobs": {"9007199254740995":true,"12":true},
-            "RunRepositories": {"9007199254740993":"owner/repo","2":"owner/repo"},
-            "Usage": {"9007199254740993":{"duration":9223372036854775807},"2":{}},
-            "Repos": [{"Repository":{"Owner":"owner","Name":"repo"},"Runs":2,"Truncated":true}],
-            "Warnings": ["partial history"], "Truncated":true, "Runners":[{"name":"runner"}]
-        }
-    }`);
-    const window = {Start: "2026-10-01T00:00:00Z", End: "2026-10-02T00:00:00Z"};
-    const filtered = filterSnapshot(snapshot, [{id: "9007199254740993"}], window);
-    const text = stringifySnapshot(filtered);
-    assert.match(text, /"id":9007199254740995/);
-    assert.match(text, /"run_id":9007199254740993/);
-    assert.match(text, /"duration":9223372036854775807/);
-    const output = parseSnapshot(text).Data;
-    assert.equal(output.Jobs[0].name, 'quoted "9007199254740997"');
-    assert.equal(output.Runs.length, 1);
-    assert.equal(output.Attempts.length, 1);
-    assert.equal(output.Repos[0].Runs, 1);
-    assert.equal(output.Repos[0].Truncated, true);
-    assert.deepEqual(Object.keys(output.LatestJobs), ["9007199254740995"]);
-    assert.deepEqual(output.Window, window);
-    assert.deepEqual(snapshot.Data.Runs.map(run => String(run.id)), ["9007199254740993", "2"]);
-    assert.deepEqual(parseSnapshot(stringifySnapshot({text: "9007199254740993", values: [null, true, -9007199254740993n, 1.25, 2e-3]})),
-        {text: "9007199254740993", values: [null, true, -9007199254740993n, 1.25, 2e-3]});
 });
 
 test("Collection and Display partition the query according to actual dataset identity", () => {

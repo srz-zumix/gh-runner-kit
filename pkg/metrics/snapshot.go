@@ -129,8 +129,15 @@ func ReadSnapshot(path string) (*Snapshot, error) {
 	}
 
 	var snap Snapshot
-	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&snap); err != nil {
 		return nil, fmt.Errorf("failed to decode the snapshot %s: %w", path, err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("the snapshot %s contains trailing JSON data", path)
+		}
+		return nil, fmt.Errorf("failed to finish reading the snapshot %s: %w", path, err)
 	}
 	if snap.Version != CurrentSnapshotVersion {
 		return nil, fmt.Errorf("the snapshot %s has version %d, which this build does not understand (expected %d)", path, snap.Version, CurrentSnapshotVersion)

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { aggregateSteps, displayStepName, downsampleNewest, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, labelSetKey, matchJobStatus, matchRunner, matchWildcard, matrixMergeMap, normalizeJobStatus, normalizeRunnerFilter, percentile, splitLabelSet, stepKey, timelineMatchesWorkflow } from "../shared/steps.mjs";
+import { aggregateSteps, displayStepName, downsampleNewest, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, isRecoveredJobStatus, isRunnerFilterActive, labelSetKey, matchJobStatus, matchRunner, matchWildcard, matrixMergeMap, normalizeFailedStep, normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters, percentile, runnerFilterSelections, splitLabelSet, stepKey, timelineMatchesWorkflow, toggleRunnerFilterValue } from "../shared/steps.mjs";
 
 test("timelineMatchesWorkflow compares workflow file names", () => {
     const timeline = { Workflow: "Labeler", WorkflowPath: ".github/workflows/labeler.yml" };
@@ -246,11 +246,158 @@ test("matchRunner follows the CLI kind semantics and name wildcards", () => {
     assert.deepEqual(normalizeRunnerFilter({ kind: "bogus", name: " x " }), { kind: "all", labels: "", group: "", name: "x" });
 });
 
+test("individual runner selection matches literal names without changing wildcard filters", () => {
+    const literal = { runnerName: "box*" };
+    const other = { runnerName: "box-02" };
+    assert.equal(matchRunner(literal, { name: "box*", nameExact: true }), true);
+    assert.equal(matchRunner(other, { name: "box*", nameExact: true }), false);
+    assert.equal(matchRunner(other, { name: "box*" }), true);
+    assert.deepEqual(normalizeRunnerFilter({ name: " box* ", nameExact: true }), {
+        kind: "all", labels: "", group: "", name: "box*", nameExact: true,
+    });
+    assert.deepEqual(normalizeRunnerFilter({ name: "", nameExact: true }), normalizeRunnerFilter());
+});
+
+test("runner selections migrate scalar preferences without changing exact or wildcard semantics", () => {
+    const legacy = { kind: "self-hosted", labels: "linux,self-hosted", group: "Default", name: "box*", nameExact: true };
+    assert.deepEqual(runnerFilterSelections(legacy), {
+        kinds: ["self-hosted", "unknown"], labelSets: ["linux,self-hosted"], groups: ["Default"], names: ["box*"],
+    });
+    const names = toggleRunnerFilterValue(legacy, "names", "box-b");
+    assert.deepEqual(names.names, ["box*", "box-b"]);
+    assert.equal(names.name, "");
+    assert.equal(Object.hasOwn(names, "nameExact"), false);
+    assert.deepEqual(toggleRunnerFilterValue(names, "names", "box*").names, ["box-b"]);
+    const labels = toggleRunnerFilterValue(legacy, "labelSets", "macos");
+    assert.deepEqual(labels.labelSets, ["linux,self-hosted", "macos"]);
+    assert.equal(labels.labels, "");
+    assert.deepEqual(toggleRunnerFilterValue(labels, "labelSets", "SELF-HOSTED,LINUX").labelSets, ["macos"]);
+    assert.deepEqual(toggleRunnerFilterValue(legacy, "kinds", "hosted").kinds, ["self-hosted", "unknown", "hosted"]);
+    assert.deepEqual(toggleRunnerFilterValue(legacy, "groups", "Other").groups, ["Default", "Other"]);
+    assert.equal(legacy.name, "box*");
+    assert.equal(legacy.nameExact, true);
+    assert.equal(isRunnerFilterActive({ names: ["box-a"] }), true);
+    assert.equal(isRunnerFilterActive({ names: [] }), false);
+    assert.deepEqual(normalizeRunnerFilter({ names: ["box-a", "box-a", "", null], kinds: ["hosted", "invalid"] }), {
+        ...normalizeRunnerFilter(), names: ["box-a"], kinds: ["hosted"],
+    });
+    const pattern = { name: "box*", names: ["other"] };
+    assert.equal(matchRunner({ runnerName: "box-b" }, pattern), true);
+    assert.equal(matchRunner({ runnerName: "other" }, pattern), true);
+    assert.equal(matchRunner({ runnerName: "missing" }, pattern), false);
+    assert.deepEqual(runnerFilterSelections({ name: "box-a" }).names, ["box-a"]);
+    assert.deepEqual(toggleRunnerFilterValue({ name: "box-a" }, "names", "box-b").names, ["box-a", "box-b"]);
+});
+
+test("runner facets OR their values and AND dimensions across every aggregate", () => {
+    const jobs = [
+        onRunner(job(1, "build", 2, 12), ["self-hosted", "linux"], "self-hosted", "box*"),
+        { ...onRunner(job(2, "build", 2, 22), ["macos"], "self-hosted", "box-b"), RunnerGroup: "Other" },
+        onRunner(job(3, "build", 2, 32), ["self-hosted", "linux"], "self-hosted", "box-02"),
+        onRunner(job(4, "build", 2, 42), ["ubuntu-latest"], "hosted", "GitHub Actions"),
+    ];
+    const steps = jobs.map(row => ({
+        ...onRunner(step(Number(row.JobID), "build", row.RunID, 1, "Compile", 2, 7), row.Labels, row.Kind, row.RunnerName),
+        RunnerGroup: row.RunnerGroup,
+    }));
+    const filter = {
+        kinds: ["self-hosted", "unknown"], labelSets: ["LINUX,SELF-HOSTED", "macos"],
+        groups: ["Default", "Other"], names: ["box*", "box-b"],
+    };
+    const result = aggregateSteps({ jobs, steps, runner: filter });
+    assert.equal(result.meta.totalJobs, 2);
+    assert.equal(result.meta.totalStepRows, 2);
+    assert.equal(result.meta.analysedRuns, 2);
+    assert.equal(result.stepStats[0].samples, 2);
+    assert.equal(result.jobStats[0].runs, 2);
+    assert.equal(result.typicalTimeline.length, 1);
+    assert.deepEqual(result.runs.map(row => row.runId), ["102", "101"]);
+    assert.deepEqual(result.runners.flatMap(pool => pool.individuals.map(row => row.name)).sort(), ["box*", "box-b"]);
+    assert.equal(result.runners.reduce((sum, pool) => sum + pool.duration.total, 0), 30000);
+    assert.equal(result.runnerFacets.names.length, 4);
+    assert.deepEqual(result.runnerFacets, aggregateSteps({ jobs, steps }).runnerFacets);
+    const narrower = aggregateSteps({ jobs, steps, runner: { ...filter, groups: ["Default"] } });
+    assert.deepEqual(narrower.runs.map(row => row.runId), ["101"]);
+    const empty = aggregateSteps({ jobs, steps, runner: { ...filter, names: ["missing"] } });
+    assert.deepEqual(empty.runners, []);
+    assert.deepEqual(empty.runs, []);
+    assert.deepEqual(empty.runnerFacets, result.runnerFacets);
+    assert.equal(matchRunner({ kind: "unknown" }, { kinds: ["self-hosted"] }), false);
+    assert.equal(matchRunner({ kind: "unknown" }, { kinds: ["unknown"] }), true);
+});
+
 function onRunner(row, labels, kind, runnerName) {
     return { ...row, Labels: labels, Kind: kind, RunnerName: runnerName, RunnerGroup: kind === "hosted" ? "GitHub Actions" : "Default" };
 }
 
-test("runner filter narrows statistics while pools and facets keep every runner", () => {
+test("runner pools retain totals and expose only non-hosted individual statistics", () => {
+    const labels = ["self-hosted", "linux"];
+    const jobs = [
+        onRunner(job(1, "build", 2, 12), labels, "self-hosted", "box-a"),
+        onRunner({ ...job(2, "build", 2, 32, "failure"), RunID: "101", RunAttempt: 2 }, ["LINUX", "self-hosted"], "self-hosted", "box-a"),
+        onRunner(job(3, "build", 2, 22), labels, "self-hosted", "box-b"),
+        onRunner(job(4, "build", 2, 7), labels, "unknown", "unknown-runner"),
+        onRunner(job(5, "build", 2, 42), labels, "hosted", "box-a"),
+        onRunner({ ...job(6, "build", 2, 3), StartedAt: null, CompletedAt: null, Conclusion: "", Wait: 0, Duration: 0 }, labels, "unknown", ""),
+        onRunner(job(7, "build", 2, 12), ["ubuntu-latest"], "hosted", "GitHub Actions"),
+    ];
+    const steps = jobs.filter(row => row.StartedAt).map(row => ({
+        ...onRunner(step(Number(row.JobID), "build", row.RunID, 1, "Compile", 2, 7, row.Conclusion), row.Labels, row.Kind, row.RunnerName),
+        RunAttempt: row.RunAttempt,
+    }));
+    const result = aggregateSteps({ jobs, steps, includeAllAttempts: true });
+    const pool = result.runners.find(row => row.key === labelSetKey(labels));
+    assert.equal(pool.jobs, 6);
+    assert.equal(pool.duration.total, 105000);
+    assert.equal(pool.duration.samples, 5);
+    assert.equal(pool.failureRate, 0.2);
+    assert.equal(pool.individuals.length, 4);
+    const byName = new Map(pool.individuals.map(row => [row.name, row]));
+    const first = byName.get("box-a");
+    assert.equal(first.jobs, 2);
+    assert.deepEqual(first.wait, { p50: 2000, p90: 2000, samples: 2 });
+    assert.deepEqual(first.duration, { p50: 10000, p90: 30000, samples: 2, total: 40000 });
+    assert.equal(first.failureRate, 0.5);
+    assert.deepEqual(first.kinds, [{ value: "self-hosted", count: 2 }]);
+    assert.equal(byName.get("box-b").duration.total, 20000);
+    assert.equal(byName.get("unknown-runner").duration.total, 5000);
+    assert.equal(byName.get("").jobs, 1);
+    assert.equal(byName.get("").wait.samples, 0);
+    assert.equal(byName.get("").duration.samples, 0);
+    assert.equal(byName.get("").duration.total, 0);
+    assert.equal(pool.individuals.reduce((sum, row) => sum + row.jobs, 0), 5);
+    assert.deepEqual(result.runners.find(row => row.key === labelSetKey(["ubuntu-latest"])).individuals, []);
+
+    const filtered = aggregateSteps({
+        jobs, steps, includeAllAttempts: true,
+        runner: { kind: "self-hosted", labels: "linux,self-hosted", name: "box-a", nameExact: true },
+    });
+    assert.equal(filtered.meta.totalJobs, 2);
+    assert.equal(filtered.meta.totalStepRows, 2);
+    assert.equal(filtered.stepStats[0].samples, 2);
+    assert.equal(filtered.typicalTimeline.length, 1);
+    assert.deepEqual(filtered.runs.map(row => row.runAttempt).sort(), [1, 2]);
+    assert.equal(filtered.runners.length, 1);
+    assert.equal(filtered.runners[0].jobs, 2);
+    assert.equal(filtered.runners[0].duration.total, 40000);
+    assert.deepEqual(filtered.runners[0].individuals.map(row => row.name), ["box-a"]);
+    assert.deepEqual(filtered.runnerFacets, result.runnerFacets);
+});
+
+test("individual runner summaries respect repository, job and status selections", () => {
+    const base = onRunner(job(1, "build", 2, 12, "failure"), ["self-hosted"], "self-hosted", "box-a");
+    const jobs = [
+        base,
+        { ...base, JobID: "2", Repo: "example/other", RunnerName: "other-repository" },
+        { ...base, JobID: "3", JobName: "test", RunnerName: "other-job" },
+        { ...base, JobID: "4", Conclusion: "success", RunnerName: "other-status" },
+    ];
+    const result = aggregateSteps({ jobs, repository: base.Repo, selectedJob: "build", jobStatus: "failure" });
+    assert.equal(result.runners.length, 1);
+    assert.deepEqual(result.runners[0].individuals.map(row => [row.name, row.jobs]), [["box-a", 1]]);
+});
+
+test("runner filter narrows statistics and pools while facets keep every runner", () => {
     const jobs = [
         onRunner(job(1, "build", 1, 51), ["ubuntu-latest"], "hosted", "GitHub Actions"),
         onRunner(job(2, "build", 1, 51), ["self-hosted", "linux"], "self-hosted", "box-1"),
@@ -276,7 +423,7 @@ test("runner filter narrows statistics while pools and facets keep every runner"
     assert.equal(filtered.stepStats[0].duration.p50, 10_000);
     assert.equal(filtered.meta.totalJobs, 2);
     assert.equal(filtered.meta.unfilteredJobs, 3);
-    assert.equal(filtered.runners.length, 2);
+    assert.equal(filtered.runners.length, 1);
     assert.equal(filtered.runners.find((pool) => pool.key === linux.key).duration.total, 50_000);
     assert.deepEqual(filtered.runnerFacets.kinds.map((item) => item.value).sort(), ["hosted", "self-hosted"]);
     assert.deepEqual(filtered.runs.find((row) => row.runId === "102").runners, ["box-1"]);
@@ -317,7 +464,7 @@ test("repository filtering narrows every statistical surface and preserves repos
     }
     assert.deepEqual(filtered.stepStats[0].trend.points.map((point) => point.runId), ["102"]);
     assert.equal(filtered.typicalTimeline[0].steps[0].failureRate, 1);
-    assert.equal(filtered.runners.reduce((sum, pool) => sum + pool.jobs, 0), 2);
+    assert.equal(filtered.runners.reduce((sum, pool) => sum + pool.jobs, 0), 1);
     assert.deepEqual(filtered.repositoryFacets, [{ value: "owner/other", count: 2 }, { value: "owner/repo", count: 1 }]);
     assert.deepEqual(filtered.repositoryFacets, all.repositoryFacets);
     assert.deepEqual(filtered.jobStatusFacets, [{ value: "failure", count: 2 }]);
@@ -425,7 +572,7 @@ test("job status composes with runner and job filters without changing matrix na
     assert.equal(result.stepStats[0].job, "test");
     assert.equal(result.stepStats[0].samples, 1);
     assert.equal(result.meta.totalJobs, 1);
-    assert.equal(result.runners.reduce((sum, pool) => sum + pool.jobs, 0), 2);
+    assert.equal(result.runners.reduce((sum, pool) => sum + pool.jobs, 0), 1);
     assert.equal(result.runnerFacets.kinds.length, 2);
     assert.deepEqual(result.jobStatusFacets.map((item) => item.value).sort(), ["failure", "success"]);
     assert.deepEqual(result.runs.map((row) => row.runId), ["101"]);
@@ -443,6 +590,400 @@ test("queued jobs count without timed samples and an unmatched status stays empt
     assert.equal(empty.meta.totalStepRows, 0);
     for (const key of ["stepStats", "jobStats", "typicalTimeline", "runs", "runners"]) assert.deepEqual(empty[key], []);
     assert.deepEqual(empty.jobStatusFacets, [{ value: "queued", count: 1 }]);
+});
+
+function recoveryJob(id, run, attempt, conclusion, patch = {}) {
+    return {
+        ...onRunner(job(id, "test (linux)", 1, 11, conclusion), ["self-hosted", "linux"], "self-hosted", "box-a"),
+        RunID: String(run), RunAttempt: attempt, ...patch,
+    };
+}
+
+function recoverySteps(jobs) {
+    return jobs.map(row => ({
+        ...onRunner(step(Number(row.JobID), row.JobName, row.RunID, 1, "Test", 1, 6, row.Conclusion), row.Labels, row.Kind, row.RunnerName),
+        Repo: row.Repo, WorkflowPath: row.WorkflowPath, RunAttempt: row.RunAttempt, JobConclusion: row.Conclusion,
+    }));
+}
+
+test("re-run recovery requires an observed failure before the latest successful job execution", () => {
+    assert.equal(isRecoveredJobStatus(" RERUN_SUCCESS "), true);
+    assert.equal(isRecoveredJobStatus("success"), false);
+    for (const [conclusions, expected] of [
+        [["failure", "success"], 2],
+        [["timed_out", "success"], 2],
+        [["startup_failure", "failure", "success"], 3],
+        [["success"], 0],
+        [["success", "success"], 0],
+        [["cancelled", "success"], 0],
+        [["skipped", "success"], 0],
+        [["failure", "failure"], 0],
+        [["failure", "success", "failure"], 0],
+        [["failure", "success", ""], 0],
+    ]) {
+        const rows = conclusions.map((value, index) => recoveryJob(100 + index, 500, index + 1, value));
+        for (const jobs of [rows, [...rows].reverse()]) {
+            const result = aggregateSteps({ jobs, steps: recoverySteps(jobs), jobStatus: "rerun_success" });
+            assert.equal(result.meta.totalJobs, expected, conclusions.join(" -> "));
+            assert.equal(result.meta.totalStepRows, expected);
+            assert.equal(result.includeAllAttempts, true);
+            assert.equal(result.meta.latestAttemptBasis, false);
+            assert.equal(result.runs.length, expected);
+        }
+    }
+    const jobs = [recoveryJob(1, 500, 1, "failure", { Latest: false }), recoveryJob(2, 500, 2, "success", { Latest: false })];
+    assert.equal(aggregateSteps({ jobs, jobStatus: "rerun_success" }).meta.totalJobs, 0);
+    jobs[1].Latest = true;
+    assert.equal(aggregateSteps({ jobs, jobStatus: "rerun_success" }).meta.totalJobs, 2);
+});
+
+test("recovery histories never join different repositories, workflows, runs, variants or the same attempt", () => {
+    const failed = recoveryJob(1, 500, 1, "failure");
+    const success = recoveryJob(2, 500, 2, "success");
+    for (const patch of [
+        { Repo: "owner/other" },
+        { WorkflowPath: ".github/workflows/other.yml" },
+        { RunID: "501" },
+        { JobName: "test (macos)" },
+        { RunAttempt: 1 },
+    ]) {
+        const result = aggregateSteps({ jobs: [failed, { ...success, ...patch }], jobStatus: "rerun_success" });
+        assert.equal(result.meta.totalJobs, 0, JSON.stringify(patch));
+    }
+    const ambiguous = aggregateSteps({
+        jobs: [failed, { ...failed, JobID: "3" }, success], jobStatus: "rerun_success",
+    });
+    assert.equal(ambiguous.meta.totalJobs, 0);
+    assert.equal(ambiguous.meta.recovery.ambiguousJobs, 1);
+});
+
+test("recovered jobs retain failed steps and attempts across runner changes before matrix merging", () => {
+    const jobs = [
+        recoveryJob(1, 500, 1, "failure"),
+        recoveryJob(2, 500, 2, "success", { RunnerName: "box-b" }),
+        recoveryJob(3, 500, 1, "failure", { JobName: "test (macos)" }),
+        recoveryJob(4, 500, 2, "failure", { JobName: "test (macos)" }),
+    ];
+    const steps = recoverySteps(jobs);
+    const options = { jobs, steps, selectedJob: "test", jobStatus: "rerun_success", includeAllAttempts: false };
+    const result = aggregateSteps(options);
+    assert.equal(result.meta.recovery.matchedJobs, 1);
+    assert.equal(result.meta.analysedRuns, 1);
+    assert.equal(result.meta.analysedAttempts, 2);
+    assert.equal(result.meta.totalJobs, 2);
+    assert.equal(result.stepStats[0].job, "test");
+    assert.deepEqual(result.stepStats[0].variants, ["test (linux)"]);
+    assert.equal(result.stepStats[0].samples, 2);
+    assert.equal(result.stepStats[0].failureRate, 0.5);
+    assert.equal(result.stepStats[0].trend.points.length, 2);
+    assert.equal(result.typicalTimeline[0].steps[0].failureRate, 0.5);
+    assert.equal(result.runners[0].jobs, 2);
+    assert.equal(result.runners[0].failureRate, 0.5);
+    assert.deepEqual(result.runners[0].individuals.map(row => row.name).sort(), ["box-a", "box-b"]);
+    assert.deepEqual(result.runs.map(row => [row.runAttempt, row.conclusion]), [[2, "success"], [1, "failure"]]);
+    assert.ok(result.runs.every(row => row.recoveredJobs.join() === "test (linux)"));
+    const failedRunner = aggregateSteps({ ...options, runner: { names: ["box-a"] } });
+    assert.equal(failedRunner.meta.totalJobs, 1);
+    assert.equal(failedRunner.runs[0].conclusion, "failure");
+    assert.equal(failedRunner.stepStats[0].samples, 1);
+    assert.deepEqual(failedRunner.runnerFacets, result.runnerFacets);
+    for (const attempt of [1, 2]) {
+        const timeline = {
+            Repo: "owner/repo", RunID: "500", RunAttempt: attempt, WorkflowPath: ".github/workflows/build.yml",
+            Jobs: [
+                { Name: "test (linux)", Conclusion: attempt === 1 ? "failure" : "success", Steps: [{ Name: "Test" }] },
+                { Name: "test (macos)", Conclusion: "failure", Steps: [] },
+            ],
+        };
+        const shown = filterTimelineJobs(timeline, "rerun_success", "", result.runs);
+        assert.deepEqual(shown.map(row => row.Name), ["test (linux)"]);
+        assert.equal(shown[0].Steps.length, 1);
+        assert.equal(timeline.Jobs.length, 2);
+        assert.deepEqual(filterTimelineJobs(timeline, "rerun_success", "owner/other", result.runs), []);
+    }
+});
+
+test("failed-step inputs preserve exact names and distinguish an occurrence from a step number", () => {
+    assert.equal(normalizeFailedStep(), null);
+    assert.equal(normalizeFailedStep(null), null);
+    assert.equal(normalizeFailedStep({ name: "" }), null);
+    assert.deepEqual(normalizeFailedStep({ name: " Compile* " }), { name: " Compile* ", occurrence: 1 });
+    assert.deepEqual(normalizeFailedStep({ name: "Upload", occurrence: 2 }), { name: "Upload", occurrence: 2 });
+    for (const input of ["Compile", [], {}, { name: 1 }]) assert.throws(() => normalizeFailedStep(input), TypeError);
+    for (const occurrence of [0, -1, 1.5, "2", true]) {
+        assert.throws(() => normalizeFailedStep({ name: "Upload", occurrence }), RangeError);
+    }
+});
+
+test("failed-step filtering keeps whole matching job attempts across every statistical surface", () => {
+    const jobs = [
+        recoveryJob(1, 500, 1, "failure", { Latest: false }),
+        recoveryJob(2, 500, 2, "success", { RunnerName: "box-b", Latest: true }),
+        recoveryJob(3, 500, 1, "failure", { JobName: "test (macos)", Latest: true }),
+        recoveryJob(4, 501, 1, "success", { RunnerName: "box-c", Latest: true }),
+    ];
+    const tests = recoverySteps(jobs).map((row, index) => ({ ...row, StepConclusion: [0, 3].includes(index) ? "failure" : "success" }));
+    const steps = tests.flatMap(row => [
+        row,
+        { ...row, StepName: "Prepare", StepKey: "Prepare", StepNumber: 2, StepConclusion: "success" },
+        { ...row, StepName: "Upload", StepKey: "Upload", StepNumber: 3, StepConclusion: "skipped", StartedAt: null, CompletedAt: null },
+    ]);
+    const options = { jobs, steps, includeAllAttempts: true, failedStep: { name: "Test" } };
+    const result = aggregateSteps(options);
+    assert.deepEqual(result.failedStep, { name: "Test", occurrence: 1 });
+    assert.equal(result.meta.failedStepSupported, true);
+    assert.equal(result.meta.totalJobs, 2);
+    assert.equal(result.meta.totalStepRows, 6);
+    assert.equal(result.meta.analysedRuns, 2);
+    assert.equal(result.meta.analysedAttempts, 2);
+    assert.equal(result.stepStats.length, 3);
+    assert.equal(result.stepStats.find(row => row.stepName === "Test").failureRate, 1);
+    assert.equal(result.stepStats.find(row => row.stepName === "Test").trend.points.length, 2);
+    assert.equal(result.stepStats.find(row => row.stepName === "Prepare").samples, 2);
+    assert.equal(result.stepStats.find(row => row.stepName === "Upload").skipped, 2);
+    assert.equal(result.jobStats[0].runs, 2);
+    assert.equal(result.jobStats[0].job, "test");
+    assert.deepEqual(result.jobStats[0].variants, ["test (linux)"]);
+    assert.equal(result.typicalTimeline[0].steps.find(row => row.name === "Test").failureRate, 1);
+    assert.equal(result.typicalTimeline[0].steps.find(row => row.name === "Prepare").failureRate, 0);
+    assert.equal(result.runners[0].jobs, 2);
+    assert.deepEqual(result.runners[0].individuals.map(row => row.name).sort(), ["box-a", "box-c"]);
+    assert.deepEqual(result.runs.map(row => [row.runId, row.runAttempt, row.conclusion]), [["501", 1, "success"], ["500", 1, "failure"]]);
+    assert.deepEqual(result.failedStepFacets, [{ name: "Test", occurrence: 1, count: 2 }]);
+    for (const patch of [{ failedStep: { name: "test" } }, { failedStep: { name: "Test*" } }, { repository: "owner/other" }, { selectedJob: "missing" }, { runner: { names: ["box-b"] } }]) {
+        const empty = aggregateSteps({ ...options, ...patch });
+        assert.equal(empty.runs.length, 0, JSON.stringify(patch));
+        assert.equal(empty.stepStats.length, 0);
+        assert.equal(empty.runners.length, 0);
+    }
+    const recovery = aggregateSteps({ ...options, includeAllAttempts: false, jobStatus: "rerun_success" });
+    assert.equal(recovery.meta.recovery.matchedJobs, 1);
+    assert.equal(recovery.meta.totalJobs, 1);
+    assert.deepEqual(recovery.runs.map(row => [row.runAttempt, row.conclusion]), [[1, "failure"]]);
+    assert.equal(recovery.stepStats.find(row => row.stepName === "Prepare").samples, 1);
+    assert.equal(aggregateSteps({ ...options, jobStatus: "success" }).meta.totalJobs, 1);
+    const runner = aggregateSteps({ ...options, runner: { names: ["box-a"] } });
+    assert.equal(runner.runners[0].jobs, 1);
+    assert.deepEqual(runner.failedStepFacets, result.failedStepFacets);
+    assert.deepEqual(runner.runnerFacets, result.runnerFacets);
+    const latest = aggregateSteps({ ...options, jobs: jobs.filter(row => row.Latest), steps: steps.filter(row => row.JobID !== "1"), includeAllAttempts: false });
+    assert.equal(latest.meta.totalJobs, 1);
+    assert.equal(latest.includeAllAttempts, false);
+});
+
+test("failed steps join exact repository, workflow, run, attempt and job identities without borrowing outcomes", () => {
+    const row = recoveryJob(1, 500, 1, "failure");
+    const failed = recoverySteps([row])[0];
+    const successful = { ...failed, StepConclusion: "success" };
+    for (const patch of [
+        { Repo: "owner/other" }, { WorkflowPath: ".github/workflows/other.yml" },
+        { RunID: "501" }, { RunAttempt: 2 }, { JobID: "2" },
+    ]) {
+        const result = aggregateSteps({ jobs: [row], steps: [successful, { ...failed, ...patch }], failedStep: { name: "Test" } });
+        assert.equal(result.meta.totalJobs, 0, JSON.stringify(patch));
+        assert.equal(result.meta.totalStepRows, 0);
+        assert.equal(result.runs.length, 0);
+    }
+    for (const StepConclusion of ["success", "timed_out", "cancelled", "skipped", ""]) {
+        assert.equal(aggregateSteps({ jobs: [row], steps: [{ ...failed, StepConclusion }], failedStep: { name: "Test" } }).meta.totalJobs, 0);
+    }
+    const joined = aggregateSteps({
+        jobs: [row],
+        steps: [failed, { ...successful, RunAttempt: 2 }, { ...successful, JobID: "2" }],
+        failedStep: { name: "Test" },
+    });
+    assert.equal(joined.meta.totalJobs, 1);
+    assert.equal(joined.meta.totalStepRows, 1);
+    const unnamedId = { ...row, JobID: "" };
+    const fallback = aggregateSteps({
+        jobs: [unnamedId, { ...unnamedId, JobName: "other" }],
+        steps: [{ ...failed, JobID: "" }],
+        failedStep: { name: "Test" },
+    });
+    assert.equal(fallback.meta.totalJobs, 1);
+});
+
+test("failed-step choices distinguish repeated names and literal suffixes before display filtering", () => {
+    const row = recoveryJob(1, 500, 1, "failure");
+    const base = recoverySteps([row])[0];
+    const duplicate = { ...base, StepName: "Upload", StepKey: "Upload #2", StepOccurrence: 2, StepNumber: 8 };
+    const steps = [
+        { ...base, StepName: "Upload", StepKey: "Upload", StepOccurrence: 1, StepConclusion: "success" },
+        duplicate, duplicate,
+        { ...base, StepName: "Upload #2", StepKey: "Upload #2", StepOccurrence: 1, StepConclusion: "success" },
+        { ...base, StepName: "Post cleanup", StepKey: "Post cleanup", StepOccurrence: 1 },
+        { ...base, StepName: "", StepKey: "Unnamed legacy step", StepOccurrence: 1 },
+    ];
+    const options = { jobs: [row], steps };
+    const second = aggregateSteps({ ...options, failedStep: { name: "Upload", occurrence: 2 } });
+    assert.equal(second.meta.totalJobs, 1);
+    assert.deepEqual(second.failedStepFacets, [{ name: "Post cleanup", occurrence: 1, count: 1 }, { name: "Upload", occurrence: 2, count: 1 }]);
+    for (const failedStep of [{ name: "Upload" }, { name: "Upload #2" }, { name: "Upload", occurrence: 8 }]) {
+        assert.equal(aggregateSteps({ ...options, failedStep }).meta.totalJobs, 0);
+    }
+    const infra = aggregateSteps({ ...options, showInfra: false, stepPattern: "Upload*", failedStep: { name: "Post cleanup" } });
+    assert.equal(infra.meta.totalJobs, 1);
+    assert.ok(infra.stepStats.every(row => row.stepName.startsWith("Upload")));
+    assert.deepEqual(infra.failedStepFacets, second.failedStepFacets);
+});
+
+test("failed-step run samples separate carried-over attempts even on the latest job-listing basis", () => {
+    const jobs = [
+        recoveryJob(1, 500, 1, "failure"),
+        recoveryJob(2, 500, 2, "failure", { JobName: "other" }),
+    ];
+    const result = aggregateSteps({ jobs, steps: recoverySteps(jobs), failedStep: { name: "Test" } });
+    assert.equal(result.meta.latestAttemptBasis, true);
+    assert.deepEqual(result.runs.map(row => [row.runAttempt, row.jobs]), [[2, 1], [1, 1]]);
+});
+
+test("single-run failed-step filtering checks the job's own steps and intersects recovery and status", () => {
+    const failedSteps = [
+        { Name: "Upload", Key: "Upload", Occurrence: 1, Conclusion: "success" },
+        { Name: "Upload", Key: "Upload #2", Occurrence: 2, Conclusion: "failure" },
+        { Name: "Cleanup", Key: "Cleanup", Occurrence: 1, Conclusion: "skipped" },
+    ];
+    const timeline = { Repo: "owner/repo", RunID: "500", WorkflowPath: ".github/workflows/build.yml", Jobs: [
+        { Name: "test", Conclusion: "failure", Steps: failedSteps },
+        { Name: "other", Conclusion: "success", Steps: failedSteps },
+        { Name: "retry", Conclusion: "success", Steps: failedSteps.map(step => ({ ...step, Conclusion: "success" })) },
+        { Name: "missing", Conclusion: "failure" },
+    ] };
+    const failedStep = { name: "Upload", occurrence: 2 };
+    assert.equal(filterTimelineJobs(timeline, "", "", [], failedStep).length, 2);
+    const shown = filterTimelineJobs(timeline, "failure", "", [], failedStep);
+    assert.deepEqual(shown.map(job => job.Name), ["test"]);
+    assert.equal(shown[0].Steps.length, 3);
+    assert.equal(filterTimelineJobs(timeline, "", "", [], { name: "Upload #2" }).length, 0);
+    assert.equal(filterTimelineJobs(timeline, "", "", [], { name: "Upload" }).length, 0);
+    assert.equal(filterTimelineJobs(timeline, "", "owner/other", [], failedStep).length, 0);
+    const membership = [{ repo: "owner/repo", runId: "500", workflowPath: timeline.WorkflowPath, recoveredJobs: ["test", "retry"] }];
+    assert.deepEqual(filterTimelineJobs(timeline, "rerun_success", "", membership, failedStep).map(job => job.Name), ["test"]);
+    assert.equal(timeline.Jobs.length, 4);
+    assert.equal(timeline.Jobs[0].Steps.length, 3);
+});
+
+test("step conditions normalize, deduplicate and explicitly override legacy failure selections", () => {
+    assert.deepEqual(normalizeStepFilters({ failedStep: { name: "A" } }), {
+        failedStep: { name: "A", occurrence: 1 }, stepConditions: [{ name: "A", occurrence: 1, conclusion: "failure" }],
+    });
+    for (const stepConditions of [[], null]) {
+        assert.deepEqual(normalizeStepFilters({ stepConditions, failedStep: { name: "A" } }), { failedStep: null, stepConditions: [] });
+    }
+    const input = [{ name: " A* ", conclusion: " FAILURE " }, { name: "B", occurrence: 2, conclusion: "success" }, { name: " A* ", conclusion: "failure" }];
+    const before = JSON.stringify(input);
+    assert.deepEqual(normalizeStepFilters({ stepConditions: input }), {
+        failedStep: null, stepConditions: [{ name: " A* ", occurrence: 1, conclusion: "failure" }, { name: "B", occurrence: 2, conclusion: "success" }],
+    });
+    assert.equal(JSON.stringify(input), before);
+    for (const stepConditions of ["A", {}, [null], [{}], [{ name: "", conclusion: "failure" }], [{ name: "A" }], [{ name: "A", conclusion: " " }], [{ name: "A", conclusion: 1 }]]) {
+        assert.throws(() => normalizeStepFilters({ stepConditions }), /stepConditions/);
+    }
+    assert.throws(() => normalizeStepFilters({ stepConditions: [{ name: "A", conclusion: "failure", occurrence: 0 }] }), RangeError);
+});
+
+test("AND conditions require A failure and B success in the same job execution on every statistical surface", () => {
+    const jobs = [
+        recoveryJob(1, 600, 1, "failure"),
+        recoveryJob(2, 600, 2, "success", { RunnerName: "box-b" }),
+        recoveryJob(3, 601, 1, "failure"),
+        recoveryJob(4, 602, 1, "failure"),
+        recoveryJob(5, 603, 1, "success", { RunnerName: "box-c" }),
+    ];
+    const steps = recoverySteps(jobs).flatMap((row, index) => [
+        { ...row, StepName: "A", StepKey: "A", StepOccurrence: 1, StepConclusion: index === 1 ? "success" : "failure" },
+        { ...row, StepName: "B", StepKey: "B", StepOccurrence: 1, StepConclusion: ["success", "success", "failure", "skipped", "success"][index] },
+        { ...row, StepName: "Cleanup", StepKey: "Cleanup", StepOccurrence: 1, StepConclusion: "success" },
+    ]);
+    const stepConditions = [{ name: "A", conclusion: "failure" }, { name: "B", conclusion: "success" }];
+    const options = { jobs, steps, stepConditions, includeAllAttempts: true };
+    const result = aggregateSteps(options);
+    assert.equal(result.meta.stepConditionsSupported, true);
+    assert.equal(result.failedStep, null);
+    assert.equal(result.meta.totalJobs, 2);
+    assert.equal(result.meta.totalStepRows, 6);
+    assert.equal(result.jobStats[0].runs, 2);
+    assert.equal(result.runners[0].jobs, 2);
+    assert.equal(result.stepStats.length, 3);
+    assert.equal(result.stepStats.find(row => row.stepName === "A").failureRate, 1);
+    assert.equal(result.stepStats.find(row => row.stepName === "B").failureRate, 0);
+    assert.equal(result.stepStats.find(row => row.stepName === "Cleanup").samples, 2);
+    assert.equal(result.stepStats[0].trend.points.length, 2);
+    assert.equal(result.typicalTimeline[0].steps.length, 3);
+    assert.deepEqual(result.runs.map(row => [row.runId, row.runAttempt]), [["603", 1], ["600", 1]]);
+    assert.deepEqual(result.stepConditionFacets.find(step => step.name === "B").conclusions, [
+        { value: "success", count: 3 }, { value: "failure", count: 1 }, { value: "skipped", count: 1 },
+    ]);
+    const focused = aggregateSteps({ ...options, runner: { names: ["box-a"] }, jobStatus: "failure", selectedJob: "test (linux)" });
+    assert.equal(focused.runners[0].jobs, 1);
+    assert.deepEqual(focused.stepConditionFacets, result.stepConditionFacets);
+    const recovered = aggregateSteps({ ...options, jobStatus: "rerun_success", includeAllAttempts: false });
+    assert.equal(recovered.meta.recovery.matchedJobs, 1);
+    assert.deepEqual(recovered.runs.map(row => [row.runId, row.runAttempt]), [["600", 1]]);
+    for (const patch of [{ repository: "owner/other" }, { selectedJob: "missing" }, { runner: { names: ["box-b"] } }]) {
+        assert.equal(aggregateSteps({ ...options, ...patch }).stepStats.length, 0);
+    }
+    const cleared = aggregateSteps({ ...options, failedStep: { name: "A" }, stepConditions: [] });
+    assert.equal(cleared.meta.totalJobs, 5);
+    assert.equal(cleared.failedStep, null);
+});
+
+test("AND step conditions never borrow another job, attempt, workflow, run, repository or matrix outcome", () => {
+    const row = recoveryJob(1, 600, 1, "failure");
+    const a = { ...recoverySteps([row])[0], StepName: "A", StepKey: "A", StepConclusion: "failure" };
+    const b = { ...a, StepName: "B", StepKey: "B", StepConclusion: "success" };
+    const stepConditions = [{ name: "A", conclusion: "failure" }, { name: "B", conclusion: "success" }];
+    for (const patch of [
+        { Repo: "owner/other" }, { WorkflowPath: ".github/workflows/other.yml" },
+        { RunID: "601" }, { RunAttempt: 2 }, { JobID: "2", JobName: "test (macos)" },
+    ]) {
+        const result = aggregateSteps({ jobs: [row], steps: [a, a, { ...b, ...patch }], stepConditions });
+        assert.equal(result.meta.totalJobs, 0, JSON.stringify(patch));
+        assert.equal(result.meta.totalStepRows, 0);
+        assert.equal(result.runners.length, 0);
+    }
+    const result = aggregateSteps({ jobs: [row], steps: [a, a, b, b], stepConditions: [...stepConditions, ...stepConditions] });
+    assert.equal(result.meta.totalJobs, 1);
+    assert.equal(result.stepConditions.length, 2);
+    assert.equal(result.stepConditionFacets.find(step => step.name === "B").count, 1);
+    assert.equal(result.stepConditionFacets.find(step => step.name === "B").conclusions[0].count, 1);
+});
+
+test("step conditions distinguish occurrences and literal names, with missing and contradictory conditions matching nothing", () => {
+    const row = recoveryJob(1, 600, 1, "failure");
+    const base = recoverySteps([row])[0];
+    const steps = [
+        { ...base, StepName: "Upload", StepKey: "Upload", StepOccurrence: 1, StepConclusion: "failure" },
+        { ...base, StepName: "Upload", StepKey: "Upload #2", StepOccurrence: 2, StepConclusion: "success" },
+        { ...base, StepName: "Upload #2", StepKey: "Upload #2", StepOccurrence: 1, StepConclusion: "failure" },
+    ];
+    const options = { jobs: [row], steps };
+    const conditions = [{ name: "Upload", conclusion: "failure" }, { name: "Upload", occurrence: 2, conclusion: "success" }];
+    assert.equal(aggregateSteps({ ...options, stepConditions: conditions }).meta.totalJobs, 1);
+    for (const extra of [
+        { name: "Upload", occurrence: 2, conclusion: "failure" },
+        { name: "upload", conclusion: "failure" },
+        { name: "Upload*", conclusion: "failure" },
+        { name: "missing", conclusion: "success" },
+    ]) {
+        assert.equal(aggregateSteps({ ...options, stepConditions: [...conditions, extra] }).meta.totalJobs, 0);
+    }
+    assert.equal(aggregateSteps({ ...options, stepConditions: [{ name: "Upload #2", conclusion: "failure" }, conditions[1]] }).meta.totalJobs, 1);
+});
+
+test("single-run AND conditions keep all job steps but do not combine outcomes from sibling jobs", () => {
+    const timeline = { Repo: "owner/repo", RunID: "600", WorkflowPath: ".github/workflows/build.yml", Jobs: [
+        { Name: "match", Conclusion: "failure", Steps: [{ Name: "A", Conclusion: "failure" }, { Name: "B", Conclusion: "success" }, { Name: "Other", Conclusion: "skipped" }] },
+        { Name: "a-only", Conclusion: "failure", Steps: [{ Name: "A", Conclusion: "failure" }] },
+        { Name: "b-only", Conclusion: "success", Steps: [{ Name: "B", Conclusion: "success" }] },
+    ] };
+    const before = JSON.stringify(timeline);
+    const conditions = [{ name: "A", conclusion: "failure" }, { name: "B", conclusion: "success" }];
+    const result = filterTimelineJobs(timeline, "", "", [], null, conditions);
+    assert.deepEqual(result.map(job => job.Name), ["match"]);
+    assert.equal(result[0].Steps.length, 3);
+    assert.equal(filterTimelineJobs(timeline, "success", "", [], null, conditions).length, 0);
+    assert.equal(JSON.stringify(timeline), before);
 });
 
 test("runner totals sum overlapping jobs and included attempts without adding wait or step times", () => {

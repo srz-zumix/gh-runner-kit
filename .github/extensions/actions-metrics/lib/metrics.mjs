@@ -3,6 +3,7 @@
 
 import { FAILURE_CONCLUSIONS, normalizeRunnerName } from "../shared/rows.mjs";
 import { HOSTED_PRICES, priceHostedJob } from "./pricing.mjs";
+import { maxOf } from "../shared/extrema.mjs";
 
 /** Whether a run or job conclusion counts as a failure, matching the explorer. */
 function isFailureConclusion(conclusion) {
@@ -64,7 +65,7 @@ function stats(values) {
         p50: percentile(clean, 50),
         p90: percentile(clean, 90),
         p95: percentile(clean, 95),
-        max: Math.max(...clean),
+        max: maxOf(clean),
         total,
     };
 }

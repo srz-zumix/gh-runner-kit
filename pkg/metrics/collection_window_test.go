@@ -44,7 +44,7 @@ func TestCollectWindowRunsSearchCap(t *testing.T) {
 					rows = rows[:cap]
 				}
 				return rows, nil
-			})
+			}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestCollectWindowRunsSaturatedSecond(t *testing.T) {
 	}
 	_, err := collectWindowRuns(context.Background(), Window{Start: start, End: start.Add(time.Second)}, 0, func(string, int) ([]*github.WorkflowRun, error) {
 		return rows, nil
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "complete coverage cannot be guaranteed") {
 		t.Fatalf("got %v, want explicit incomplete coverage error", err)
 	}
@@ -89,7 +89,7 @@ func TestCollectWindowRunsExactBoundariesAndErrors(t *testing.T) {
 			t.Fatalf("incorrect closed-open boundary or budget: %s, %d", created, limit)
 		}
 		return nil, context.Canceled
-	})
+	}, nil)
 	if err != context.Canceled {
 		t.Fatalf("request error was swallowed: %v", err)
 	}

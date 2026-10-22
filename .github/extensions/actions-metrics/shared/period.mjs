@@ -15,6 +15,14 @@ export function normalizePeriodTime(value) {
     return Number.isFinite(time) ? new Date(time).toISOString() : text;
 }
 
+/** Go snapshots retain nanoseconds, including boundaries rounded by Date.parse. */
+export function periodNanoseconds(value) {
+    const ms = periodTime(value);
+    if (!Number.isFinite(ms)) return null;
+    const fraction = String(value).match(/\.(\d+)/)?.[1] ?? "";
+    return BigInt(ms) * 1000000n + BigInt(fraction.padEnd(9, "0").slice(3, 9));
+}
+
 export function localPeriodValue(value) {
     const time = periodTime(value);
     if (!Number.isFinite(time)) return "";

@@ -6,6 +6,7 @@ import { initQueryEditors } from "./query.js";
 import { renderCollectionProgress } from "./progress.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 import { costRunnerTypeLabel, unknownCostText } from "/shared/cost.mjs";
+import { maxOf, minOf } from "/shared/extrema.mjs";
 
 const dom = {
     targetToggle: document.getElementById("target-toggle"),
@@ -393,7 +394,7 @@ function runnerBusyChart(rows, groupBy) {
     }
     const ordered = [...rows].sort((left, right) => (right.busyTimeMs ?? 0) - (left.busyTimeMs ?? 0));
     const shown = ordered.slice(0, 40);
-    const max = Math.max(1, ...shown.map((row) => row.busyTimeMs ?? 0));
+    const max = maxOf(shown.map((row) => row.busyTimeMs ?? 0), 1);
 
     return el("div", {}, [
         el(
@@ -492,8 +493,8 @@ function concurrencyChart(rows, bucket, metric = "peak") {
     }
     const series = CHART_METRICS[metric] ?? CHART_METRICS.peak;
     const values = rows.map((row) => series.value(row) ?? 0);
-    const highest = Math.max(...values);
-    const capacity = series.capacity ? Math.max(0, ...rows.map((row) => row.runners)) : 0;
+    const highest = maxOf(values);
+    const capacity = series.capacity ? maxOf(rows.map((row) => row.runners), 0) : 0;
     const ceiling = Math.max(series.ceiling ?? 0, capacity, highest) || 1;
 
     return el("div", {}, [
@@ -755,8 +756,8 @@ function bucketGeometry(buckets) {
         return { start, end, valid, span: valid ? end - start : 0 };
     });
     const live = parsed.filter((bucket) => bucket.valid);
-    const origin = live.length > 0 ? Math.min(...live.map((bucket) => bucket.start)) : 0;
-    const last = live.length > 0 ? Math.max(...live.map((bucket) => bucket.end)) : 0;
+    const origin = live.length > 0 ? minOf(live.map((bucket) => bucket.start)) : 0;
+    const last = live.length > 0 ? maxOf(live.map((bucket) => bucket.end)) : 0;
     const total = last - origin;
     // Position is elapsed time, not column index, so an axis whose buckets are
     // not all the same width still reads as a time axis. A bucket that cannot
@@ -1060,9 +1061,9 @@ function runnerSparklines(timeline, bucket) {
             const bucket = geometry.parsed[index];
             return bucket.valid ? Math.min(1, ms / bucket.span) : 0;
         });
-        return { row, cells, ratios, peak: ratios.length > 0 ? Math.max(...ratios) : 0 };
+        return { row, cells, ratios, peak: ratios.length > 0 ? maxOf(ratios) : 0 };
     });
-    const highest = Math.max(0, ...series.map((entry) => entry.peak));
+    const highest = maxOf(series.map((entry) => entry.peak), 0);
     // A fitted ceiling stays shared across the charts; it only stops a fleet
     // that never passes a few percent from reading as a flat line.
     const ceiling = sparkScale === "fit" ? Math.max(0.01, highest) : 1;
@@ -1289,7 +1290,7 @@ function selfHostedRepositoryCard(fleet, orgWide, owner) {
                     { label: "Repository", wrap: true, render: (row) => repoName(row.repository, owner) },
                     { label: "Runs", num: true, render: (row) => number(row.runs) },
                     { label: "Jobs", num: true, render: (row) => number(row.jobs) },
-                    { label: "", render: (row) => bar(row.jobs, Math.max(1, ...active.map((item) => item.jobs))) },
+                    { label: "", render: (row) => bar(row.jobs, maxOf(active.map((item) => item.jobs), 1)) },
                     { label: "Success", num: true, sort: (row) => row.decided === 0 ? null : 1 - row.failureRate,
                         render: (row) => (row.decided === 0 ? "—" : healthPill(1 - row.failureRate)) },
                     { label: "Failed", num: true, render: (row) => `${number(row.failed)} / ${number(row.decided)}` },
@@ -1309,7 +1310,7 @@ function renderOverview(metrics) {
     const fleet = metrics.fleet;
     const orgWide = metrics.meta.scope === "org";
     const workflowRows = fleet?.available ? fleet.workflows : [];
-    const maxDaily = Math.max(1, ...overview.daily.map((day) => day.total));
+    const maxDaily = maxOf(overview.daily.map((day) => day.total), 1);
 
     const chart = el("div", {}, [
         el(
@@ -1348,7 +1349,7 @@ function renderOverview(metrics) {
         ),
     ]);
 
-    const maxWorkflowRuns = Math.max(1, ...overview.byWorkflow.map((row) => row.runs));
+    const maxWorkflowRuns = maxOf(overview.byWorkflow.map((row) => row.runs), 1);
     // A failed collection must not render as a confident zero.
     const runsUnavailable = metrics.meta.runs?.available === false;
 
@@ -1398,7 +1399,7 @@ function renderOverview(metrics) {
                                   : []),
                               { label: "Workflow", render: (row) => workflowFileLink(row, metrics.meta.target?.host), wrap: true },
                               { label: "Runs", num: true, render: (row) => number(row.runs) },
-                              { label: "", render: (row) => bar(row.runs, Math.max(1, ...workflowRows.map((item) => item.runs))) },
+                              { label: "", render: (row) => bar(row.runs, maxOf(workflowRows.map((item) => item.runs), 1)) },
                               { label: "Jobs", num: true, render: (row) => number(row.jobs) },
                               {
                                   label: "Success",
@@ -1604,9 +1605,9 @@ function renderRunners(metrics) {
     const summary = runners.summary;
     const fleet = metrics.fleet;
     const fleetSummary = fleet?.summary;
-    const maxRunnerMinutes = Math.max(1, ...runners.byRunner.map((row) => row.minutes));
+    const maxRunnerMinutes = maxOf(runners.byRunner.map((row) => row.minutes), 1);
     const fleetRunners = (fleet?.runners ?? []).filter(matchesRunnerQuery);
-    const maxBusyMs = Math.max(1, ...fleetRunners.map((row) => row.busyTimeMs ?? 0));
+    const maxBusyMs = maxOf(fleetRunners.map((row) => row.busyTimeMs ?? 0), 1);
 
     return [
         orgWideNotice(orgWide),
@@ -1774,8 +1775,8 @@ function renderQueue(metrics) {
     const fleet = metrics.fleet;
     const rows = fleet?.queue ?? [];
     const timeline = fleet?.concurrency ?? [];
-    const worstWaitMs = rows.length > 0 ? Math.max(...rows.map((row) => row.waitP95Ms ?? 0)) : null;
-    const worstSaturation = rows.length > 0 ? Math.max(...rows.map((row) => row.saturation ?? 0)) : null;
+    const worstWaitMs = rows.length > 0 ? maxOf(rows.map((row) => row.waitP95Ms ?? 0)) : null;
+    const worstSaturation = rows.length > 0 ? maxOf(rows.map((row) => row.saturation ?? 0)) : null;
     const undersized = rows.filter((row) => (row.saturation ?? 0) > 1).length;
     const busiest = timeline.length > 0 ? timeline.reduce((best, row) => (row.peak > best.peak ? row : best)) : null;
     const capacity = fleet?.capacity ?? [];
@@ -2365,7 +2366,7 @@ function renderUsage(metrics) {
     const costText = (value, row) => value === null || value === undefined ? unknownCostText(row) : money(value);
     const rateText = (value, row) => Number.isFinite(value) ? `$${value.toFixed(4)}` : unknownCostText(row);
     const priceNote = "Current USD list prices by billing SKU; CPU, architecture and GPU variants are distinguished. Standard runners are free for public repositories; Larger runners are billed. Included minutes, discounts, storage and historical price changes are excluded. Pool specifications reflect the present, not historical hardware.";
-    const maxWorkflowMinutes = Math.max(1, ...usageWindow.byWorkflow.map((row) => row.minutes));
+    const maxWorkflowMinutes = maxOf(usageWindow.byWorkflow.map((row) => row.minutes), 1);
 
     return [
         orgWideNotice(orgWide),
@@ -2813,7 +2814,7 @@ dom.targetForm.addEventListener("submit", (event) => {
 
 document.addEventListener("actions-metrics:render", () => render());
 setInterval(() => {
-    if (state?.collectionProgress?.status === "paused") renderCollectionProgress(dom.collectionProgress, state);
+    if (["collecting", "paused"].includes(state?.collectionProgress?.status)) renderCollectionProgress(dom.collectionProgress, state);
 }, 1000);
 
 document.addEventListener("keydown", (event) => {
