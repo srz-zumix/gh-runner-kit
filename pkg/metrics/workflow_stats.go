@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // WorkflowRow is one line of the metrics workflow report.

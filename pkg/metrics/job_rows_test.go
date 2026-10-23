@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // queuedJobData adds a job that has been queued but never picked up, which the

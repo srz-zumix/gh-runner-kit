@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 )
 
 func TestRunAttemptCache(t *testing.T) {

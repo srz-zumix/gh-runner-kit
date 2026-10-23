@@ -2,7 +2,7 @@ package kitutil
 
 import (
 	"github.com/cli/cli/v2/pkg/cmdutil"
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/spf13/cobra"
 	runnerpkg "github.com/srz-zumix/gh-runner-kit/pkg/runner"
 	"github.com/srz-zumix/go-gh-extension/pkg/render"
