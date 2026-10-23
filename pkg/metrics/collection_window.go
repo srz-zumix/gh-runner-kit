@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 )
 
 const workflowRunSearchCap = 1000

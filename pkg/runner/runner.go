@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
-	"github.com/google/go-github/v90/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 )
 
@@ -100,7 +100,7 @@ func CordonByGroup(ctx context.Context, client *gh.GitHubClient, repo repository
 	}
 	if group == nil {
 		group, err = gh.CreateOrgRunnerGroupWithRequest(ctx, client, repo, github.CreateRunnerGroupRequest{
-			Name:                  github.Ptr(groupName),
+			Name:                  groupName,
 			Visibility:            github.Ptr(visibility),
 			SelectedRepositoryIDs: []int64{},
 		})
