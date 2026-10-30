@@ -4,6 +4,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selectDatasetJobs } from "../shared/dataset.mjs";
+import { localTimeZone } from "../shared/timezone.mjs";
 
 test("all tabs use one all-attempts snapshot, including 6001 runs and exact job IDs", async t => {
     const directory = await mkdtemp(join(tmpdir(), "actions-metrics-shared-test-"));
@@ -46,7 +47,7 @@ if (args[0] === "api") {
     if (args[1] !== "rate_limit") throw new Error("Unexpected direct API: " + args[1]);
     output({resources: {core: {remaining: 10000, reset: Math.floor(Date.now()/1000)+3600}}});
 } else if (args.includes("--help")) {
-    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  snapshot Snapshot\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n  --until string\\n");
+    process.stdout.write("Available Commands:\\n  collect Collect\\n  report Report\\n  runs Runs\\n  jobs Jobs\\n  snapshot Snapshot\\n  steps Steps\\n  timeline Timeline\\n  export Export\\n\\nFlags:\\n  --include-repo string\\n  --exclude-repo string\\n  --until string\\n  --time-zone string\\n");
 } else if (args.includes("--version")) {
     process.stdout.write("fixture\\n");
 } else if (args[2] === "collect") {
@@ -110,6 +111,8 @@ if (args[0] === "api") {
     assert.equal(state.collectionProgress.supported, false);
     assert.match(state.collectionProgress.reason, /update gh runner-kit/);
     assert.equal(state.metrics.overview.totals.runs, 6001);
+    assert.equal(state.metrics.fleet.timeZone, localTimeZone());
+    assert.equal(state.metrics.fleet.concurrencyReason, null);
     assert.equal(state.metrics.usage.window.jobs, 6002);
     assert.equal(state.metrics.usage.window.minutes, 12004);
     const calls = async () => (await readFile(process.env.SHARED_CALLS, "utf8")).trim().split("\n").map(JSON.parse);
@@ -218,6 +221,35 @@ if (args[0] === "api") {
     const filterCalls = (await calls()).slice(beforeFilter);
     assert.ok(filterCalls.every(args => args[0] !== "api" && args[2] !== "collect"));
     assert.ok(filterCalls.some(args => args[2] === "snapshot" && args.includes("--output") && args.includes("--since") && args.includes("--until")));
+    const peer = new DashboardInstance({ instanceId: "timezone-peer", store, query: instance.effectiveQuery });
+    t.after(() => peer.dispose());
+    await peer.project({ all: true });
+    assert.equal(peer.state().timeline.matched, 2);
+    const peerReady = new Promise(resolve => {
+        const unsubscribe = peer.onState(state => {
+            if (state.filters.bucket === "24h" && state.timelineStatus === "ready") {
+                unsubscribe();
+                resolve(state);
+            }
+        });
+    });
+    const beforeTimeZone = (await calls()).length;
+    const sameDataset = instance.state().metrics.meta.dataset.id;
+    const sameWindow = instance.state().metrics.meta.dataset.window;
+    await instance.apply({ patch: { bucket: "24h" } });
+    const zoned = instance.state();
+    assert.equal(zoned.filters.timeZone, undefined);
+    assert.equal(zoned.metrics.fleet.timeZone, localTimeZone());
+    assert.equal(zoned.metrics.meta.dataset.id, sameDataset);
+    assert.deepEqual(zoned.metrics.meta.dataset.window, sameWindow);
+    assert.equal(zoned.timeline.matched, 2);
+    assert.equal(zoned.steps.result.meta.totalJobs, 2);
+    const peerZoned = await peerReady;
+    assert.equal(peerZoned.timeline.matched, 2);
+    assert.equal(peerZoned.metrics.fleet.timeZone, localTimeZone());
+    const zonedCalls = (await calls()).slice(beforeTimeZone);
+    assert.ok(zonedCalls.every(args => args[0] !== "api" && args[2] !== "collect"));
+    assert.ok(zonedCalls.some(args => args[2] === "report" && args[args.indexOf("--time-zone") + 1] === localTimeZone()));
     assert.throws(() => instance.apply({patch: {filterFrom: time(-1)}}), /within the collected period/);
     assert.equal(instance.state().metrics.overview.totals.runs, 2);
     const filteredDataset = store.entry(query).dataset;

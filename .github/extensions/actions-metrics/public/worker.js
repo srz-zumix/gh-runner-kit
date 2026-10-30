@@ -102,6 +102,8 @@ self.onmessage = (event) => {
                 collectedAt: snapshot.collectedAt,
                 bucketMs: payload.bucketMs,
                 topRunners: payload.topRunners,
+                filterFrom: payload.filters?.from,
+                filterTo: payload.filters?.to,
             };
             const aggregate = buildExploreAggregate(subset, options);
             post({

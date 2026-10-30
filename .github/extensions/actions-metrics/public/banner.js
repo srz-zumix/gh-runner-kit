@@ -1,3 +1,5 @@
+import { formatTimestamp } from "/shared/timezone.mjs";
+
 const disclosures = new WeakMap();
 
 export function renderDataBanner(banner, state) {
@@ -12,7 +14,7 @@ export function renderDataBanner(banner, state) {
         ? `Partial data (${messages.length})`
         : state.errorCode === "rate_limited"
           ? state.metrics
-              ? `Rate limited - showing the data collected ${state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "earlier"}`
+              ? `Rate limited - showing the data collected ${state.updatedAt ? formatTimestamp(state.updatedAt) : "earlier"}`
               : "Rate limited"
           : "Collection failed";
     const title = document.createElement("strong");

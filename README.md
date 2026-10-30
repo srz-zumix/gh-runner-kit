@@ -604,7 +604,7 @@ Options:
 ### Show how many jobs ran at the same time over the window
 
 ```sh
-gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--bucket DURATION] [--time-zone IANA_ZONE] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Reconstruct the number of jobs that occupied a runner at the same time from their start and completion timestamps, one time bucket at a time.
@@ -612,6 +612,16 @@ Reconstruct the number of jobs that occupied a runner at the same time from thei
 `PEAK` is the highest number of jobs running at the same instant inside the bucket, and comparing it against `RUNNERS` shows whether the fleet ran out of capacity and when. `UTIL` is the busy time of the bucket divided by the bucket length multiplied by `RUNNERS`, so it stays comparable across buckets even though the last one is cut off at the end of the window.
 
 `--label` keeps only the jobs whose `runs-on` set carries every given label, and counts only the runners that can serve that set. Jobs that ran on GitHub-hosted runners are excluded.
+
+`--time-zone` is optional and defaults to empty, keeping buckets anchored to the
+collection window's start. Set an IANA zone such as `Asia/Tokyo`, `UTC` or
+`America/New_York` to align buckets to local midnight. Subdaily buckets advance
+by elapsed duration and reset each calendar day; the final subdivision is cut
+off at the next midnight. A `24h` bucket spans a whole calendar day, including
+23-hour and 25-hour daylight-saving days. With a zone, `--bucket` must be at most
+`24h`. The original collection window is unchanged: first and last buckets are
+clipped to it, and `UTIL` uses each bucket's actual clipped duration. This also
+applies with `--input`.
 
 Options:
 
@@ -636,6 +646,7 @@ Options:
 | `-R`, `--repo` | current repository | Select a repository using the `[HOST/]OWNER/REPO` format |
 | `--since` | - | Aggregate since this time, as `YYYY-MM-DD` or RFC3339. Mutually exclusive with `--days` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
+| `--time-zone` | empty (window start) | Align buckets to local midnight in this IANA zone; requires `--bucket` at most `24h` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |
@@ -897,14 +908,21 @@ Options:
 ### Print several metrics reports from one collection
 
 ```sh
-gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
+gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] [--section SECTION]... [--group-by name|label|group] [--bucket DURATION] [--time-zone IANA_ZONE] [--label LABEL]... [--self-hosted-only] [--include-unused] [--target-wait DURATION] [--target-utilization RATIO] [--rate KEY=PRICE]... [--days N | --since TIME] [--until TIME] [--all-repos] [--include-repo PATTERN]... [--exclude-repo PATTERN]... [--branch BRANCH] [--event EVENT] [--workflow FILE] [--max-runs N] [--concurrency N] [--no-cache] [--refresh] [--input FILE] [--format json] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
 Collect the fleet once and print several of the other metrics reports from it, which is cheaper than running each of them on its own when API rate limits are a concern.
 
 Pass `--section` one or more times to pick which reports to print, or leave it unset to get every section except `cost`, which needs one extra billable-usage request per run. Accepted sections: `summary`, `runner`, `queue`, `concurrency`, `label`, `workflow`, `repository`, `capacity`, `cost`.
 
-`--group-by`, `--bucket`, `--label`, `--self-hosted-only`, `--include-unused`, `--target-wait`, `--target-utilization` and `--rate` configure their matching section the same way its own `metrics` command does; `--label` only narrows the `concurrency` section, no other section accepts a label filter.
+`--group-by`, `--bucket`, `--time-zone`, `--label`, `--self-hosted-only`,
+`--include-unused`, `--target-wait`, `--target-utilization` and `--rate` configure
+their matching section the same way its own `metrics` command does; `--label`
+only narrows the `concurrency` section, no other section accepts a label filter.
+Optional `--time-zone` defaults to empty (window-start anchoring) and only changes
+concurrency bucket alignment, not collection boundaries or other sections. For
+example, `--bucket 24h --time-zone Asia/Tokyo` uses local calendar days with
+clipped first and last buckets; widths above `24h` are rejected when a zone is set.
 
 Options:
 
@@ -936,6 +954,7 @@ Options:
 | `--target-utilization` | `0.7` | Highest share of the time a runner may be busy in the capacity section, greater than 0 and at most 1 |
 | `--target-wait` | `1m0s` | Mean queue time the capacity section aims for, such as `60s` |
 | `-t`, `--template` | - | Format JSON output using a Go template |
+| `--time-zone` | empty (window start) | Align concurrency buckets to local midnight in this IANA zone; requires `--bucket` at most `24h` |
 | `--type` | `org` (`repo` when `--repo` is given) | Runner type to target: `{org\|repo}` |
 | `--until` | now | Exclusive end as `YYYY-MM-DD` or RFC3339; dates without timezones use UTC. Cannot be combined with `--input` |
 | `--workflow` | all workflows | Keep only the runs of this workflow file, such as `ci.yml` |

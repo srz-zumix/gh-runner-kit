@@ -441,6 +441,42 @@ button:focus-visible {
     font-weight: var(--font-weight-semibold, 600);
 }
 
+.card__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.card__toggle::before {
+    content: "\25B6";
+    font-size: 0.75em;
+    transform: rotate(90deg);
+}
+
+.card__toggle[aria-expanded="false"]::before {
+    transform: none;
+}
+
+.card__toggle:focus-visible {
+    outline: 2px solid var(--color-focus-outline, #0969da);
+    outline-offset: 3px;
+}
+
+.card--collapsed > :not(.card__header) {
+    display: none;
+}
+
+.card--collapsed > .card__header {
+    border-bottom: 0;
+}
+
 .inline-field {
     display: flex;
     align-items: center;

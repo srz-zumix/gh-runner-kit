@@ -10,6 +10,7 @@ import (
 func NewConcurrencyCmd() *cobra.Command {
 	var flags kitutil.MetricsFlags
 	var bucket string
+	var timeZone string
 	var labels []string
 
 	// defaultBucket is the textual --bucket default. It lives here, at the flag boundary,
@@ -28,12 +29,16 @@ comparing it against RUNNERS shows whether the fleet ran out of capacity and whe
 is the busy time of the bucket divided by the bucket length times RUNNERS, so it stays
 comparable across buckets even though the last one is cut off at the end of the window.
 
+--time-zone aligns buckets to local midnight in an IANA zone, resetting subdivisions
+each day. A 24h bucket spans the whole calendar day, even across daylight-saving
+changes. With a zone, --bucket must be at most 24h; the collection window is unchanged.
+
 --label keeps only the jobs whose runs-on set carries every given label, and counts
 only the runners that can serve that set. Jobs that ran on GitHub-hosted runners are
 excluded.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			window, width, err := flags.ResolveConcurrency(bucket)
+			window, width, err := flags.ResolveConcurrencyInTimeZone(bucket, timeZone)
 			if err != nil {
 				return err
 			}
@@ -43,7 +48,7 @@ excluded.`,
 				return err
 			}
 
-			rows, err := metricspkg.BuildConcurrencyStats(data, width, labels)
+			rows, err := metricspkg.BuildConcurrencyStatsInTimeZone(data, width, labels, timeZone)
 			if err != nil {
 				return err
 			}
@@ -59,6 +64,7 @@ excluded.`,
 
 	flags.Add(cmd)
 	cmd.Flags().StringVar(&bucket, "bucket", defaultBucket, "Width of one time bucket, such as 15m or 1h")
+	cmd.Flags().StringVar(&timeZone, "time-zone", "", "Align buckets to midnight in this IANA time zone (default: window start; bucket at most 24h)")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "Keep only the jobs requesting this label (repeatable)")
 
 	return cmd

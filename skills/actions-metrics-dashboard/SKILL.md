@@ -68,6 +68,33 @@ to rank lowest success rate first and most runs first within equal rates.
 Missing values remain last. The runner list and Job explorer sort all matches
 before paging; their single-column sort toggles between two directions.
 
+All tabs have collapsible cards with keyboard-accessible title buttons.
+Cards start expanded and retain their open/closed state across filtering,
+data updates and tab switches within the current page, not across page reloads.
+Existing collapsible settings retain their own behavior.
+
+Job explorer's **Workflow runs over time** shows unique repository/run counts
+as separate colored lines per workflow in automatic time buckets on a shared,
+non-stacked count axis, using the current explorer filters
+without GitHub requests. Jobs and re-run attempts sharing a run ID count once.
+All matching workflows have separate lines; narrow the Workflow facet to
+compare a subset. Point tooltips show workflow, time and count.
+Legend labels include repository and workflow path. Counts include only runs
+represented by matching loaded jobs, not runs without jobs or beyond the row
+budget. Creation timestamps stay fixed through job filtering. Legacy row
+payloads use earliest loaded job queue/start times and show an approximation
+count. Missing timestamps, out-of-window runs and jobs without repository/run
+IDs are excluded and reported separately; truncated rows warn of incomplete counts.
+
+Job explorer's **Jobs by hour of day** has separate **Total jobs** and
+**Average jobs per day** line charts for all 24 local hours (00:00–23:00).
+It counts job attempts by queue time, falling back to start time, and follows
+current explorer filters without GitHub requests. Average = hourly total /
+local calendar days intersecting the selected period, including zero-job days
+and counting partial days as one. Repeated DST hours combine; missing hours
+stay zero. Reports Bucket is independent. Missing timestamps, out-of-period
+jobs and truncated-row limitations are reported.
+
 In **Workflows**, the **Workflow** column links to each repository's workflow
 file on its default branch, on the dashboard's GitHub host, in a new tab.
 Dynamic workflows (Copilot, Dependabot) and rows without a file path stay plain
@@ -91,6 +118,28 @@ carrying `*`), `all` (every runner, the expensive path) or `clear` (restore the
 fleet-wide chart). `exclude` is not one of the three; it narrows whichever of
 the first two runs.
 
+## Display time zone and report buckets
+
+The dashboard always uses the device's local timezone. There is no timezone
+selector or `set_filters` timezone field; legacy saved selections are ignored.
+Collected/coverage/update/retry timestamps, charts, tables, period inputs and
+calendar presets use local time. Full timestamp labels show UTC offsets.
+
+Reports' `bucket` is aligned to local midnight, not the
+collection start. Queue & capacity's concurrency chart and Runner activity's
+chart, heatmap and per-runner charts share the exact same buckets.
+`24h` denotes one calendar day, including 23/25-hour DST days. Shorter widths
+use elapsed-time subdivisions reset at every local midnight. First/last
+subdivisions are clipped to the selected period, and utilization uses the
+actual clipped duration.
+
+Job explorer keeps its independent automatic fixed-width bucket grid, with
+local timestamp labels. Workflow daily totals and Step timeline daily trends
+use local calendar grouping; exports retain their existing semantics.
+The installed CLI must support `metrics report/concurrency --time-zone`.
+Otherwise the affected charts show an explicit update/reload requirement,
+without disabling unrelated reports or silently retaining unaligned buckets.
+
 ## Collection progress and rate limits
 
 The progress card streams the repository ordinal and current collection stage.
@@ -103,7 +152,7 @@ independently of job lists; an attempt counts as cached only when both are reuse
 Older CLI versions may still request metadata even when their jobs are cached.
 
 During **Finding workflow runs**, optional `detail.runSearch` identifies the
-current UTC `created` search period, `searches` ordinal and `discovered` unique
+current search period in local time, `searches` ordinal and `discovered` unique
 run IDs in that repository. Split searches deduplicate discovered IDs, but these
 are not final selected totals or job-cache-hit counts. `cachedWindows` counts
 complete UTC days reused from the discovery cache, separately from API searches.

@@ -7,6 +7,8 @@ import { renderCollectionProgress } from "./progress.js";
 import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 import { costRunnerTypeLabel, unknownCostText } from "/shared/cost.mjs";
 import { maxOf, minOf } from "/shared/extrema.mjs";
+import { formatTimestamp, localTimeZone } from "/shared/timezone.mjs";
+import { makeCardsCollapsible } from "/shared/cardcollapse.mjs";
 
 const dom = {
     targetToggle: document.getElementById("target-toggle"),
@@ -300,7 +302,7 @@ function saturationPill(value) {
 }
 
 function timestamp(value) {
-    return value ? new Date(value).toLocaleString() : "–";
+    return value ? formatTimestamp(value) : "–";
 }
 
 /** Banner shown instead of the gh runner-kit tables when the CLI is missing. */
@@ -312,6 +314,18 @@ function fleetNotice(fleet) {
         class: "empty",
         text: `${fleet?.reason ?? "gh runner-kit metrics has not been collected"}. Install it with: gh extension install srz-zumix/gh-runner-kit`,
     });
+}
+
+function concurrencyNotice(fleet) {
+    const unavailable = fleetNotice(fleet);
+    if (unavailable) return unavailable;
+    const selected = localTimeZone();
+    const reason = fleet.concurrencyReason ?? (!fleet.timeZone
+        ? "Reload the Actions metrics extension to enable local-midnight report buckets."
+        : fleet.timeZone !== selected
+        ? `Report buckets use ${fleet.timeZone}; a report for the local ${selected} time zone is not ready.`
+        : null);
+    return reason ? el("p", { class: "empty", text: reason }) : null;
 }
 
 /**
@@ -1377,7 +1391,7 @@ function renderOverview(metrics) {
             kpi("Retried runs", number(overview.totals.retriedRuns), "run_attempt > 1"),
             kpi("In progress", number(overview.totals.inProgressRuns), "at collection time"),
               ]),
-        runsUnavailable ? null : card("Runs per day", [chart]),
+        runsUnavailable ? null : card("Runs per day (local time)", [chart]),
         selfHostedRepositoryCard(fleet, orgWide, metrics.meta.target?.owner),
         workflowRows.length > 0
             ? card(
@@ -1832,7 +1846,7 @@ function renderQueue(metrics) {
             : null,
         card(
             "Runner busy time over time",
-            [fleetNotice(fleet) ?? concurrencyChart(timeline, fleet.bucket, chartMetric)],
+            [concurrencyNotice(fleet) ?? concurrencyChart(timeline, fleet.bucket, chartMetric)],
             "Reported by gh runner-kit metrics concurrency. Peak jobs is the highest number of jobs running at the same instant inside the bucket, and columns reaching the capacity line mean the fleet ran out of runners. Busy time sums how long the runners were occupied inside the bucket, and utilization divides that by the capacity the inventory offered, so both stay flat when the fleet idles through a peak. This chart always describes the whole fleet; the Runner activity tab rebuilds it from the jobs of one runner, or of a matched family of them.",
             fleet?.available
                 ? el("div", { class: "controls" }, [
@@ -2156,7 +2170,7 @@ function renderActivity(metrics) {
     // by it - is not offered here at all.
     const metric = traceMetric === "utilization" ? "peak" : traceMetric;
 
-    if (!fleet?.available) {
+    if (!fleet?.available || fleet.concurrencyReason || fleet.timeZone !== localTimeZone()) {
         // Nothing to project onto, so the trace control is left out rather
         // than offered and rejected - but an error raised by the agent action
         // still has to reach the reader somewhere.
@@ -2164,7 +2178,7 @@ function renderActivity(metrics) {
             orgWideNotice(metrics.meta.scope === "org"),
             card(
                 "Runner activity",
-                [timelineNotice(state), fleetNotice(fleet) ?? el("p", { class: "empty", text: "No self-hosted data in this window." })],
+                [timelineNotice(state), concurrencyNotice(fleet)],
                 "Per-runner detail is projected onto the buckets of the concurrency report, so it needs a self-hosted fleet to project onto.",
             ),
         ];
@@ -2501,13 +2515,13 @@ function renderStatus() {
         dom.status.textContent = `${label} · ${state.progress || "Collecting…"}`;
         return;
     }
-    const updated = state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "never";
+    const updated = state.updatedAt ? formatTimestamp(state.updatedAt) : "never";
     const collection = state.metrics?.meta?.collectionMs;
     const window = state.metrics?.meta?.dataset?.window;
     const period = window
         ? `${timestamp(window.Start)} → ${timestamp(window.End)} (end exclusive)${state.metrics.meta.dataset.filtered ? " · dataset filtered" : ""}`
         : state.filters.since || state.filters.until ? "custom collection period" : `last ${state.filters.days} days`;
-    dom.status.textContent = `${label} · ${period} · updated ${updated}${
+    dom.status.textContent = `${label} · Local TZ ${localTimeZone()} · ${period} · updated ${updated}${
         Number.isFinite(collection) ? ` (${(collection / 1000).toFixed(1)}s)` : ""
     }`;
 }
@@ -2571,6 +2585,11 @@ function render() {
 }
 
 function renderContent() {
+    renderContentSections();
+    makeCardsCollapsible(dom.content, activeTab);
+}
+
+function renderContentSections() {
     renderFilters();
     renderStatus();
     renderBanner();
@@ -2581,6 +2600,7 @@ function renderContent() {
 
     if (activeTab === "steps") {
         dom.content.replaceChildren(...renderSteps(state).filter(Boolean), authenticationSettingsCard());
+    makeCardsCollapsible(dom.content, activeTab);
         return;
     }
 

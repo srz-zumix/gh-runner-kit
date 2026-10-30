@@ -16,6 +16,7 @@ import {
     conclusionColorFor,
     renderAreaChart,
     renderHistogram,
+    renderLineTimeline,
     renderRankedBars,
     renderShareBar,
     renderStackedTimeline,
@@ -25,6 +26,8 @@ import { FIELD_SEPARATOR, UNIDENTIFIED } from "/shared/rows.mjs";
 import { toggleSort } from "/shared/sort.mjs";
 import { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET } from "/shared/fields.mjs";
 import { renderFacetPicker } from "/shared/facet.mjs";
+import { formatTime, formatTimestamp } from "/shared/timezone.mjs";
+import { makeCardsCollapsible } from "/shared/cardcollapse.mjs";
 
 /** Facets the reader can narrow on, in the order they are offered. */
 const FACETS = [
@@ -489,7 +492,7 @@ function scopeBanner(state) {
     if (scope.labels?.length) {
         bits.push(`labels ${scope.labels.join(", ")}`);
     }
-    const collected = view.snapshot?.collectedAt ? new Date(view.snapshot.collectedAt).toLocaleString() : "–";
+    const collected = view.snapshot?.collectedAt ? formatTimestamp(view.snapshot.collectedAt) : "–";
     return el("div", { class: "scope" }, [
         el("div", { class: "scope__line" }, [
             el("span", { class: "scope__title", text: "Collected" }),
@@ -562,7 +565,7 @@ function activeChips() {
             el("button", {
                 class: "chip",
                 type: "button",
-                text: `${new Date(view.filters.from).toLocaleString()} → ${new Date(view.filters.to).toLocaleString()} ✕`,
+                text: `${formatTimestamp(view.filters.from)} → ${formatTimestamp(view.filters.to)} ✕`,
                 onClick: () => setFilters({ from: null, to: null }),
             }),
         );
@@ -655,8 +658,34 @@ function timelineCard() {
                 ),
             ),
         ],
-        "Bars count jobs by when they were queued. Drag across the chart to filter to a range; click once inside a selection to clear it.",
+        "Bars count jobs by when they were queued. Timestamps use local time; automatic bucket widths are independent of Reports Bucket. Drag across the chart to filter to a range; click once inside a selection to clear it.",
     );
+}
+
+function hourlyJobsCard() {
+    const hourly = view.aggregate?.hourlyJobs;
+    if (!hourly) return null;
+    const notes = [
+        "Jobs are counted by local queue time (start time when queue time is missing), matching Jobs over time. Each job attempt counts separately; current explorer filters apply.",
+        `Average = total / ${number(hourly.days)} local calendar days in the selected period, including days with no jobs. Partial days count as one day; repeated DST hours are combined.`,
+        `${number(hourly.total)} jobs counted. Independent of Reports Bucket.`,
+    ];
+    if (hourly.missingTime) notes.push(`${number(hourly.missingTime)} jobs have no queue/start time and are excluded.`);
+    if (hourly.outsideWindow) notes.push(`${number(hourly.outsideWindow)} jobs are outside the selected period and are excluded.`);
+    if (view.snapshot?.truncated) notes.push("Loaded rows are truncated; counts may be incomplete.");
+    const formatBucket = bucket => `${String(bucket.hour).padStart(2, "0")}:00`;
+    return card("Jobs by hour of day", [
+        ...[
+            { key: "total", label: "Total jobs", color: "var(--true-color-blue, #0969da)" },
+            { key: "average", label: "Average jobs per day", color: "var(--true-color-green, #1a7f37)" },
+        ].flatMap(entry => [
+            el("h3", { class: "subhead", text: entry.label }),
+            renderLineTimeline({ buckets: hourly.hours }, {
+                series: [entry], label: `${entry.label} by local hour`, formatBucket, showAllTicks: true,
+                formatValue: value => value.toLocaleString(undefined, { maximumFractionDigits: 3 }),
+            }),
+        ]),
+    ], notes.join(" "));
 }
 
 function concurrencyCard() {
@@ -677,6 +706,39 @@ function concurrencyCard() {
         ],
         "The most jobs running at once within each bucket, counting a job in every bucket it spans rather than only the one it started in.",
     );
+}
+
+function workflowRunsCard() {
+    const timeline = view.aggregate?.workflowRuns;
+    if (!timeline) return null;
+    const series = timeline.series.map(entry => ({
+        ...entry,
+        label: entry.workflowKey ? `${entry.repo} / ${entry.label}${entry.path ? ` (${entry.path})` : ""}` : entry.label,
+        color: entry.workflowKey ? colorFor(entry.workflowKey) : "var(--text-color-muted, #656d76)",
+    }));
+    const notes = [
+        "Counts unique repository/run IDs represented by matching loaded jobs, by workflow run creation time. Multiple jobs and re-runs of the same run count once.",
+        "Timestamps use local time; automatic bucket widths are independent of Reports Bucket.",
+        `Buckets: ${duration(timeline.bucketMs)}. ${number(timeline.total)} runs across ${number(timeline.workflowCount)} workflows.`,
+    ];
+    if (timeline.approximate) notes.push(`${number(timeline.approximate)} runs use their earliest loaded job queue/start time because run creation time is unavailable.`);
+    if (timeline.missingTime) notes.push(`${number(timeline.missingTime)} runs have no timestamp and are excluded.`);
+    if (timeline.outsideWindow) notes.push(`${number(timeline.outsideWindow)} runs were created outside the displayed window and are excluded.`);
+    if (timeline.unidentifiedJobs) notes.push(`${number(timeline.unidentifiedJobs)} jobs have no repository/run ID and are excluded.`);
+    if (view.snapshot?.truncated) notes.push("Loaded rows are truncated; run counts may be incomplete.");
+    return card("Workflow runs over time", [
+        renderLineTimeline(timeline.total ? timeline : { ...timeline, buckets: [] }, {
+            series,
+            label: "Workflow runs over time",
+            emptyMessage: "No workflow runs with a known creation time in this selection.",
+        }),
+        el("ul", { class: "share__legend" }, series.map(entry =>
+            el("li", { class: "share__legend-item" }, [
+                el("span", { class: "share__swatch", style: `background:${entry.color}` }),
+                el("span", { text: `${entry.label}: ${number(entry.count)}` }),
+            ]),
+        )),
+    ], notes.join(" "));
 }
 
 function distributionCard() {
@@ -782,7 +844,7 @@ function heatmapCard() {
             { class: "heat__cells" },
             buckets.map((bucket, index) =>
                 index % Math.max(1, Math.round(buckets.length / 8)) === 0
-                    ? el("span", { class: "heat__tick", text: new Date(bucket.start).toLocaleDateString([], { month: "short", day: "numeric" }) })
+                    ? el("span", { class: "heat__tick", text: formatTime(bucket.start, { month: "short", day: "numeric" }) })
                     : el("span", { class: "heat__tick" }),
             ),
         ),
@@ -796,7 +858,7 @@ function heatmapCard() {
             return el("span", {
                 class: "heat__cell",
                 style: `background:${ratio > 0 ? `color-mix(in srgb, var(--true-color-blue, #0969da) ${Math.round(8 + ratio * 92)}%, transparent)` : "transparent"}`,
-                title: `${runner.runner}\n${new Date(buckets[index].start).toLocaleString()}\nbusy ${duration(busy)} of ${duration(span)} observed (${percent(ratio)})`,
+                title: `${runner.runner}\n${formatTimestamp(buckets[index].start)}\nbusy ${duration(busy)} of ${duration(span)} observed (${percent(ratio)})`,
             });
         });
         return el("div", { class: "heat__row" }, [
@@ -910,7 +972,7 @@ function tableCard() {
     const body = page.rows.map((row) => {
         const url = jobUrl(row);
         return el("tr", {}, [
-            el("td", { text: row.queuedAt ? new Date(row.queuedAt).toLocaleString() : "–" }),
+            el("td", { text: row.queuedAt ? formatTimestamp(row.queuedAt) : "–" }),
             el("td", { title: row.repo, text: row.repo || "–" }),
             el("td", { title: row.workflowPath || row.workflow, text: row.workflow || "–" }),
             el(
@@ -1071,6 +1133,8 @@ function sections(state) {
         filterBar(),
         headline(),
         timelineCard(),
+        workflowRunsCard(),
+        hourlyJobsCard(),
         concurrencyCard(),
         heatmapCard(),
         distributionCard(),
@@ -1098,6 +1162,7 @@ function paint() {
     const caret = focusId ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
 
     view.root.replaceChildren(...sections(state).filter(Boolean));
+    makeCardsCollapsible(view.root, "explore");
 
     if (focusId) {
         const restored = document.getElementById(focusId);
@@ -1125,6 +1190,7 @@ export function renderExplorer(state) {
         view.root = el("div", { class: "explore" });
     }
     view.root.replaceChildren(...sections(state).filter(Boolean));
+    makeCardsCollapsible(view.root, "explore");
     return [view.root];
 }
 

@@ -3,6 +3,7 @@ import {
     readFieldValue, sameFieldValue, writeFieldValue,
 } from "/shared/fields.mjs";
 import { PERIOD_PRESETS, periodPreset } from "/shared/period.mjs";
+import { formatTimestamp } from "/shared/timezone.mjs";
 
 const PERIOD_FIELDS = { collection: ["since", "until"], dataset: ["filterFrom", "filterTo"] };
 const PRESET_NOTE = "Local calendar dates; weeks start on Monday. Presets fill this draft only.";
@@ -12,7 +13,7 @@ function coverageOf(state) {
 }
 
 function windowText(window) {
-    return `${new Date(window.Start).toLocaleString()} → ${new Date(window.End).toLocaleString()} (end exclusive)`;
+    return `${formatTimestamp(window.Start)} → ${formatTimestamp(window.End)} (end exclusive)`;
 }
 
 /** Independent drafts follow untouched live fields and retain conflicts across SSE updates. */

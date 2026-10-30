@@ -140,6 +140,8 @@ export function normalizeRow(raw, index) {
         jobId: id(raw.JobID),
         runId: id(raw.RunID),
         runAttempt: Number(raw.RunAttempt) || 1,
+        runCreatedAt: parseTime(raw.RunCreatedAt),
+        runTimeApproximate: false,
         repo,
         workflow,
         workflowPath,
@@ -197,7 +199,32 @@ export function normalizeRows(rawRows) {
     const merged = [...byJobId.values(), ...withoutId];
     const order = (raw) => parseTime(raw.QueuedAt) ?? parseTime(raw.StartedAt) ?? 0;
     merged.sort((left, right) => order(left) - order(right));
-    return merged.map((raw, index) => normalizeRow(raw, index));
+    const rows = merged.map((raw, index) => normalizeRow(raw, index));
+    const runTimes = new Map();
+    for (const row of rows) {
+        const key = workflowRunKey(row);
+        if (key === null) continue;
+        const approximate = row.runCreatedAt === null;
+        const at = row.runCreatedAt ?? row.queuedAt ?? row.startedAt;
+        if (at === null) continue;
+        const previous = runTimes.get(key);
+        if (!previous || (previous.approximate && !approximate) ||
+            (previous.approximate === approximate && at < previous.at)) {
+            runTimes.set(key, { at, approximate });
+        }
+    }
+    // Resolve before filtering so selecting a later job cannot move its run.
+    for (const row of rows) {
+        const timing = runTimes.get(workflowRunKey(row));
+        row.runCreatedAt = timing?.at ?? null;
+        row.runTimeApproximate = timing?.approximate ?? false;
+    }
+    return rows;
+}
+
+/** Run IDs are scoped to a repository; retries retain the same identity. */
+export function workflowRunKey(row) {
+    return row.repo && row.runId && row.runId !== "0" ? JSON.stringify([row.repo, row.runId]) : null;
 }
 
 /**

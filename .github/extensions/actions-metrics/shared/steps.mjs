@@ -1,5 +1,6 @@
 import { FIELD_SEPARATOR, FAILURE_CONCLUSIONS, isDecided, normalizeRunnerName, parseTime } from "./rows.mjs";
 import { maxOf, minOf } from "./extrema.mjs";
+import { localDateKey } from "./timezone.mjs";
 
 const NS_PER_MS = 1e6;
 const INFRA_STEP_NAMES = new Set(["Set up job", "Complete job"]);
@@ -268,7 +269,7 @@ function summarizeSamples(values) {
 }
 
 function dailyKey(ms) {
-    return new Date(ms).toISOString().slice(0, 10);
+    return localDateKey(ms);
 }
 
 export function downsampleNewest(points, limit = 2000) {

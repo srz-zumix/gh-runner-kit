@@ -69,3 +69,26 @@ func TestBuildMetricsReportOnlyFillsRequestedSections(t *testing.T) {
 		t.Fatalf("BuildMetricsReport: Cost = %v, want nil since it was not requested", report.Cost)
 	}
 }
+
+func TestBuildMetricsReportTimeZone(t *testing.T) {
+	start := time.Date(2026, 10, 27, 13, 30, 0, 0, time.UTC)
+	data := &metrics.Data{Window: metrics.Window{Start: start, End: start.Add(24 * time.Hour)}}
+	report, err := BuildMetricsReport(data, []ReportSection{ReportSectionConcurrency}, ReportOptions{
+		Bucket: 24 * time.Hour, TimeZone: "Asia/Tokyo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Window != data.Window || len(report.Concurrency) != 2 ||
+		!report.Concurrency[0].Start.Equal(data.Window.Start) ||
+		!report.Concurrency[0].End.Equal(start.Add(90*time.Minute)) ||
+		!report.Concurrency[1].End.Equal(data.Window.End) {
+		t.Fatalf("report did not preserve the window and align to JST midnight: %+v", report)
+	}
+	_, err = BuildMetricsReport(data, []ReportSection{ReportSectionConcurrency}, ReportOptions{
+		Bucket: time.Hour, TimeZone: "Invalid/Example",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid --time-zone") {
+		t.Fatalf("invalid time zone error = %v", err)
+	}
+}

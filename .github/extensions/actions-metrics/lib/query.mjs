@@ -58,7 +58,7 @@ export { MAX_RUNS_CEILING, MIN_CONCURRENCY, MAX_CONCURRENCY };
  * folded into `rowQueryId` alone, because it describes the rows rather than
  * the question asked of the CLI.
  */
-const ROW_SCHEMA_VERSION = 1;
+const ROW_SCHEMA_VERSION = 2;
 
 const DEFAULT_HOST = "github.com";
 

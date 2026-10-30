@@ -10,6 +10,7 @@
 // the single description of what is on screen.
 
 import { maxOf } from "/shared/extrema.mjs";
+import { formatTime, formatTimestamp } from "/shared/timezone.mjs";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -65,12 +66,12 @@ function niceCeiling(max) {
  */
 function timeFormatter(spanMs) {
     if (spanMs <= 6 * 3600000) {
-        return (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        return (ms) => formatTime(ms, { hour: "2-digit", minute: "2-digit" });
     }
     if (spanMs <= 3 * 86400000) {
-        return (ms) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit" });
+        return (ms) => formatTime(ms, { month: "short", day: "numeric", hour: "2-digit" });
     }
-    return (ms) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+    return (ms) => formatTime(ms, { month: "short", day: "numeric" });
 }
 
 /** Roughly evenly spaced ticks that always include the first and last bucket. */
@@ -171,10 +172,12 @@ function brush({ root, plot, buckets, bucketMs, onSelect, selection }) {
  * this busy, and what was it busy with" - the total has to stay readable as
  * one silhouette.
  */
-export function renderStackedTimeline(timeline, { height = 180, onSelect, selection, series = [] } = {}) {
+export function renderStackedTimeline(timeline, {
+    height = 180, onSelect, selection, series = [], label = "Jobs over time", emptyMessage = "No jobs in this window.",
+} = {}) {
     const buckets = timeline?.buckets ?? [];
     if (buckets.length === 0) {
-        return emptyChart("No jobs in this window.");
+        return emptyChart(emptyMessage);
     }
     const width = 960;
     const plot = { x: 48, y: 8, width: width - 60, height: height - 34 };
@@ -185,6 +188,7 @@ export function renderStackedTimeline(timeline, { height = 180, onSelect, select
         viewBox: `0 0 ${width} ${height}`,
         preserveAspectRatio: "none",
         role: "img",
+        "aria-label": label,
     });
 
     for (const ratio of [0, 0.5, 1]) {
@@ -210,7 +214,7 @@ export function renderStackedTimeline(timeline, { height = 180, onSelect, select
         const lines = series
             .filter((entry) => (bucket[entry.key] ?? 0) > 0)
             .map((entry) => `${entry.label}: ${(bucket[entry.key] ?? 0).toLocaleString()}`);
-        const tip = `${new Date(bucket.t).toLocaleString()}\n${lines.join("\n")}\ntotal: ${bucket.total.toLocaleString()}`;
+        const tip = `${formatTimestamp(bucket.t)}\n${lines.join("\n")}\ntotal: ${bucket.total.toLocaleString()}`;
         for (const entry of series) {
             const value = bucket[entry.key] ?? 0;
             if (value <= 0) {
@@ -264,6 +268,62 @@ export function renderStackedTimeline(timeline, { height = 180, onSelect, select
     return root;
 }
 
+/** Independent series share a count axis rather than stacking their values. */
+export function renderLineTimeline(timeline, {
+    height = 220, series = [], label = "", emptyMessage = "No activity in this window.",
+    formatBucket = null, formatValue = value => value.toLocaleString(), showAllTicks = false,
+} = {}) {
+    const buckets = timeline?.buckets ?? [];
+    if (buckets.length === 0 || series.length === 0) return emptyChart(emptyMessage);
+    const width = 960;
+    const plot = { x: 48, y: 8, width: width - 60, height: height - 34 };
+    let largest = 0;
+    for (const entry of series) {
+        for (const bucket of buckets) largest = Math.max(largest, bucket[entry.key] ?? 0);
+    }
+    const max = niceCeiling(largest);
+    const step = plot.width / buckets.length;
+    const root = svg("svg", {
+        class: "chart", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none",
+        role: "img", "aria-label": label,
+    });
+    const ticks = new Set([0, Math.round(max / 2), max]);
+    for (const value of ticks) {
+        const y = plot.y + plot.height * (1 - value / max);
+        root.append(svg("line", { class: "chart__grid", x1: plot.x, x2: plot.x + plot.width, y1: y, y2: y }));
+        root.append(svg("text", {
+            class: "chart__label", x: plot.x - 6, y: y + 4, "text-anchor": "end",
+            text: formatValue(value),
+        }));
+    }
+    for (const entry of series) {
+        const points = buckets.map((bucket, index) => ({
+            x: plot.x + (index + 0.5) * step,
+            y: plot.y + plot.height * (1 - (bucket[entry.key] ?? 0) / max),
+        }));
+        root.append(svg("path", {
+            class: "chart__series-line",
+            d: points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" "),
+            fill: "none", stroke: entry.color, "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+        }, [svg("title", { text: entry.label })]));
+        points.forEach((point, index) => {
+            const count = buckets[index][entry.key] ?? 0;
+            if (count === 0 && buckets.length > 1) return;
+            root.append(svg("circle", {
+                class: "chart__series-point", cx: point.x, cy: point.y, r: 3, fill: entry.color,
+            }, [svg("title", { text: `${formatBucket ? formatBucket(buckets[index]) : formatTimestamp(buckets[index].t)}\n${entry.label}: ${formatValue(count)}` })]));
+        });
+    }
+    const format = formatBucket ?? (bucket => timeFormatter(buckets.at(-1).t - buckets[0].t)(bucket.t));
+    for (const index of showAllTicks ? buckets.keys() : axisTicks(buckets.length)) {
+        root.append(svg("text", {
+            class: "chart__label", x: plot.x + (index + 0.5) * step,
+            y: height - 8, "text-anchor": "middle", text: format(buckets[index]),
+        }));
+    }
+    return root;
+}
+
 /** A single series over the same axis, used for peak concurrency. */
 export function renderAreaChart(points, { bucketMs, height = 150, onSelect, selection, label = "" } = {}) {
     if (!points || points.length === 0) {
@@ -310,7 +370,7 @@ export function renderAreaChart(points, { bucketMs, height = 150, onSelect, sele
     points.forEach((point, index) => {
         root.append(
             svg("rect", { class: "chart__hit", x: plot.x + index * step, y: plot.y, width: step, height: plot.height }, [
-                svg("title", { text: `${new Date(point.t).toLocaleString()}\n${label}: ${point.v.toLocaleString()}` }),
+                svg("title", { text: `${formatTimestamp(point.t)}\n${label}: ${point.v.toLocaleString()}` }),
             ]),
         );
     });

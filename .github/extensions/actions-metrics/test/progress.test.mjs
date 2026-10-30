@@ -453,7 +453,7 @@ test("discovery renderer updates elapsed and last-update times even while the co
     renderCollectionProgress(container, {collectionProgress: progress}, now + 65000);
     assert.match(content(), /Elapsed: 1m 5s.*Last collector update 1m 0s ago/);
     assert.match(content(), /search 3.*1,200 unique runs found/);
-    assert.match(content(), /Current search period \(UTC\): 2026-10-01/);
+    assert.match(content(), /Current search period \(local\):/);
     assert.match(content(), /before cached job lists are read/);
     assert.match(content(), /between searches, not on every page/);
     renderCollectionProgress(container, {collectionProgress: {

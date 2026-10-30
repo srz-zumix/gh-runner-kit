@@ -155,28 +155,22 @@ func ValidateBucketWindow(w Window, width time.Duration) error {
 // It returns an error when the window would need more than MaxBuckets buckets, so a
 // direct caller can never trigger an unbounded allocation.
 func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) ([]Bucket, error) {
-	if size <= 0 || w.Duration() <= 0 {
-		return nil, nil
-	}
+	return ConcurrencyTimelineInTimeZone(intervals, w, size, "")
+}
 
-	if err := ValidateBucketWindow(w, size); err != nil {
+// ConcurrencyTimelineInTimeZone aligns buckets to local midnight when timeZone is
+// set, without extending w. Subdaily buckets reset each calendar day; 24h means
+// one whole calendar day, including daylight-saving transitions.
+func ConcurrencyTimelineInTimeZone(intervals []Interval, w Window, size time.Duration, timeZone string) ([]Bucket, error) {
+	buckets, err := concurrencyBuckets(w, size, timeZone)
+	if err != nil {
 		return nil, err
 	}
-	count := BucketCount(w, size)
-
-	buckets := make([]Bucket, 0, int(count))
-	// clamped is reused across buckets: PeakConcurrency only reads it and never retains
-	// the slice, so a single backing array (grown to the busiest bucket) avoids allocating
-	// one full-length slice per bucket.
+	// clamped is reused because PeakConcurrency never retains it.
 	var clamped []Interval
-	for start := w.Start; start.Before(w.End); start = start.Add(size) {
-		end := start.Add(size)
-		if end.After(w.End) {
-			end = w.End
-		}
-		slice := Window{Start: start, End: end}
-
-		bucket := Bucket{Start: slice.Start, End: slice.End}
+	for i := range buckets {
+		bucket := &buckets[i]
+		slice := Window{Start: bucket.Start, End: bucket.End}
 		clamped = clamped[:0]
 		for _, iv := range intervals {
 			trimmed, ok := slice.Clamp(iv)
@@ -187,9 +181,69 @@ func ConcurrencyTimeline(intervals []Interval, w Window, size time.Duration) ([]
 			bucket.Jobs++
 			bucket.Busy += trimmed.Duration()
 		}
-
 		bucket.Peak = PeakConcurrency(clamped)
-		buckets = append(buckets, bucket)
+	}
+	return buckets, nil
+}
+
+// ValidateBucketWindowInTimeZone validates the zone, width and aligned bucket
+// count before collection. An empty zone preserves window-start anchoring.
+func ValidateBucketWindowInTimeZone(w Window, size time.Duration, timeZone string) error {
+	if timeZone == "" {
+		return ValidateBucketWindow(w, size)
+	}
+	_, err := concurrencyBuckets(w, size, timeZone)
+	return err
+}
+
+func concurrencyBuckets(w Window, size time.Duration, timeZone string) ([]Bucket, error) {
+	var location *time.Location
+	if timeZone != "" {
+		var err error
+		location, err = time.LoadLocation(timeZone)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --time-zone %q: %w", timeZone, err)
+		}
+		if size > 24*time.Hour {
+			return nil, fmt.Errorf("--bucket must be at most 24h when --time-zone is set")
+		}
+	}
+	if size <= 0 || w.Duration() <= 0 {
+		return nil, nil
+	}
+
+	capacity := 0
+	if location == nil {
+		if err := ValidateBucketWindow(w, size); err != nil {
+			return nil, err
+		}
+		capacity = int(BucketCount(w, size))
+	}
+
+	buckets := make([]Bucket, 0, capacity)
+	for start := w.Start; start.Before(w.End); {
+		if len(buckets) == MaxBuckets {
+			return nil, fmt.Errorf("the selected window needs more than the limit of %d buckets of %s; use a larger bucket width", MaxBuckets, size)
+		}
+		end := start.Add(size)
+		if location != nil {
+			local := start.In(location)
+			year, month, day := local.Date()
+			midnight := time.Date(year, month, day, 0, 0, 0, 0, location)
+			nextMidnight := time.Date(year, month, day+1, 0, 0, 0, 0, location)
+			end = nextMidnight
+			if size != 24*time.Hour {
+				end = midnight.Add((start.Sub(midnight)/size + 1) * size)
+				if end.After(nextMidnight) {
+					end = nextMidnight
+				}
+			}
+		}
+		if end.After(w.End) {
+			end = w.End
+		}
+		buckets = append(buckets, Bucket{Start: start, End: end})
+		start = end
 	}
 	return buckets, nil
 }

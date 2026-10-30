@@ -12,6 +12,7 @@
 import { ghRaw, GhError, formatTarget, rateLimitCooldown } from "./gh.mjs";
 import { costRunnerKind } from "../shared/cost.mjs";
 import { runLines } from "./process.mjs";
+import { localTimeZone } from "../shared/timezone.mjs";
 
 const NS_PER_MS = 1e6;
 
@@ -162,7 +163,12 @@ export async function probeRunnerKit(cwd) {
                     // An unreadable flag list only costs detailed collection progress.
                 }
             }
-            return { available: true, version, subcommands, jobSubcommands, flags, collectFlags, reason: null };
+            const concurrencyCommand = subcommands.has("report") ? "report" : "concurrency";
+            let concurrencyFlags = new Set();
+            if (subcommands.has(concurrencyCommand)) {
+                concurrencyFlags = parseFlags(await ghRaw(["runner-kit", "metrics", concurrencyCommand, "--help"], { cwd }));
+            }
+            return { available: true, version, subcommands, jobSubcommands, flags, collectFlags, concurrencyFlags, reason: null };
         })();
     }
     return probeOnce;
@@ -642,6 +648,7 @@ const REPORT_SECTIONS = ["summary", "runner", "queue", "concurrency", "label", "
 /** Section-specific flags for `metrics report`, matching what each section's own subcommand accepts. */
 function reportExtraArgs(result) {
     const args = ["--group-by", result.groupBy, "--bucket", result.bucket];
+    if (!result.concurrencyReason) args.push("--time-zone", result.timeZone);
     for (const label of result.labelFilter) {
         args.push("--label", label);
     }
@@ -649,10 +656,11 @@ function reportExtraArgs(result) {
         args.push("--self-hosted-only");
     }
     args.push("--target-wait", result.targetWait, "--target-utilization", String(result.targetUtilization));
-    if (result.billable) {
+    if (result.billable || result.concurrencyReason) {
         // Passing --section at all replaces the CLI's default set, so every
         // other section has to be listed alongside cost to still get them.
-        for (const section of [...REPORT_SECTIONS, "cost"]) {
+        for (const section of [...REPORT_SECTIONS, ...(result.billable ? ["cost"] : [])].filter(section =>
+            !result.concurrencyReason || section !== "concurrency")) {
             args.push("--section", section);
         }
     }
@@ -672,7 +680,7 @@ async function collectFleetReport(result, options, warnings) {
         result.summary = normalizeSummary(payload?.summary ?? null);
         result.runners = normalizeRunnerRows(payload?.runner ?? []);
         result.queue = normalizeQueueRows(payload?.queue ?? []);
-        result.concurrency = normalizeConcurrencyRows(payload?.concurrency ?? []);
+        result.concurrency = result.concurrencyReason ? [] : normalizeConcurrencyRows(payload?.concurrency ?? []);
         result.labels = normalizeLabelRows(payload?.label ?? []);
         result.workflows = normalizeWorkflowRows(payload?.workflow ?? []);
         // Only an organization spans more than one repository, so under a
@@ -729,12 +737,13 @@ async function collectFleetSteps(result, options, warnings) {
         {
             name: "concurrency",
             label: "concurrency timeline",
+            skip: Boolean(result.concurrencyReason),
             run: async () => {
                 // `--label` is the only runner-side filter the CLI offers, and
                 // only `concurrency` accepts it: it keeps the jobs whose runs-on
                 // set carries every given label, and counts only the runners
                 // that can serve that set.
-                const extra = ["--bucket", result.bucket];
+                const extra = ["--bucket", result.bucket, "--time-zone", result.timeZone];
                 for (const label of result.labelFilter) {
                     extra.push("--label", label);
                 }
@@ -831,6 +840,9 @@ export async function collectFleet({ target, filters, limits, cwd, input = "", f
         scope: target.kind,
         groupBy: GROUP_BY_KEYS.includes(filters.groupBy) ? filters.groupBy : "name",
         bucket: resolveBucket(filters.days, filters.bucket),
+        timeZone: localTimeZone(),
+        concurrencyReason: probe.concurrencyFlags?.has("--time-zone") ? null
+            : "Midnight-aligned buckets require gh runner-kit metrics report/concurrency --time-zone; update gh runner-kit and reload the extension.",
         runnerType: RUNNER_TYPE_KEYS.includes(filters.runnerType) ? filters.runnerType : "auto",
         targetWait: TARGET_WAIT_KEYS.includes(filters.targetWait) ? filters.targetWait : DEFAULT_TARGET_WAIT,
         targetUtilization: filters.targetUtilization ?? DEFAULT_TARGET_UTILIZATION,
@@ -858,6 +870,7 @@ export async function collectFleet({ target, filters, limits, cwd, input = "", f
 
     const options = { target, filters, limits, cwd, input, force, probe, onProgress, signal };
     const result = { available: true, reason: null, version: probe.version, ...shape };
+    if (result.concurrencyReason) warnings.push(result.concurrencyReason);
 
     if (probe.subcommands.has("report")) {
         await collectFleetReport(result, options, warnings);

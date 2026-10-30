@@ -41,8 +41,12 @@ export async function collectJobRows({ target, filters, limits, cwd, dataset, si
         const collectedAt = Date.parse(dataset.meta.collectedAt);
         if (!Number.isFinite(collectedAt)) throw new Error("The shared dataset has an invalid collection timestamp");
         const selected = dataset.select({ workflow: filters?.workflow, labels: filters?.labels ?? [] });
+        const runTimes = new Map(dataset.runs.map(run => [JSON.stringify([run.repository, String(run.id)]), run.created_at]));
         return {
-            rows: selected.jobs.slice(0, cap),
+            rows: selected.jobs.slice(0, cap).map(row => ({
+                ...row,
+                RunCreatedAt: runTimes.get(JSON.stringify([row.Repo, String(row.RunID)])) ?? null,
+            })),
             truncated: dataset.meta.truncated || selected.jobs.length > cap,
             malformed: 0, budget: cap,
             collectedAt, durationMs: 0,
