@@ -471,6 +471,8 @@ function hourlyJobs(rows, from, to) {
     while (from < to && day.getTime() < to) {
         days++;
         day.setDate(day.getDate() + 1);
+        // A skipped midnight (DST) leaves the cursor at 01:00; snap back.
+        day.setHours(0, 0, 0, 0);
     }
     let missingTime = 0;
     let outsideWindow = 0;

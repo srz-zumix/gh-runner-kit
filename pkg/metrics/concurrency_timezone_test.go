@@ -201,3 +201,29 @@ func TestConcurrencyTimeZoneFiltersAndUtilization(t *testing.T) {
 		}
 	}
 }
+
+func TestConcurrencyTimeZoneSkippedMidnight(t *testing.T) {
+	// America/Santiago skips 2026-09-06 00:00 (clocks jump to 01:00).
+	window := Window{Start: zoneInstant(t, "2026-09-05T00:00:00-04:00"), End: zoneInstant(t, "2026-09-07T00:00:00-03:00")}
+	for _, size := range []time.Duration{24 * time.Hour, 6 * time.Hour} {
+		t.Run(size.String(), func(t *testing.T) {
+			buckets, err := ConcurrencyTimelineInTimeZone([]Interval{{window.Start, window.End}}, window, size, "America/Santiago")
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := window.Start
+			for i, bucket := range buckets {
+				if !bucket.Start.Equal(start) || !bucket.End.After(bucket.Start) {
+					t.Fatalf("bucket %d = %+v does not advance from %s", i, bucket, start)
+				}
+				start = bucket.End
+			}
+			if !start.Equal(window.End) {
+				t.Fatalf("last end = %s, want %s", start, window.End)
+			}
+			if size == 24*time.Hour && (len(buckets) != 2 || buckets[1].Duration() != 23*time.Hour) {
+				t.Fatalf("got %+v, want 24h and 23h days", buckets)
+			}
+		})
+	}
+}

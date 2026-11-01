@@ -30,7 +30,7 @@ function fixture(label) {
             },
         },
     };
-    return { root, buttons, classes };
+    return { root, card, buttons, classes };
 }
 
 test("cards start expanded, expose an accessible toggle and do not duplicate buttons", () => {
@@ -73,4 +73,38 @@ test("cards without a title are left unchanged", () => {
     const { root } = fixture("Unused");
     root.querySelectorAll = () => [{ querySelector: () => null }];
     makeCardsCollapsible(root, "overview");
+});
+
+test("Option-click toggles every current-tab card from the clicked state and preserves it on rebuild", () => {
+    const first = fixture("Bulk first");
+    const second = fixture("Bulk second");
+    const other = fixture("Bulk other tab");
+    const content = { querySelectorAll: () => [first.card, second.card, other.card] };
+    for (const entry of [first, second, other]) entry.card.closest = () => content;
+    makeCardsCollapsible(first.root, "bulk-tab");
+    makeCardsCollapsible(second.root, "bulk-tab");
+    makeCardsCollapsible(other.root, "another-tab");
+
+    second.buttons[0].listeners.click();
+    assert.equal(first.buttons[0].attributes["aria-expanded"], "true");
+    assert.equal(second.buttons[0].attributes["aria-expanded"], "false");
+    first.buttons[0].listeners.click({ altKey: true });
+    for (const entry of [first, second]) {
+        assert.equal(entry.buttons[0].attributes["aria-expanded"], "false");
+        assert.ok(entry.classes.has("card--collapsed"));
+    }
+    assert.equal(other.buttons[0].attributes["aria-expanded"], "true");
+    const rebuilt = fixture("Bulk second");
+    makeCardsCollapsible(rebuilt.root, "bulk-tab");
+    assert.equal(rebuilt.buttons[0].attributes["aria-expanded"], "false");
+
+    first.buttons[0].listeners.click({ altKey: true });
+    for (const entry of [first, second]) {
+        assert.equal(entry.buttons[0].attributes["aria-expanded"], "true");
+        assert.ok(!entry.classes.has("card--collapsed"));
+    }
+    first.buttons[0].listeners.click({ altKey: false });
+    assert.equal(first.buttons[0].attributes["aria-expanded"], "false");
+    assert.equal(second.buttons[0].attributes["aria-expanded"], "true");
+    assert.match(first.buttons[0].title, /Option\/Alt-click/);
 });

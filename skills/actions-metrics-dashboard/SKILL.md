@@ -69,6 +69,9 @@ Missing values remain last. The runner list and Job explorer sort all matches
 before paging; their single-column sort toggles between two directions.
 
 All tabs have collapsible cards with keyboard-accessible title buttons.
+Option/Alt-click applies the clicked card's next state to every card in the
+current tab (expanded closes all; collapsed opens all), leaving other tabs
+and existing collapsible settings unchanged.
 Cards start expanded and retain their open/closed state across filtering,
 data updates and tab switches within the current page, not across page reloads.
 Existing collapsible settings retain their own behavior.

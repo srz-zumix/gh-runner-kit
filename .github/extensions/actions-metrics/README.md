@@ -123,6 +123,9 @@ outside coverage report errors rather than silently widening or swapping dates.
 ## Tabs
 
 Cards in every tab can be collapsed using their title button (mouse or keyboard).
+**Option-click** (Alt-click) a title to apply the clicked card's next state to
+all cards in the current tab: an expanded card collapses all; a collapsed card
+expands all. Other tabs and existing collapsible settings are unchanged.
 They start expanded, and their open/closed state is retained through filtering,
 data updates and tab switches in the current page. Reloading the page resets it.
 Existing collapsible settings keep their own open/closed behavior.

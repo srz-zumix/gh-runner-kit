@@ -196,6 +196,21 @@ func ValidateBucketWindowInTimeZone(w Window, size time.Duration, timeZone strin
 	return err
 }
 
+// startOfLocalDay returns the first instant of the calendar day. time.Date
+// normalizes a midnight skipped by a DST transition (e.g. America/Santiago)
+// to the preceding day, so step forward until the date matches.
+func startOfLocalDay(year int, month time.Month, day int, location *time.Location) time.Time {
+	t := time.Date(year, month, day, 0, 0, 0, 0, location)
+	want := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	for {
+		y, m, d := t.Date()
+		if !time.Date(y, m, d, 0, 0, 0, 0, time.UTC).Before(want) {
+			return t
+		}
+		t = t.Add(time.Hour)
+	}
+}
+
 func concurrencyBuckets(w Window, size time.Duration, timeZone string) ([]Bucket, error) {
 	var location *time.Location
 	if timeZone != "" {
@@ -229,8 +244,8 @@ func concurrencyBuckets(w Window, size time.Duration, timeZone string) ([]Bucket
 		if location != nil {
 			local := start.In(location)
 			year, month, day := local.Date()
-			midnight := time.Date(year, month, day, 0, 0, 0, 0, location)
-			nextMidnight := time.Date(year, month, day+1, 0, 0, 0, 0, location)
+			midnight := startOfLocalDay(year, month, day, location)
+			nextMidnight := startOfLocalDay(year, month, day+1, location)
 			end = nextMidnight
 			if size != 24*time.Hour {
 				end = midnight.Add((start.Sub(midnight)/size + 1) * size)

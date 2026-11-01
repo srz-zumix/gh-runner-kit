@@ -2600,7 +2600,6 @@ function renderContentSections() {
 
     if (activeTab === "steps") {
         dom.content.replaceChildren(...renderSteps(state).filter(Boolean), authenticationSettingsCard());
-    makeCardsCollapsible(dom.content, activeTab);
         return;
     }
 
@@ -2859,12 +2858,7 @@ for (const tab of dom.tabs) {
     tab.addEventListener("click", () => {
         activeTab = tab.dataset.tab;
         render();
-        if (activeTab === "steps") {
-        dom.content.replaceChildren(...renderSteps(state).filter(Boolean), authenticationSettingsCard());
-        return;
-    }
-
-    if (activeTab === "explore") {
+        if (activeTab === "explore") {
             // Opening the tab is what asks for the rows: collecting them for a
             // reader who never opens it would spend the API budget on a tab
             // that is not on screen.
