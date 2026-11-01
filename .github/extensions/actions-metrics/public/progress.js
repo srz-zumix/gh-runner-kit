@@ -1,4 +1,5 @@
 import { progressDescription } from "/shared/progress.mjs";
+import { formatTimestamp } from "/shared/timezone.mjs";
 
 function text(tag, value, className) {
     const node = document.createElement(tag);
@@ -44,7 +45,7 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
             nodes.push(text("p", progressDescription(detail)));
         }
         if (detail.stage === "runs") {
-            if (detail.runSearch) nodes.push(text("p", `Current search period (UTC): ${detail.runSearch.created}`));
+            if (detail.runSearch) nodes.push(text("p", `Current search period (local): ${detail.runSearch.created.split("..").map(formatTimestamp).join(" → ")}`));
             nodes.push(text("small", detail.runSearch?.cachedWindows !== undefined
                 ? "Recent runs are listed from GitHub. Complete UTC days older than 24 hours can use a one-hour listing cache; boundary periods are read afresh. Cached days are separate from API searches. Older reruns and deletions can take up to one hour to appear; Shift+click Refresh bypasses caches. Unique runs found are not yet the final selected total."
                 : "Workflow runs are listed from GitHub before cached job lists are read. Large periods may need multiple searches and pages; counts update between searches, not on every page. Unique runs found are not yet the final selected total."));
@@ -61,14 +62,14 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
             nodes.push(text("p", counts(detail)));
             if (detail.stage === "attempts") nodes.push(text("small", "Historical attempts count as cached when both completed metadata and job lists are reused; older CLI versions may still fetch metadata."));
         }
-        if (progress.updatedAt) nodes.push(text("small", `Last collector update: ${new Date(progress.updatedAt).toLocaleString()}`));
+        if (progress.updatedAt) nodes.push(text("small", `Last collector update: ${formatTimestamp(progress.updatedAt)}`));
     } else {
         nodes.push(text("p", "No numeric progress has been reported for this attempt yet."));
     }
     if (progress.interrupted) {
         const previous = progress.interrupted;
         const previousCounts = previous.detail.unit ? ` ${counts(previous.detail)}.` : "";
-        nodes.push(text("p", `Last interrupted attempt: ${progressDescription(previous.detail)}.${previousCounts} Reported ${new Date(previous.updatedAt).toLocaleString()}.`));
+        nodes.push(text("p", `Last interrupted attempt: ${progressDescription(previous.detail)}.${previousCounts} Reported ${formatTimestamp(previous.updatedAt)}.`));
     }
     if (progress.supported === false) nodes.push(text("p", progress.reason, "collection-progress__note"));
     if (progress.status === "paused" && state.retryAt) {
@@ -77,10 +78,10 @@ export function renderCollectionProgress(container, state, now = Date.now()) {
         const seconds = Math.max(0, Math.ceil((reset - now) / 1000));
         nodes.push(text("p", automatic
             ? seconds > 0
-                ? `Collection will resume automatically at ${new Date(reset).toLocaleString()} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Completed data is reused and the collection period stays fixed.`
+                ? `Collection will resume automatically at ${formatTimestamp(reset)} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Completed data is reused and the collection period stays fixed.`
                 : "Waiting to resume automatically. GitHub may still impose a new cooldown."
             : seconds > 0
-            ? `Retry after ${new Date(reset).toLocaleString()} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Refresh during the cooldown does not make new collection requests.`
+            ? `Retry after ${formatTimestamp(reset)} (${Math.floor(seconds / 60)}m ${seconds % 60}s remaining). Refresh during the cooldown does not make new collection requests.`
             : "The reported retry time has passed. Press Refresh to resume; GitHub may still impose a new cooldown."));
     }
     if (progress.status !== "complete") nodes.push(text("small", "Ordinary Refresh reuses available completed job/usage listings; uncached records may be fetched again. Counts are records, not API requests; refreshed windows can change the totals. No whole-collection percentage or ETA is estimated."));

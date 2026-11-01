@@ -223,7 +223,7 @@ export const QUERY_FIELDS = [
         label: "Bucket",
         control: "select",
         options: BUCKET_KEYS,
-        hint: "Width of one column in the concurrency report. auto follows the window.",
+        hint: "Concurrency bucket width, aligned to local midnight. auto follows the window; 24h means a local calendar day. Edge buckets cover only the selected period.",
     },
     {
         name: "groupBy",

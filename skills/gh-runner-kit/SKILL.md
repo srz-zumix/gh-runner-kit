@@ -824,13 +824,14 @@ time bucket at a time.
 
 ```bash
 gh runner-kit metrics concurrency [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--bucket DURATION] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
+  [--bucket DURATION] [--time-zone IANA_ZONE] [--label LABEL]... [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--bucket` | `1h` | Width of one time bucket, such as `15m` or `1h` |
 | `--label` | all labels | Keep only the jobs requesting this label. Repeatable |
+| `--time-zone` | empty (window start) | Align buckets to midnight in this IANA zone; requires `--bucket` at most `24h` |
 
 Table columns: `START`, `END`, `JOBS`, `PEAK`, `RUNNERS`, `BUSY`, `UTIL`.
 
@@ -842,6 +843,15 @@ window, and `UTIL` is the busy time divided by the bucket length times
 
 `--label` narrows both sides: only the jobs whose `runs-on` set carries every
 given label are counted, and only the runners that can serve that set.
+
+Optional `--time-zone` defaults to empty, preserving window-start anchoring.
+Set `Asia/Tokyo`, `UTC` or another IANA zone to start the grid at local midnight.
+Subdaily buckets advance by elapsed duration, resetting each calendar day and
+clamping the final subdivision to the next midnight. `--bucket 24h` means a
+calendar day, including 23-hour and 25-hour daylight-saving days; larger widths
+are rejected when a zone is set. The collection window is never expanded:
+first and last buckets are clipped, and utilization uses their actual durations.
+This option works with snapshots (`--input`) too.
 
 ### metrics cost
 
@@ -1026,23 +1036,31 @@ are a concern.
 
 ```bash
 gh runner-kit metrics report [--repo [HOST/]OWNER/REPO | --owner OWNER] [--type org|repo] \
-  [--section SECTION]... [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
+  [--section SECTION]... [--bucket DURATION] [--time-zone IANA_ZONE] \
+  [--days N | --since TIME] [--until TIME] [--all-repos] [--format json]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `--bucket` | `1h` | Width of each concurrency bucket, such as `15m`; at most `24h` with `--time-zone` |
 | `--section` | every section except `cost` | Print only this section: `capacity`, `concurrency`, `cost`, `label`, `queue`, `repository`, `runner`, `summary` or `workflow`. Repeatable |
+| `--time-zone` | empty (window start) | Align only concurrency buckets to local midnight in this IANA zone |
 
 Pass `--section` one or more times to pick which reports to print; `cost` is
 opt-in because it needs one extra billable-usage request per run the other
-sections never need. `--group-by`, `--bucket`, `--label`, `--self-hosted-only`,
-`--include-unused`, `--target-wait`, `--target-utilization` and `--rate`
+sections never need. `--group-by`, `--bucket`, `--time-zone`, `--label`,
+`--self-hosted-only`, `--include-unused`, `--target-wait`, `--target-utilization`
+and `--rate`
 configure their matching section the same way its own `metrics` command does;
 `--label` only narrows the `concurrency` section. Table output prints one
 `== SECTION ==` block per section followed by the shared footer; JSON output is
 a single object keyed by lowercase section name, so `payload.summary`,
 `payload.runner`, `payload.queue` etc. use the exact same field names as the
 equivalent standalone command's JSON output.
+
+For local-day reports, use `--bucket 24h --time-zone Asia/Tokyo`. As with
+`metrics concurrency`, calendar-day DST handling and clipping apply; collection
+boundaries and other report sections remain unchanged.
 
 ### metrics repository
 

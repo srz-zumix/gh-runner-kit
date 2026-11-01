@@ -3,6 +3,7 @@ import { sortByCriteria, toggleSort } from "/shared/sort.mjs";
 import { maxOf } from "/shared/extrema.mjs";
 import { RECOVERED_JOB_STATUS, STEP_CONCLUSIONS, displayStepName, effectiveStepSettings, filterTimelineJobs, formatDuration, formatLabelSet, isRecoveredJobStatus, isRunnerFilterActive, labelSetKey, normalizeFailedStep, normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters, runnerFilterSelections, splitLabelSet, stepIdOf, timelineMatchesWorkflow, toggleRunnerFilterValue } from "/shared/steps.mjs";
 import { renderFacetPicker } from "/shared/facet.mjs";
+import { formatTimestamp } from "/shared/timezone.mjs";
 
 function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
@@ -562,7 +563,7 @@ function byRunnerTable(step) {
 function footnote(result) {
     if (!result?.meta) return null;
     const meta = result.meta;
-    const range = meta.oldest && meta.newest ? `${new Date(meta.oldest).toLocaleString()} – ${new Date(meta.newest).toLocaleString()}` : "no timestamp range";
+    const range = meta.oldest && meta.newest ? `${formatTimestamp(meta.oldest)} – ${formatTimestamp(meta.newest)}` : "no timestamp range";
     const conditions = normalizeStepFilters(meta).stepConditions;
     const selections = [meta.repository ? `repository: ${meta.repository}` : "", meta.jobStatus ? `status: ${meta.jobStatus}` : "", conditions.length ? `steps: ${stepConditionsSummary(conditions)}` : ""].filter(Boolean);
     const filtered = isRunnerFilterActive(meta.runnerFilter) || selections.length ? ` The job filters${selections.length ? ` (${selections.join("; ")})` : ""} keep ${number(meta.totalJobs)} of ${number(meta.unfilteredJobs)} jobs.` : "";
@@ -706,8 +707,8 @@ function trendChart(step) {
         const x = plot.x + (daily.length <= 1 ? 0 : (index / (daily.length - 1)) * plot.width);
         const p50 = plot.y + plot.height * (1 - day.p50Ms / max);
         const p90 = plot.y + plot.height * (1 - day.p90Ms / max);
-        root.append(svg("circle", { class: "trend__p90", cx: x, cy: p90, r: 3 }, [svg("title", { text: `${day.date} p90 ${formatDuration(day.p90Ms)}` })]));
-        root.append(svg("circle", { class: "trend__p50", cx: x, cy: p50, r: 4 }, [svg("title", { text: `${day.date} p50 ${formatDuration(day.p50Ms)}` })]));
+        root.append(svg("circle", { class: "trend__p90", cx: x, cy: p90, r: 3 }, [svg("title", { text: `${day.date} (local) p90 ${formatDuration(day.p90Ms)}` })]));
+        root.append(svg("circle", { class: "trend__p50", cx: x, cy: p50, r: 4 }, [svg("title", { text: `${day.date} (local) p50 ${formatDuration(day.p50Ms)}` })]));
     });
     return root;
 }

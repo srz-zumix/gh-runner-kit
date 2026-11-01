@@ -164,6 +164,11 @@ func (m *MetricsFlags) loadSnapshot() (*metrics.Snapshot, error) {
 // follows the repository convention that cobra commands only wire flags. It returns the
 // resolved window and bucket width so the caller can collect data and build the timeline.
 func (m *MetricsFlags) ResolveConcurrency(bucket string) (metrics.Window, time.Duration, error) {
+	return m.ResolveConcurrencyInTimeZone(bucket, "")
+}
+
+// ResolveConcurrencyInTimeZone validates local-day bucket alignment before any API request.
+func (m *MetricsFlags) ResolveConcurrencyInTimeZone(bucket, timeZone string) (metrics.Window, time.Duration, error) {
 	width, err := time.ParseDuration(bucket)
 	if err != nil {
 		return metrics.Window{}, 0, fmt.Errorf("failed to parse --bucket %q: %w", bucket, err)
@@ -176,7 +181,7 @@ func (m *MetricsFlags) ResolveConcurrency(bucket string) (metrics.Window, time.D
 	if err != nil {
 		return metrics.Window{}, 0, err
 	}
-	if err := metrics.ValidateBucketWindow(window, width); err != nil {
+	if err := metrics.ValidateBucketWindowInTimeZone(window, width, timeZone); err != nil {
 		return metrics.Window{}, 0, fmt.Errorf("invalid --bucket %s: %w", bucket, err)
 	}
 	return window, width, nil

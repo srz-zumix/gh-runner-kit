@@ -16,6 +16,7 @@ func NewReportCmd() *cobra.Command {
 	var sectionNames []string
 	var groupBy string
 	var bucket string
+	var timeZone string
 	var labels []string
 	var selfHostedOnly bool
 	var includeUnused bool
@@ -34,7 +35,7 @@ Pass --section one or more times to pick which reports to print, or leave it uns
 get every section except cost, which needs one extra billable-usage request per run.
 Accepted sections: %s.
 
---group-by, --bucket, --label, --self-hosted-only, --include-unused, --target-wait,
+--group-by, --bucket, --time-zone, --label, --self-hosted-only, --include-unused, --target-wait,
 --target-utilization and --rate configure their matching section the same way its own
 metrics command does; --label only narrows the concurrency section, no other section
 accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
@@ -45,7 +46,7 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 				return err
 			}
 
-			_, width, err := flags.ResolveConcurrency(bucket)
+			_, width, err := flags.ResolveConcurrencyInTimeZone(bucket, timeZone)
 			if err != nil {
 				return err
 			}
@@ -77,6 +78,7 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 			opts := kitutil.ReportOptions{
 				GroupBy:           metricspkg.Grouping(groupBy),
 				Bucket:            width,
+				TimeZone:          timeZone,
 				Labels:            labels,
 				SelfHostedOnly:    selfHostedOnly,
 				IncludeUnused:     includeUnused,
@@ -100,6 +102,7 @@ accepts a label filter.`, strings.Join(kitutil.ReportSectionNames(), ", ")),
 	f.StringArrayVar(&sectionNames, "section", nil, "Print only this section (repeatable, default every section except cost)")
 	cmdutil.StringEnumFlag(cmd, &groupBy, "group-by", "", string(metricspkg.GroupByName), metricspkg.Groupings, "Aggregate the runner section by this key")
 	f.StringVar(&bucket, "bucket", "1h", "Width of each concurrency timeline bucket, such as 15m")
+	f.StringVar(&timeZone, "time-zone", "", "Align concurrency buckets to midnight in this IANA time zone (default: window start; bucket at most 24h)")
 	f.StringArrayVar(&labels, "label", nil, "Keep only the concurrency section jobs whose runs-on set carries this label (repeatable)")
 	f.BoolVar(&selfHostedOnly, "self-hosted-only", false, "Exclude the workflow section jobs that ran on GitHub-hosted runners")
 	f.BoolVar(&includeUnused, "include-unused", false, "List the label section's labels no job requested in the window")

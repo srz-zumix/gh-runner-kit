@@ -111,6 +111,8 @@ export class DashboardInstance {
         this.rowSignature = null;
         this.store.entry(this.query);
         this.datasetSeen = this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null;
+        this.gridSeen = this.reportGridKey();
+        this.gridViews = null;
         this.unsubscribe = this.store.subscribe(this.identity, () => {
             // Captured before the broadcast, because `state()` is what drops the
             // views a changed dataset identity invalidated.
@@ -136,6 +138,22 @@ export class DashboardInstance {
         const id = stored?.metrics?.meta?.dataset?.id ?? null;
         const seen = this.datasetSeen;
         this.datasetSeen = id;
+        const grid = this.reportGridKey();
+        const gridChanged = grid !== this.gridSeen;
+        this.gridSeen = grid;
+        if (!this.periodViews && gridChanged && id && id === seen) {
+            this.gridViews ??= {
+                timeline: this.timelineRequest,
+                steps: this.steps.settings,
+                rows: Boolean(this.rowSignature),
+            };
+        }
+        if (id !== seen) this.gridViews = null;
+        if (this.gridViews && stored?.status === "ready") {
+            const views = this.gridViews;
+            this.gridViews = null;
+            return views;
+        }
         // `periodViews` marks this panel as the one applying the change, which
         // restores its views itself once the apply resolves.
         if (!id || !seen || id === seen || this.periodViews) return null;
@@ -156,7 +174,14 @@ export class DashboardInstance {
     /** True while the dataset the restoration was started for is still the one shown. */
     periodCurrent() {
         const id = this.datasetSeen;
-        return () => (this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null) === id;
+        const grid = this.reportGridKey();
+        return () => (this.store.snapshot(this.identity)?.metrics?.meta?.dataset?.id ?? null) === id
+            && this.reportGridKey() === grid;
+    }
+
+    reportGridKey() {
+        const query = this.store.snapshot(this.identity)?.query ?? this.query;
+        return JSON.stringify([query.bucket]);
     }
 
     /**
@@ -758,7 +783,10 @@ export class DashboardInstance {
             }
             filteredWindow(dataset.meta.collectionWindow ?? dataset.meta.window, next);
         }
-        const views = periodOnly ? this.periodViews ?? {
+        const gridChanged = !force && !bypassCache && !targetChanged
+            && datasetQueryId(next) === datasetQueryId(this.effectiveQuery)
+            && next.bucket !== this.effectiveQuery.bucket;
+        const views = periodOnly || gridChanged ? this.periodViews ?? {
             timeline: this.timelineRequest,
             steps: this.steps.settings,
             rows: Boolean(this.rowSignature),

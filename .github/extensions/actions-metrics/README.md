@@ -69,6 +69,35 @@ Runner occupancy charts still clip job intervals to the selected window; step
 durations and cost minutes retain whole executions, not partial-job estimates.
 Inventory remains the current inventory, not a historical inventory.
 
+### Time zone and report buckets
+
+The dashboard always uses the device's local timezone; there is no Time zone
+selector, and previously saved timezone selections are ignored. **Collected**,
+coverage ranges, update/retry times, table timestamps, chart labels and tooltips,
+period inputs and calendar presets all use local time. Full timestamps include
+the UTC offset so repeated daylight-saving hours are distinguishable.
+
+Reports' **Bucket** uses local midnight as its grid origin,
+not the collection start. This affects **Queue & capacity → Runner busy time
+over time** and the **Runner activity** chart, heatmap and per-runner charts.
+`24h` means one local calendar day, which can span 23 or 25 hours across
+daylight-saving changes. Shorter widths subdivide each local day by elapsed
+time and stop at the next local midnight; a day's last subdivision can be
+shorter. The first and last buckets are clipped to the selected period, and
+utilization uses their actual durations; no data outside the period is added.
+Changing Bucket re-reads the retained snapshot without GitHub requests.
+
+**Job explorer** timestamp labels use local time; its automatic fixed-width
+bucket grid remains independent of Reports' Bucket.
+**Runs per day** and Step timeline's daily trend use local calendar grouping.
+JSON/Prometheus exports keep their original timestamp and aggregation semantics.
+
+Midnight alignment requires a CLI build with
+`metrics report --time-zone` / `metrics concurrency --time-zone`. An older CLI
+keeps unrelated reports available but explicitly disables the affected
+concurrency/Runner activity charts instead of displaying unaligned buckets.
+Update the CLI and reload the extension to enable them.
+
 Both period groups offer **Today**, **Yesterday**, **This week**, **Last week**,
 **This month**, **Last month**, **Last 7 days** and **Last 30 days** presets.
 Calendar boundaries use your local timezone, with weeks starting on Monday;
@@ -93,6 +122,14 @@ outside coverage report errors rather than silently widening or swapping dates.
 
 ## Tabs
 
+Cards in every tab can be collapsed using their title button (mouse or keyboard).
+**Option-click** (Alt-click) a title to apply the clicked card's next state to
+all cards in the current tab: an expanded card collapses all; a collapsed card
+expands all. Other tabs and existing collapsible settings are unchanged.
+They start expanded, and their open/closed state is retained through filtering,
+data updates and tab switches in the current page. Reloading the page resets it.
+Existing collapsible settings keep their own open/closed behavior.
+
 | Tab | What it reports |
 | --- | --- |
 | **Workflow runs** | Run volume and outcome per day, per-workflow reliability, trigger events, the slowest runs, and the jobs that failed most. |
@@ -100,7 +137,7 @@ outside coverage report errors rather than silently widening or swapping dates.
 | **Queue & capacity** | Queue time per runs-on label set, label demand against capacity, and the pool size each label set needs to hold a target wait. |
 | **Runner activity** | Concurrency over time, a per-runner busy heatmap, and one small chart per runner so a single runner's day can be read on its own. |
 | **Step timeline** | Per-step statistics across the newest runs of one workflow file, a typical Gantt timeline, trends, run samples, and a single-run job/step Gantt with waiting bars. |
-| **Job explorer** | Raw job rows projected in the browser, with faceted filters that apply instantly. |
+| **Job explorer** | Raw job rows projected in the browser, with instant faceted filters and workflow run counts over time. |
 | **Usage & cost** | GitHub-hosted execution estimates by billing SKU, CPU, RAM and architecture, with known subtotals and unpriced job counts per workflow. |
 
 The Job explorer's **Row budget** accepts 500 to 1,000,000 job rows, with a
@@ -108,6 +145,32 @@ default of 20,000. It controls the rows held in the browser, not the shared
 dataset or fleet metrics. Raising it increases memory use and processing time.
 Row payloads remain JSON, but serialization and worker decoding use bounded
 batches to avoid the JavaScript single-string limit.
+
+**Workflow runs over time** shows a separate colored line for each workflow's
+run counts in automatic time buckets and follows the Job explorer filters
+without GitHub requests. Lines share the same count axis and are not stacked.
+Hover over a point to see its workflow, time and run count. Each
+repository/run ID counts once, including across jobs and re-run attempts.
+All matching workflows have separate lines. Use the **Workflow** filter to
+narrow a busy chart.
+Legends identify the repository and workflow path as well as the name.
+Counts cover only runs represented by matching loaded job rows, so row limits
+can make them incomplete and runs without jobs are not included. Runs are placed
+by their creation time, retained when job filters change. Older row payloads
+without run metadata use the earliest loaded job queue/start time, explicitly
+marked as approximate. Runs outside the displayed window or without timestamps,
+and jobs without a repository/run ID, are excluded with separate counts.
+
+**Jobs by hour of day** shows two line charts with local-hour axes from
+**00:00 to 23:00**: **Total jobs** across the selected period and **Average jobs
+per day**. Jobs use queue time, falling back to start time when unavailable,
+matching **Jobs over time**; each job attempt counts separately. All current
+explorer filters apply without GitHub requests. The average divides each hour's
+total by every local calendar day intersecting the selected period, including
+zero-job days; partial days count as one day. DST repeated hours are combined,
+and missing hours remain zero. Reports' Bucket does not affect these charts.
+Missing timestamps and out-of-period jobs are excluded and reported; truncated
+rows warn that counts may be incomplete.
 
 The **Workflow** column of **Workflows** links to the workflow file on the
 repository's default branch, opening the selected GitHub host in a new tab.
@@ -446,7 +509,7 @@ at startup, so no whole-collection percentage or ETA is invented. Skipped record
 are processed but unavailable, not successful reads.
 
 During **Finding workflow runs**, the card shows the current search period
-(UTC), search ordinal and unique runs discovered in the current repository.
+(local time), search ordinal and unique runs discovered in the current repository.
 Run discovery precedes reading cached job lists. Complete UTC days ending at
 least 24 hours ago can reuse a disk listing cache for at most one hour.
 The latest 24 hours and partial boundary days are always fetched afresh.

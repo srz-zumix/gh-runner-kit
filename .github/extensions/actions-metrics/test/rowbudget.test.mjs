@@ -31,6 +31,7 @@ test("row budget accepts a million rows consistently without changing collection
 test("collection and serialized row cache retain exactly a million selected jobs", async () => {
     const jobs = Array.from({ length: 1000001 }, (_, index) => ({ JobID: String(2000000 + index) }));
     const dataset = {
+        runs: [],
         meta: {
             id: "synthetic-dataset", collectedAt: "2026-01-01T00:02:00Z", truncated: false,
             window: { Start: "2026-01-01T00:00:00Z", End: "2026-01-01T00:02:00Z" },

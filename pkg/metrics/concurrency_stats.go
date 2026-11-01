@@ -18,6 +18,12 @@ type ConcurrencyRow struct {
 // runners able to serve them. labels keeps only the jobs that requested every one of
 // them, and narrows the runner count the same way.
 func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) ([]ConcurrencyRow, error) {
+	return BuildConcurrencyStatsInTimeZone(data, bucket, labels, "")
+}
+
+// BuildConcurrencyStatsInTimeZone builds concurrency statistics with local-day
+// bucket alignment, or the original window-start alignment when timeZone is empty.
+func BuildConcurrencyStatsInTimeZone(data *Data, bucket time.Duration, labels []string, timeZone string) ([]ConcurrencyRow, error) {
 	filter := NormalizeLabelSet(labels)
 
 	intervals := make([]Interval, 0, len(data.Jobs))
@@ -35,7 +41,7 @@ func BuildConcurrencyStats(data *Data, bucket time.Duration, labels []string) ([
 		runners = countMatchingRunners(data, filter)
 	}
 
-	timeline, err := ConcurrencyTimeline(intervals, data.Window, bucket)
+	timeline, err := ConcurrencyTimelineInTimeZone(intervals, data.Window, bucket, timeZone)
 	if err != nil {
 		return nil, err
 	}

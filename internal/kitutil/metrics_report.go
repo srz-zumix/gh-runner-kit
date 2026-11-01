@@ -85,6 +85,8 @@ type ReportOptions struct {
 	// Bucket is the concurrency timeline's bucket width, already validated against the
 	// collection window.
 	Bucket time.Duration
+	// TimeZone optionally aligns concurrency buckets to midnight in this IANA zone.
+	TimeZone string
 	// Labels narrows the concurrency section to the jobs whose runs-on set carries
 	// every given label; no other section accepts a label filter.
 	Labels            []string
@@ -135,7 +137,7 @@ func BuildMetricsReport(data *metrics.Data, sections []ReportSection, opts Repor
 		case ReportSectionQueue:
 			report.Queue = metrics.BuildQueueStats(data)
 		case ReportSectionConcurrency:
-			rows, err := metrics.BuildConcurrencyStats(data, opts.Bucket, opts.Labels)
+			rows, err := metrics.BuildConcurrencyStatsInTimeZone(data, opts.Bucket, opts.Labels, opts.TimeZone)
 			if err != nil {
 				return nil, err
 			}

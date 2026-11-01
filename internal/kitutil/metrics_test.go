@@ -54,6 +54,30 @@ func TestResolveConcurrency(t *testing.T) {
 	}
 }
 
+func TestResolveConcurrencyInTimeZone(t *testing.T) {
+	for _, tt := range []struct {
+		name, bucket, zone, wantError string
+	}{
+		{"invalid zone", "1h", "Invalid/Example", "invalid --time-zone"},
+		{"bucket too wide", "25h", "UTC", "at most 24h"},
+		{"too many buckets", "1ns", "Asia/Tokyo", "limit"},
+		{"valid zone", "24h", "America/New_York", ""},
+		{"no zone allows wide buckets", "25h", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			flags := MetricsFlags{Days: 7}
+			_, _, err := flags.ResolveConcurrencyInTimeZone(tt.bucket, tt.zone)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestResolveMetricsStepSummary(t *testing.T) {
 	t.Setenv(MetricsStepSummaryEnv, "/tmp/summary.md")
 

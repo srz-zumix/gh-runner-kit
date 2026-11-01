@@ -108,6 +108,12 @@ function harness(t) {
     };
 }
 
+test("Time zone is local-only and has no selectable setting", async t => {
+    const h = harness(t);
+    assert.equal(h.get("query-field-timeZone"), undefined);
+    assert.match(h.get("query-hint-bucket").textContent, /local midnight/);
+});
+
 test("Collection and Display have disjoint controls, independent drafts, Apply and Reset", async t => {
     const h = harness(t);
     for (const id of ["collection", "display"]) {

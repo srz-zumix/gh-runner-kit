@@ -4,6 +4,7 @@
 import { FAILURE_CONCLUSIONS, normalizeRunnerName } from "../shared/rows.mjs";
 import { HOSTED_PRICES, priceHostedJob } from "./pricing.mjs";
 import { maxOf } from "../shared/extrema.mjs";
+import { localDateKey } from "../shared/timezone.mjs";
 
 /** Whether a run or job conclusion counts as a failure, matching the explorer. */
 function isFailureConclusion(conclusion) {
@@ -101,7 +102,7 @@ function groupBy(items, keyOf) {
 
 function dayKey(value) {
     const time = toMs(value);
-    return time === null ? null : new Date(time).toISOString().slice(0, 10);
+    return time === null ? null : localDateKey(time);
 }
 
 /** The runner group GitHub reports for its own hosted runners. */

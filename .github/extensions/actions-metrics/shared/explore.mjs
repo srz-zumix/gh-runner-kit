@@ -17,7 +17,7 @@ import {
     occupancyByBucket,
     peakPerBucket,
 } from "./intervals.mjs";
-import { UNIDENTIFIED } from "./rows.mjs";
+import { UNIDENTIFIED, workflowRunKey } from "./rows.mjs";
 import { sortByCriteria } from "./sort.mjs";
 
 /**
@@ -463,6 +463,87 @@ export function buildHeatmap(rows, { windowFrom, windowTo, bucketMs, openEndMs, 
     };
 }
 
+function hourlyJobs(rows, from, to) {
+    const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, total: 0, average: 0 }));
+    let days = 0;
+    const day = new Date(from);
+    day.setHours(0, 0, 0, 0);
+    while (from < to && day.getTime() < to) {
+        days++;
+        day.setDate(day.getDate() + 1);
+        // A skipped midnight (DST) leaves the cursor at 01:00; snap back.
+        day.setHours(0, 0, 0, 0);
+    }
+    let missingTime = 0;
+    let outsideWindow = 0;
+    let total = 0;
+    for (const row of rows) {
+        const at = row.queuedAt ?? row.startedAt;
+        if (!Number.isFinite(at)) {
+            missingTime++;
+        } else if (at < from || at >= to) {
+            outsideWindow++;
+        } else {
+            hours[new Date(at).getHours()].total++;
+            total++;
+        }
+    }
+    for (const hour of hours) hour.average = days > 0 ? hour.total / days : 0;
+    return { hours, days, total, missingTime, outsideWindow, from, to };
+}
+
+function workflowRunTimeline(rows, { from, to, bucketMs, buckets }) {
+    const seen = new Set();
+    const workflows = new Map();
+    const coverage = { total: 0, approximate: 0, missingTime: 0, outsideWindow: 0, unidentifiedJobs: 0 };
+    for (const row of rows) {
+        const runKey = workflowRunKey(row);
+        if (runKey === null) {
+            coverage.unidentifiedJobs++;
+            continue;
+        }
+        if (seen.has(runKey)) continue;
+        seen.add(runKey);
+        const at = row.runCreatedAt;
+        if (!Number.isFinite(at)) {
+            coverage.missingTime++;
+            continue;
+        }
+        if (at < from || at >= to) {
+            coverage.outsideWindow++;
+            continue;
+        }
+        coverage.total++;
+        if (row.runTimeApproximate) coverage.approximate++;
+        let workflow = workflows.get(row.workflowKey);
+        if (!workflow) {
+            workflow = {
+                workflowKey: row.workflowKey, label: row.workflow || row.workflowPath || "(unknown workflow)",
+                repo: row.repo, path: row.workflowPath, count: 0, counts: new Map(),
+            };
+            workflows.set(row.workflowKey, workflow);
+        }
+        const index = Math.floor((at - buckets[0].start) / bucketMs);
+        workflow.count++;
+        workflow.counts.set(index, (workflow.counts.get(index) ?? 0) + 1);
+    }
+    const ranked = [...workflows.values()].sort((a, b) => b.count - a.count || a.workflowKey.localeCompare(b.workflowKey));
+    const timeline = buckets.map(bucket => ({ t: bucket.start, total: 0 }));
+    const series = [];
+    for (const [index, workflow] of ranked.entries()) {
+        const key = `workflow${index}`;
+        const { counts, ...entry } = workflow;
+        series.push({ ...entry, key });
+        for (const [bucket, count] of workflow.counts) {
+            timeline[bucket][key] = (timeline[bucket][key] ?? 0) + count;
+            timeline[bucket].total += count;
+        }
+    }
+    return {
+        ...coverage, bucketMs, buckets: timeline, series, workflowCount: ranked.length,
+    };
+}
+
 /**
  * Every number the explorer renders.
  *
@@ -474,6 +555,8 @@ export function buildHeatmap(rows, { windowFrom, windowTo, bucketMs, openEndMs, 
  *        the jobs that were still running
  * @param options.topLimit how many entries each top-N list keeps
  * @param options.topRunners how many runner rows the heatmap draws
+ * @param options.filterFrom / options.filterTo optional selected time bounds,
+ *        used by the hour-of-day chart without changing the timeline axis.
  */
 export function buildExploreAggregate(rows, options = {}) {
     const collectedAt = Number.isFinite(options.collectedAt) ? options.collectedAt : Date.now();
@@ -644,6 +727,10 @@ export function buildExploreAggregate(rows, options = {}) {
             branches: branches.size,
         },
         timeline: { bucketMs, from: buckets[0]?.start ?? from, buckets: series },
+        hourlyJobs: hourlyJobs(rows,
+            Math.max(from, Number.isFinite(options.filterFrom) ? options.filterFrom : from),
+            Math.min(to, Number.isFinite(options.filterTo) ? options.filterTo : to)),
+        workflowRuns: workflowRunTimeline(rows, { from, to, bucketMs, buckets }),
         concurrency: {
             bucketMs,
             points: buckets.map((bucket, index) => ({ t: bucket.start, v: peaks[index] })),

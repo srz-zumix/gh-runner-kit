@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const source = await readFile(new URL("../public/banner.js", import.meta.url), "utf8");
+const source = (await readFile(new URL("../public/banner.js", import.meta.url), "utf8"))
+    .replaceAll('"/shared/', `"${new URL("../shared/", import.meta.url).href}`);
 const { renderDataBanner } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 
 class TestNode {
