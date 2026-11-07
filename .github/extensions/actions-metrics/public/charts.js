@@ -271,10 +271,14 @@ export function renderStackedTimeline(timeline, {
 /** Independent series share a count axis rather than stacking their values. */
 export function renderLineTimeline(timeline, {
     height = 220, series = [], label = "", emptyMessage = "No activity in this window.",
-    formatBucket = null, formatValue = value => value.toLocaleString(), showAllTicks = false,
+    formatBucket = null, formatValue = value => value.toLocaleString(), formatTooltip = null,
+    showAllTicks = false, showZeroPoints = false,
 } = {}) {
     const buckets = timeline?.buckets ?? [];
-    if (buckets.length === 0 || series.length === 0) return emptyChart(emptyMessage);
+    if (buckets.length === 0 || series.length === 0
+        || !series.some(entry => buckets.some(bucket => bucket[entry.key] !== null))) {
+        return emptyChart(emptyMessage);
+    }
     const width = 960;
     const plot = { x: 48, y: 8, width: width - 60, height: height - 34 };
     let largest = 0;
@@ -296,22 +300,45 @@ export function renderLineTimeline(timeline, {
             text: formatValue(value),
         }));
     }
+    const titleOf = (entry, index, value) => formatTooltip
+        ? formatTooltip(buckets[index], entry, value)
+        : `${formatBucket ? formatBucket(buckets[index]) : formatTimestamp(buckets[index].t)}\n${entry.label}: ${formatValue(value)}`;
     for (const entry of series) {
-        const points = buckets.map((bucket, index) => ({
-            x: plot.x + (index + 0.5) * step,
-            y: plot.y + plot.height * (1 - (bucket[entry.key] ?? 0) / max),
-        }));
+        const points = buckets.map((bucket, index) => {
+            // Sparse workflow series use undefined for zero; null means that
+            // this category was not observed and must leave a gap.
+            const value = bucket[entry.key] === null ? null : (bucket[entry.key] ?? 0);
+            return value === null ? null : {
+                x: plot.x + (index + 0.5) * step,
+                y: plot.y + plot.height * (1 - value / max),
+                value,
+            };
+        });
+        let move = true;
+        const path = points.map(point => {
+            if (point === null) {
+                move = true;
+                return "";
+            }
+            const segment = `${move ? "M" : "L"} ${point.x} ${point.y}`;
+            move = false;
+            return segment;
+        }).filter(Boolean).join(" ");
+        if (!path) continue;
         root.append(svg("path", {
             class: "chart__series-line",
-            d: points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" "),
-            fill: "none", stroke: entry.color, "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+            d: path,
+            fill: "none", stroke: entry.color, "stroke-width": entry.width ?? 2,
+            "stroke-dasharray": entry.dash ?? null, "vector-effect": "non-scaling-stroke",
         }, [svg("title", { text: entry.label })]));
         points.forEach((point, index) => {
-            const count = buckets[index][entry.key] ?? 0;
-            if (count === 0 && buckets.length > 1) return;
+            if (point === null) return;
+            const isolated = (index === 0 || points[index - 1] === null)
+                && (index === points.length - 1 || points[index + 1] === null);
+            if (point.value === 0 && !showZeroPoints && !isolated) return;
             root.append(svg("circle", {
                 class: "chart__series-point", cx: point.x, cy: point.y, r: 3, fill: entry.color,
-            }, [svg("title", { text: `${formatBucket ? formatBucket(buckets[index]) : formatTimestamp(buckets[index].t)}\n${entry.label}: ${formatValue(count)}` })]));
+            }, [svg("title", { text: titleOf(entry, index, point.value) })]));
         });
     }
     const format = formatBucket ?? (bucket => timeFormatter(buckets.at(-1).t - buckets[0].t)(bucket.t));

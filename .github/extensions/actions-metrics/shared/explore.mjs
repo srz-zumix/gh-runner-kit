@@ -492,6 +492,91 @@ function hourlyJobs(rows, from, to) {
     return { hours, days, total, missingTime, outsideWindow, from, to };
 }
 
+const HOUR_MS = 3600000;
+
+/**
+ * Split the selected period at local clock-hour and UTC-offset boundaries.
+ * Offset changes can occur partway through a local hour.
+ */
+function localHourSlots(from, to) {
+    const slots = [];
+    let start = from;
+    while (start < to) {
+        const local = new Date(start);
+        const elapsed = local.getMinutes() * 60000 + local.getSeconds() * 1000 + local.getMilliseconds();
+        let end = Math.min(start + HOUR_MS - elapsed, to);
+        const offset = local.getTimezoneOffset();
+        if (new Date(end - 1).getTimezoneOffset() !== offset) {
+            let before = start;
+            let after = end - 1;
+            while (after - before > 1) {
+                const middle = Math.floor((before + after) / 2);
+                if (new Date(middle).getTimezoneOffset() === offset) before = middle;
+                else after = middle;
+            }
+            end = after;
+        }
+        slots.push({
+            start,
+            end,
+            hour: local.getHours(),
+            weekday: (local.getDay() + 6) % 7,
+            day: `${local.getFullYear()}-${local.getMonth()}-${local.getDate()}`,
+        });
+        start = end;
+    }
+    return slots;
+}
+
+export const CONCURRENCY_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const CONCURRENCY_CATEGORIES = [...CONCURRENCY_WEEKDAYS, "weekday", "weekend"];
+
+/**
+ * Average each local hour's peak across observed days and day categories.
+ *
+ * Repeated local hours contribute their higher peak once; idle hours count as
+ * zero and unobserved hours have null averages.
+ */
+function hourlyPeakConcurrency(starts, ends, from, to) {
+    const slots = localHourSlots(from, to);
+    const peaks = peakPerBucket(slots, starts, ends);
+    const hourPeaks = new Map();
+    const days = new Set();
+    slots.forEach((slot, index) => {
+        const hourKey = `${slot.day}/${slot.hour}`;
+        const hour = hourPeaks.get(hourKey);
+        if (!hour || peaks[index] > hour.peak) {
+            hourPeaks.set(hourKey, { hour: slot.hour, weekday: slot.weekday, peak: peaks[index] });
+        }
+        days.add(slot.day);
+    });
+    const hours = Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        average: 0,
+        max: null,
+        samples: 0,
+        ...Object.fromEntries(CONCURRENCY_CATEGORIES.map(key => [key, 0])),
+        counts: Object.fromEntries(CONCURRENCY_CATEGORIES.map(key => [key, 0])),
+    }));
+    for (const { hour, weekday, peak } of hourPeaks.values()) {
+        const entry = hours[hour];
+        entry.average += peak;
+        entry.samples++;
+        entry.max = Math.max(entry.max ?? 0, peak);
+        for (const key of [CONCURRENCY_WEEKDAYS[weekday], weekday < 5 ? "weekday" : "weekend"]) {
+            entry[key] += peak;
+            entry.counts[key]++;
+        }
+    }
+    for (const entry of hours) {
+        entry.average = entry.samples ? entry.average / entry.samples : null;
+        for (const key of CONCURRENCY_CATEGORIES) {
+            entry[key] = entry.counts[key] ? entry[key] / entry.counts[key] : null;
+        }
+    }
+    return { hours, days: days.size, from, to };
+}
+
 function workflowRunTimeline(rows, { from, to, bucketMs, buckets }) {
     const seen = new Set();
     const workflows = new Map();
@@ -728,6 +813,9 @@ export function buildExploreAggregate(rows, options = {}) {
         },
         timeline: { bucketMs, from: buckets[0]?.start ?? from, buckets: series },
         hourlyJobs: hourlyJobs(rows,
+            Math.max(from, Number.isFinite(options.filterFrom) ? options.filterFrom : from),
+            Math.min(to, Number.isFinite(options.filterTo) ? options.filterTo : to)),
+        hourlyConcurrency: hourlyPeakConcurrency(starts, ends,
             Math.max(from, Number.isFinite(options.filterFrom) ? options.filterFrom : from),
             Math.min(to, Number.isFinite(options.filterTo) ? options.filterTo : to)),
         workflowRuns: workflowRunTimeline(rows, { from, to, bucketMs, buckets }),

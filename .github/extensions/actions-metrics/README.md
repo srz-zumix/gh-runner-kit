@@ -172,6 +172,21 @@ and missing hours remain zero. Reports' Bucket does not affect these charts.
 Missing timestamps and out-of-period jobs are excluded and reported; truncated
 rows warn that counts may be incomplete.
 
+**Peak concurrency by hour of day** shows one **By local hour** line chart
+(00:00 to 23:00) with the overall average and highest peak, separate averages
+for Monday through Sunday, and averages for weekdays (Monday–Friday) and
+weekends (Saturday–Sunday). Holidays are grouped by their calendar weekday.
+The peak is the most jobs running at the same instant, measured exactly within
+each local clock hour of the selected period, so Reports' Bucket and the
+timeline bucket width do not affect it; a job counts in every hour it spans.
+Each average divides the hourly peaks by the observed days in its category,
+including idle days as zero. Partial hours at the period edges count as
+observed, a repeated DST hour keeps its higher peak, and unobserved hours leave
+gaps. The seven weekday lines start unchecked; the combined weekday/weekend
+lines stay visible. Hover over a point for its observed-day count or check and
+uncheck legend items to show or hide lines. All current explorer filters apply without GitHub
+requests; truncated rows warn that peaks may be understated.
+
 The **Workflow** column of **Workflows** links to the workflow file on the
 repository's default branch, opening the selected GitHub host in a new tab.
 This works for both repository and organization targets. Dynamically generated
