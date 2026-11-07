@@ -8,8 +8,8 @@ const chartsURL = moduleURL((await readFile(new URL("../public/charts.js", impor
 const source = (await readFile(new URL("../public/explorer.js", import.meta.url), "utf8"))
     .replace('"./charts.js"', JSON.stringify(chartsURL))
     .replaceAll('"/shared/', `"${new URL("../shared/", import.meta.url).href}`);
-const { renderKpi, budgetControl, workflowRunsCard, hourlyJobsCard, view } = await import(moduleURL(`${source}\nexport { kpi as renderKpi, budgetControl, workflowRunsCard, hourlyJobsCard, view };`));
-const { renderRankedBars } = await import(chartsURL);
+const { renderKpi, budgetControl, workflowRunsCard, hourlyJobsCard, hourlyConcurrencyCard, view } = await import(moduleURL(`${source}\nexport { kpi as renderKpi, budgetControl, workflowRunsCard, hourlyJobsCard, hourlyConcurrencyCard, view };`));
+const { renderLineTimeline, renderRankedBars } = await import(chartsURL);
 const { buildExploreAggregate } = await import("../shared/explore.mjs");
 const { normalizeRows } = await import("../shared/rows.mjs");
 
@@ -24,6 +24,124 @@ class TestNode {
     append(child) { this.children.push(child); }
     addEventListener(event, listener) { this.listeners[event] = listener; }
 }
+
+test("hourly peak concurrency draws eleven checkbox-selectable lines and no weekday chart", () => {
+    const globals = ["document", "Node"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
+    globalThis.Node = TestNode;
+    globalThis.document = {
+        createElement: tag => new TestNode(tag),
+        createElementNS: (_, tag) => new TestNode(tag),
+        createTextNode: text => Object.assign(new TestNode("#text"), { textContent: text }),
+    };
+    const descendants = node => [node, ...node.children.flatMap(descendants)];
+    try {
+        const categories = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "weekday", "weekend"];
+        view.aggregate = {
+            hourlyConcurrency: {
+                days: 2,
+                hours: Array.from({ length: 24 }, (_, hour) => ({
+                    hour, average: hour === 9 ? 1.5 : null, max: hour === 9 ? 2 : null, samples: hour === 9 ? 2 : 0,
+                    ...Object.fromEntries(categories.map(key => [key, hour === 9 ? (key === "sunday" ? 0 : 1) : null])),
+                    counts: Object.fromEntries(categories.map(key => [key, hour === 9 ? 1 : 0])),
+                })),
+            },
+        };
+        view.snapshot = { truncated: true };
+        const panel = hourlyConcurrencyCard();
+        const nodes = descendants(panel);
+        const charts = nodes.filter(node => node.tag === "svg");
+        assert.deepEqual(charts.map(chart => chart.attributes["aria-label"]), ["Average peak concurrency by local hour"]);
+        assert.equal(descendants(charts[0]).filter(node => node.attributes.class === "chart__series-line").length, 4);
+        assert.equal(descendants(charts[0]).filter(node => node.tag === "rect").length, 0);
+        assert.deepEqual(descendants(charts[0]).filter(node => /^\d{2}:00$/.test(node.textContent ?? ""))
+            .map(node => node.textContent), Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`));
+        assert.ok(nodes.some(node => node.tag === "title" && node.textContent === "09:00\nAverage peak jobs: 1.5 (2 observed days)"));
+        assert.ok(nodes.some(node => node.tag === "title" && node.textContent === "09:00\nWeekends: 1 (1 observed day)"));
+        assert.ok(!nodes.some(node => node.textContent === "By weekday"));
+        assert.match(panel.children[2].textContent, /2 local calendar days observed/);
+        assert.match(panel.children[2].textContent, /truncated/);
+
+        const checkboxes = nodes.filter(node => node.tag === "input" && node.attributes.id?.startsWith("peak-series-"));
+        assert.equal(checkboxes.length, 11);
+        assert.ok(checkboxes.every(input => input.attributes.type === "checkbox"));
+        assert.deepEqual(checkboxes.filter(input => !("checked" in input.attributes))
+            .map(input => input.attributes.id), [
+            "peak-series-monday", "peak-series-tuesday", "peak-series-wednesday", "peak-series-thursday",
+            "peak-series-friday", "peak-series-saturday", "peak-series-sunday",
+        ]);
+        assert.deepEqual(checkboxes.filter(input => "checked" in input.attributes).map(input => input.attributes.id), [
+            "peak-series-average", "peak-series-max", "peak-series-weekday", "peak-series-weekend",
+        ]);
+        for (const checkbox of checkboxes) {
+            const label = nodes.find(node => node.tag === "label" && node.children.includes(checkbox));
+            assert.ok(label.children.some(node => node.className === "peak-legend__text" && node.textContent));
+            const wasChecked = "checked" in checkbox.attributes;
+            checkbox.listeners.change({ target: { checked: !wasChecked } });
+            const hidden = descendants(hourlyConcurrencyCard());
+            assert.equal(hidden.filter(node => node.attributes.class === "chart__series-line").length, wasChecked ? 3 : 5);
+            if (checkbox.attributes.id === "peak-series-monday") {
+                assert.ok(hidden.some(node => node.tag === "title" && node.textContent === "09:00\nMonday: 1 (1 observed day)"));
+            }
+            if (checkbox.attributes.id === "peak-series-sunday") {
+                assert.ok(hidden.some(node => node.tag === "title" && node.textContent === "09:00\nSunday: 0 (1 observed day)"));
+            }
+            const toggled = hidden.find(node => node.attributes.id === checkbox.attributes.id);
+            assert.equal("checked" in toggled.attributes, !wasChecked);
+            toggled.listeners.change({ target: { checked: wasChecked } });
+            assert.equal(descendants(hourlyConcurrencyCard()).filter(node => node.attributes.class === "chart__series-line").length, 4);
+        }
+
+        for (const checkbox of checkboxes) checkbox.listeners.change({ target: { checked: false } });
+        assert.ok(descendants(hourlyConcurrencyCard()).some(node => node.textContent === "Select at least one series."));
+    } finally {
+        view.aggregate = null;
+        view.snapshot = null;
+        view.hiddenPeakSeries = new Set(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]);
+        for (const [key, descriptor] of globals) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else delete globalThis[key];
+        }
+    }
+});
+
+test("line charts break at explicit missing values but treat sparse values as zero", () => {
+    const globals = ["document", "Node"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
+    globalThis.Node = TestNode;
+    globalThis.document = {
+        createElement: tag => new TestNode(tag),
+        createElementNS: (_, tag) => new TestNode(tag),
+        createTextNode: text => Object.assign(new TestNode("#text"), { textContent: text }),
+    };
+    const descendants = node => [node, ...node.children.flatMap(descendants)];
+    try {
+        const buckets = [null, 0, null, 2, 3, null].map((value, index) => ({ hour: index, gapped: value }));
+        const chart = renderLineTimeline({ buckets }, {
+            series: [
+                { key: "gapped", label: "Gapped", color: "red" },
+                { key: "sparse", label: "Sparse", color: "blue" },
+            ],
+            formatBucket: bucket => String(bucket.hour),
+        });
+        const nodes = descendants(chart);
+        const lines = nodes.filter(node => node.attributes.class === "chart__series-line");
+        assert.equal(lines.length, 2);
+        assert.equal((lines[0].attributes.d.match(/M /g) ?? []).length, 2);
+        assert.equal((lines[0].attributes.d.match(/L /g) ?? []).length, 1);
+        assert.equal((lines[1].attributes.d.match(/M /g) ?? []).length, 1);
+        assert.equal((lines[1].attributes.d.match(/L /g) ?? []).length, 5);
+        assert.ok(nodes.some(node => node.tag === "title" && node.textContent === "1\nGapped: 0"));
+        const empty = renderLineTimeline({ buckets: [{ hour: 0, gapped: null }] }, {
+            series: [{ key: "gapped", label: "Gapped", color: "red" }],
+            emptyMessage: "Nothing observed.",
+        });
+        assert.equal(empty.textContent, "Nothing observed.");
+    } finally {
+        for (const [key, descriptor] of globals) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else delete globalThis[key];
+        }
+    }
+});
 
 test("hourly job charts show 24 local-hour labels and separate total and fractional average scales", () => {
     const globals = ["document", "Node"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);

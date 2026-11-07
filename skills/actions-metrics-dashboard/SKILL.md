@@ -98,6 +98,19 @@ and counting partial days as one. Repeated DST hours combine; missing hours
 stay zero. Reports Bucket is independent. Missing timestamps, out-of-period
 jobs and truncated-row limitations are reported.
 
+Job explorer's **Peak concurrency by hour of day** draws one **By local hour**
+(00:00–23:00) line chart for the overall average and highest peak, each weekday,
+and combined weekdays (Monday–Friday) and weekends (Saturday–Sunday). Holidays
+follow their calendar weekday. Peaks are measured exactly per local clock hour
+of the selected period, independent of any bucket width, and count a job in
+every hour it spans. Each average divides the hourly peaks by the observed days
+in its category, including idle days as zero. Edge-partial hours count as
+observed, repeated DST hours keep the higher peak, and unobserved hours leave
+gaps. The seven weekday lines start unchecked while the combined weekday and
+weekend lines remain visible. Point tooltips show sample counts; check and
+uncheck legend items to show or hide lines. Follows current explorer filters
+without GitHub requests.
+
 In **Workflows**, the **Workflow** column links to each repository's workflow
 file on its default branch, on the dashboard's GitHub host, in a new tab.
 Dynamic workflows (Copilot, Dependabot) and rows without a file path stay plain

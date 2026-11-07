@@ -1390,6 +1390,29 @@ button.ranked__label:hover {
     background: var(--accent);
 }
 
+.peak-legend__option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px;
+    cursor: pointer;
+}
+
+.peak-legend__option input {
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.peak-legend__option--off .share__swatch,
+.peak-legend__option--off .peak-legend__text {
+    opacity: 0.5;
+}
+
+.peak-legend__option input:focus-visible {
+    outline: 2px solid var(--color-focus-outline, var(--accent));
+    outline-offset: 2px;
+}
+
 /* ---- heatmap ---- */
 
 /* Three columns here, unlike the activity tab's four: this heatmap reports

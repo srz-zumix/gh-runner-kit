@@ -21,7 +21,7 @@ import {
     renderShareBar,
     renderStackedTimeline,
 } from "./charts.js";
-import { emptyExploreFilters, hasActiveExploreFilters } from "/shared/explore.mjs";
+import { CONCURRENCY_WEEKDAYS, emptyExploreFilters, hasActiveExploreFilters } from "/shared/explore.mjs";
 import { FIELD_SEPARATOR, UNIDENTIFIED } from "/shared/rows.mjs";
 import { toggleSort } from "/shared/sort.mjs";
 import { DEFAULT_ROW_BUDGET, MAX_ROW_BUDGET, MIN_ROW_BUDGET } from "/shared/fields.mjs";
@@ -47,6 +47,21 @@ const TIMELINE_SERIES = [
     { key: "failure", label: "Failed", color: "var(--true-color-red, #cf222e)" },
     { key: "other", label: "Other", color: "var(--true-color-gray, #8c959f)" },
 ];
+
+const PEAK_DAY_COLORS = [
+    "hsl(18 75% 48%)", "hsl(42 80% 42%)", "hsl(85 60% 40%)", "hsl(160 65% 38%)",
+    "hsl(205 70% 55%)", "hsl(260 65% 58%)", "hsl(315 65% 52%)",
+];
+const HOURLY_PEAK_SERIES = [
+    { key: "average", label: "Average peak jobs", color: "var(--text-color-default, #1f2328)", width: 3 },
+    { key: "max", label: "Highest peak jobs", color: "var(--text-color-muted, #656d76)", width: 2, dash: "5 3" },
+    { key: "weekday", label: "Weekdays", color: "var(--true-color-blue, #0969da)", width: 2.5, dash: "8 3" },
+    { key: "weekend", label: "Weekends", color: "var(--true-color-red, #cf222e)", width: 2.5, dash: "3 3" },
+    ...CONCURRENCY_WEEKDAYS.map((key, index) => ({
+        key, label: key[0].toUpperCase() + key.slice(1), color: PEAK_DAY_COLORS[index], width: 1.5,
+    })),
+];
+const DEFAULT_HIDDEN_PEAK_SERIES = new Set(CONCURRENCY_WEEKDAYS);
 
 const PAGE_SIZE = 50;
 
@@ -98,6 +113,7 @@ const view = {
     offset: 0,
     page: null,
     heatRows: 25,
+    hiddenPeakSeries: new Set(DEFAULT_HIDDEN_PEAK_SERIES),
     searchDraft: "",
     searchTimer: null,
     aggregateSeq: 0,
@@ -688,6 +704,52 @@ function hourlyJobsCard() {
     ], notes.join(" "));
 }
 
+function hourlyConcurrencyCard() {
+    const hourly = view.aggregate?.hourlyConcurrency;
+    if (!hourly) return null;
+    const notes = [
+        "Peak concurrency is the most jobs running at the same instant, measured exactly within every local clock hour of the selected period and independent of any bucket width. A job counts in every hour it spans; current explorer filters apply.",
+        "Each average uses the observed days in its category: weekdays are Monday–Friday and weekends are Saturday–Sunday, including holidays. Idle hours count as zero, partial hours at the period edges count as observed, and a repeated DST hour keeps its higher peak. Hours without observations leave gaps.",
+        `${number(hourly.days)} local calendar days observed. Hover over a point for its sample count; check or uncheck a legend item to show or hide its line.`,
+    ];
+    if (view.snapshot?.truncated) notes.push("Loaded rows are truncated; peaks may be understated.");
+    const formatValue = value => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const formatBucket = bucket => `${String(bucket.hour).padStart(2, "0")}:00`;
+    const series = HOURLY_PEAK_SERIES.filter(entry => !view.hiddenPeakSeries.has(entry.key))
+        .sort((left, right) => left.width - right.width);
+    const legend = el("ul", { class: "share__legend" }, HOURLY_PEAK_SERIES.map(entry =>
+        el("li", { class: "share__legend-item" }, [
+            el("label", { class: `peak-legend__option${view.hiddenPeakSeries.has(entry.key) ? " peak-legend__option--off" : ""}` }, [
+                el("input", {
+                    id: `peak-series-${entry.key}`,
+                    type: "checkbox",
+                    checked: !view.hiddenPeakSeries.has(entry.key),
+                    onchange: event => {
+                        if (event.target.checked) view.hiddenPeakSeries.delete(entry.key);
+                        else view.hiddenPeakSeries.add(entry.key);
+                        paint();
+                    },
+                }),
+                el("span", { class: "share__swatch", style: `background:${entry.color}` }),
+                el("span", { class: "peak-legend__text", text: entry.label }),
+            ]),
+        ]),
+    ));
+    return card("Peak concurrency by hour of day", [
+        el("h3", { class: "subhead", text: "By local hour" }),
+        renderLineTimeline({ buckets: hourly.hours }, {
+            series, showAllTicks: true, showZeroPoints: true, formatValue, formatBucket,
+            label: "Average peak concurrency by local hour",
+            formatTooltip: (bucket, entry, value) => {
+                const samples = entry.key === "average" || entry.key === "max" ? bucket.samples : bucket.counts[entry.key];
+                return `${formatBucket(bucket)}\n${entry.label}: ${formatValue(value)} (${number(samples)} observed ${samples === 1 ? "day" : "days"})`;
+            },
+            emptyMessage: series.length ? "No observations for the selected series." : "Select at least one series.",
+        }),
+        legend,
+    ], notes.join(" "));
+}
+
 function concurrencyCard() {
     const aggregate = view.aggregate;
     if (!aggregate) {
@@ -1136,6 +1198,7 @@ function sections(state) {
         workflowRunsCard(),
         hourlyJobsCard(),
         concurrencyCard(),
+        hourlyConcurrencyCard(),
         heatmapCard(),
         distributionCard(),
         breakdownCard(),
@@ -1207,6 +1270,7 @@ export function resetExplorer() {
     view.error = null;
     view.matched = 0;
     view.total = 0;
+    view.hiddenPeakSeries = new Set(DEFAULT_HIDDEN_PEAK_SERIES);
     view.filters = emptyExploreFilters();
     view.searchDraft = "";
     view.offset = 0;
