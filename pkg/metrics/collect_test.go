@@ -3,13 +3,17 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/google/go-github/v93/github"
+	ghclient "github.com/srz-zumix/go-gh-extension/pkg/gh/client"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 )
 
@@ -170,12 +174,20 @@ func TestCollectJobsSkipsServerErrors(t *testing.T) {
 }
 
 func TestCollectJobsFailsOnUnexpectedError(t *testing.T) {
-	fetcher := &stubJobFetcher{errs: map[int64]error{1: statusError(http.StatusUnauthorized)}}
-	repo := repository.Repository{Owner: "o", Name: "r"}
-	c := NewCollector(nil, repo, Options{Concurrency: 1}, fetcher)
+	for _, cause := range []error{statusError(http.StatusUnauthorized), io.ErrUnexpectedEOF} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			fetcher := &stubJobFetcher{errs: map[int64]error{1: cause}}
+			repo := repository.Repository{Owner: "o", Name: "r"}
+			c := NewCollector(nil, repo, Options{Concurrency: 1}, fetcher)
 
-	if _, _, err := c.collectJobs(context.Background(), repo, []*github.WorkflowRun{runWithID(1)}); err == nil {
-		t.Fatal("collectJobs() error = nil, want an error")
+			jobs, warnings, err := c.collectJobs(context.Background(), repo, []*github.WorkflowRun{runWithID(1)})
+			if !errors.Is(err, cause) || !strings.Contains(err.Error(), "workflow run 1") {
+				t.Fatalf("collectJobs() error = %v, want run context wrapping %v", err, cause)
+			}
+			if len(jobs) != 0 || len(warnings) != 0 {
+				t.Fatalf("failed collection returned partial data: jobs=%v warnings=%v", jobs, warnings)
+			}
+		})
 	}
 }
 
@@ -285,8 +297,7 @@ func TestWithRetryFailsFastWhenResetIsOutOfReach(t *testing.T) {
 	}
 }
 
-// TestWithRetryReturnsOtherErrorsImmediately confirms that an error which is not a rate
-// limit is never retried.
+// TestWithRetryReturnsOtherErrorsImmediately confirms non-retryable errors fail fast.
 func TestWithRetryReturnsOtherErrorsImmediately(t *testing.T) {
 	want := errors.New("boom")
 	calls := 0
@@ -296,6 +307,185 @@ func TestWithRetryReturnsOtherErrorsImmediately(t *testing.T) {
 	})
 	if !errors.Is(err, want) || calls != 1 {
 		t.Fatalf("withRetry() = %v after %d calls, want %v after 1", err, calls, want)
+	}
+}
+
+func TestWithRetryEOF(t *testing.T) {
+	for _, cause := range []error{io.EOF, io.ErrUnexpectedEOF} {
+		for _, recover := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/recover=%t", cause, recover), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					started := time.Now()
+					calls := 0
+					wrapped := fmt.Errorf("read jobs: %w", cause)
+					err := withRetry(context.Background(), func() error {
+						calls++
+						if recover && calls == 2 {
+							return nil
+						}
+						return wrapped
+					})
+					if recover {
+						if err != nil || calls != 2 || time.Since(started) != time.Second {
+							t.Fatalf("recovery: error=%v calls=%d elapsed=%v", err, calls, time.Since(started))
+						}
+					} else if !errors.Is(err, cause) || calls != 5 || time.Since(started) != 15*time.Second {
+						t.Fatalf("exhaustion: error=%v calls=%d elapsed=%v", err, calls, time.Since(started))
+					}
+				})
+			})
+		}
+	}
+}
+
+func TestWithRetryCancellation(t *testing.T) {
+	for _, duringWait := range []bool{false, true} {
+		t.Run(fmt.Sprintf("duringWait=%t", duringWait), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if duringWait {
+					go func() {
+						time.Sleep(500 * time.Millisecond)
+						cancel()
+					}()
+				} else {
+					cancel()
+				}
+				calls := 0
+				err := withRetry(ctx, func() error {
+					calls++
+					return io.ErrUnexpectedEOF
+				})
+				wantCalls := 0
+				if duringWait {
+					wantCalls = 1
+				}
+				if !errors.Is(err, context.Canceled) || calls != wantCalls {
+					t.Fatalf("cancellation: error=%v calls=%d, want %d calls", err, calls, wantCalls)
+				}
+			})
+		})
+	}
+}
+
+func TestWithRetryRateLimitDelays(t *testing.T) {
+	for _, primary := range []bool{true, false} {
+		t.Run(fmt.Sprintf("primary=%t", primary), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				delay := 3 * time.Second
+				var cause error = &github.AbuseRateLimitError{RetryAfter: &delay}
+				if primary {
+					cause = &github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: time.Now().Add(delay)}}}
+				}
+				started := time.Now()
+				calls := 0
+				err := withRetry(context.Background(), func() error {
+					calls++
+					if calls == 1 {
+						return fmt.Errorf("API: %w", cause)
+					}
+					return nil
+				})
+				if err != nil || calls != 2 || time.Since(started) != delay {
+					t.Fatalf("rate limit: error=%v calls=%d elapsed=%v", err, calls, time.Since(started))
+				}
+			})
+		})
+	}
+}
+
+type retryJobTransport func(*http.Request) (*http.Response, error)
+
+func (f retryJobTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type interruptedJobBody struct {
+	io.ReadCloser
+}
+
+func (b interruptedJobBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+func TestAPIJobFetchersRetryTruncatedPagination(t *testing.T) {
+	for _, historical := range []bool{false, true} {
+		t.Run(fmt.Sprintf("historical=%t", historical), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				jobPath := "/repos/o/r/actions/runs/42/jobs"
+				if historical {
+					jobPath = "/repos/o/r/actions/runs/42/attempts/2/jobs"
+				}
+				base := "http://example.test/"
+				fail := true
+				firstPages, secondPages := 0, 0
+				transport := retryJobTransport(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Path != jobPath {
+						t.Fatalf("unexpected request: %s", r.URL)
+					}
+					header := make(http.Header)
+					header.Set("Content-Type", "application/json")
+					payload := `{"total_count":2,"jobs":[{"id":11}]}`
+					interrupted := false
+					if r.URL.Query().Get("page") == "2" {
+						secondPages++
+						payload = `{"total_count":2,"jobs":[{"id":22}]}`
+						if fail || secondPages == 6 {
+							payload = `{"total_count":2,"jobs":[{"id":`
+							interrupted = true
+						}
+					} else {
+						firstPages++
+						header.Set("Link", fmt.Sprintf(`<%s%s?page=2>; rel="next"`, strings.TrimSuffix(base, "/"), jobPath))
+					}
+					body := io.NopCloser(strings.NewReader(payload))
+					if interrupted {
+						body = interruptedJobBody{body}
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK, Header: header,
+						Body: body, Request: r,
+					}, nil
+				})
+				api, err := github.NewClient(github.WithHTTPClient(&http.Client{Transport: transport}), github.WithURLs(&base, nil))
+				if err != nil {
+					t.Fatal(err)
+				}
+				client, err := ghclient.NewClient(api)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cache := &Cache{base: t.TempDir()}
+				fetcher := NewCachedJobFetcher(NewAPIJobFetcher(client), cache, false)
+				if historical {
+					fetcher = NewCachedAttemptJobFetcher(NewAPIAttemptJobFetcher(client), cache, false)
+				}
+				repo := repository.Repository{Owner: "o", Name: "r"}
+				run := &github.WorkflowRun{ID: github.Ptr(int64(42)), RunAttempt: github.Ptr(2), Status: github.Ptr("completed")}
+				jobs, cached, err := fetcher.JobsWithCache(context.Background(), repo, run)
+				if !errors.Is(err, io.ErrUnexpectedEOF) || cached || len(jobs) != 0 || firstPages != 5 || secondPages != 5 {
+					t.Fatalf("failed listing: jobs=%v cached=%t error=%v pages=%d/%d", jobs, cached, err, firstPages, secondPages)
+				}
+				if _, ok := fetcher.load(repo, 42, 2); ok {
+					t.Fatal("incomplete job list was cached")
+				}
+				fail = false
+				for _, wantCached := range []bool{false, true} {
+					jobs, cached, err = fetcher.JobsWithCache(context.Background(), repo, run)
+					if err != nil || cached != wantCached || len(jobs) != 2 || jobs[0].GetID() != 11 || jobs[1].GetID() != 22 {
+						t.Fatalf("recovered listing: jobs=%v cached=%t error=%v", jobs, cached, err)
+					}
+					if firstPages != 7 || secondPages != 7 {
+						t.Fatalf("unexpected page requests: first=%d second=%d", firstPages, secondPages)
+					}
+				}
+			})
+		})
 	}
 }
 
