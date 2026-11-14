@@ -524,6 +524,11 @@ request failed. `--refresh` bypasses both caches; `--no-cache` disables both.
 The CLI exits on an exhausted retry budget; automatic resume after reset is a
 dashboard feature, not a background CLI process.
 
+Interrupted API reads (`EOF` or `unexpected EOF`) are retried with exponential
+backoff, for at most five total attempts. A paginated job listing is restarted
+in full; incomplete results are never cached. Cancellation interrupts the wait,
+and exhausted retries remain errors rather than silently dropping jobs.
+
 Run searches are split into nonoverlapping time windows when they reach GitHub's 1,000-result search limit. `--max-runs 0` removes the application budget; a single second that still saturates the API limit is an explicit error rather than silently incomplete data.
 
 Run discovery reads the first page, then fetches the remaining advertised pages

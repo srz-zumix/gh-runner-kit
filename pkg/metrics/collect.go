@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"path"
 	"strings"
@@ -26,7 +27,7 @@ const (
 	// DefaultConcurrency bounds parallel API requests within each collection stage.
 	DefaultConcurrency = 6
 
-	// maxRetries is how often a rate limited request is retried before giving up.
+	// maxRetries bounds the total attempts for a rate limited or interrupted read.
 	maxRetries = 5
 	// maxRetryWait bounds how long a single retry may wait for a rate limit to reset.
 	maxRetryWait = 2 * time.Minute
@@ -676,7 +677,7 @@ func (c *Collector) collectJobs(ctx context.Context, repo repository.Repository,
 			runJobs, cached, err := fetchJobsWithCache(ctx, c.jobs, repo, run)
 			if err != nil {
 				if !isSkippableRunRequestError(err) {
-					return err
+					return fmt.Errorf("workflow run %d: %w", run.GetID(), err)
 				}
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("skipped the jobs of workflow run %d: %v", run.GetID(), err))
@@ -758,16 +759,18 @@ func (d *Data) warnf(format string, args ...any) {
 	d.Warnings = append(d.Warnings, fmt.Sprintf(format, args...))
 }
 
-// withRetry retries fn while GitHub reports a rate limit, backing off until the limit
-// resets. Every other error is returned immediately.
+// withRetry retries rate limits and interrupted reads with bounded, cancellable waits.
 func withRetry(ctx context.Context, fn func() error) error {
 	var err error
 	for attempt := range maxRetries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err = fn(); err == nil {
 			return nil
 		}
 
-		wait, ok := retryWait(err)
+		wait, ok := retryWait(err, attempt)
 		if !ok {
 			return err
 		}
@@ -780,7 +783,7 @@ func withRetry(ctx context.Context, fn func() error) error {
 			return err
 		}
 
-		logger.Debug("metrics: rate limited, waiting before retrying", "attempt", attempt+1, "wait", wait)
+		logger.Debug("metrics: request failed, waiting before retrying", "error", err, "attempt", attempt+1, "wait", wait)
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -792,9 +795,8 @@ func withRetry(ctx context.Context, fn func() error) error {
 	return err
 }
 
-// retryWait returns how long to wait before retrying err, reporting false when err is
-// not a rate limit error.
-func retryWait(err error) (time.Duration, bool) {
+// retryWait returns the delay for a rate limit or an interrupted response.
+func retryWait(err error, attempt int) (time.Duration, bool) {
 	var rateErr *github.RateLimitError
 	if errors.As(err, &rateErr) {
 		return clampRetryWait(time.Until(rateErr.Rate.Reset.Time)), true
@@ -806,6 +808,10 @@ func retryWait(err error) (time.Duration, bool) {
 			return clampRetryWait(*abuseErr.RetryAfter), true
 		}
 		return time.Second, true
+	}
+
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return time.Second << attempt, true
 	}
 
 	return 0, false
