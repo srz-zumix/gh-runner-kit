@@ -802,6 +802,11 @@ rate-limit retry budget is exhausted; automatic resume after reset is provided
 by the dashboard, not by a background CLI process. The `complete` stage precedes
 snapshot writing, so successful command exit is still required.
 
+Interrupted API reads (`EOF` or `unexpected EOF`) are retried with exponential
+backoff, for at most five total attempts. A paginated job listing is restarted
+in full; incomplete results are never cached. Cancellation interrupts the wait,
+and exhausted retries remain errors rather than silently dropping jobs.
+
 Run discovery optionally includes `runSearch`: `created` is the current search
 period, `searches` its ordinal, and `discovered` the unique run IDs seen so far
 within that repository, deduplicated across split searches. Events arrive before
