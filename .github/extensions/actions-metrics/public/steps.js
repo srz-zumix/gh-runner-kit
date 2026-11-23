@@ -623,7 +623,7 @@ function typicalTimeline(result) {
     const max = maxOf(jobs.flatMap((job) => job.steps.map((step) => Math.max(job.startOffsetMs + step.offsetMs + step.durationMs, job.startOffsetMs + step.offsetP90Ms + step.durationP90Ms))), 1000);
     const rows = [ganttAxis(max)];
     // Jobs of several repositories can share a name, so qualify them by repository.
-    const multiRepo = new Set(jobs.map((job) => job.repo ?? "")).size > 1;
+    const multiRepo = new Set(jobs.map((job) => job.repo).filter(Boolean)).size > 1;
     for (const job of jobs) {
         const label = multiRepo && job.repo ? `${job.repo} · ${job.job}` : job.job;
         rows.push(el("div", { class: "gantt__group", text: label, title: label }));

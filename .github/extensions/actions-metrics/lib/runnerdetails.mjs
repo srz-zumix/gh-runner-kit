@@ -28,38 +28,31 @@ function jobKey(row) {
     return JSON.stringify([row.repo, row.workflowPath || row.workflow, row.runId, row.runAttempt, row.jobName]);
 }
 
-function stepJobKey(row) {
-    if (row.jobId && row.jobId !== "0") {
-        return JSON.stringify([row.repo, "id", row.jobId, row.runAttempt]);
-    }
-    return JSON.stringify([row.repo, row.workflowPath || row.workflow, row.runId, row.runAttempt, row.jobName]);
-}
-
 function utcDay(timestamp) {
     return new Date(timestamp).toISOString().slice(0, 10);
 }
 
-function summarizeRunnerDetails({ jobs = [], steps = [], runner, includeAllAttempts = false, recentJobFilters = {}, dataset = {}, host = "github.com", malformedStepRows = 0 } = {}) {
+function summarizeRunnerDetails({ jobs = [], steps = [], runner, includeAllAttempts = false, recentJobFilters = {}, dataset = {}, host = "github.com", malformedStepRows = 0, normalizedJobs = null } = {}) {
     const name = String(runner ?? "").trim();
     if (!name) throw new TypeError("Runner name is required");
     const filters = normalizeRecentJobFilters(recentJobFilters);
 
-    const allJobs = jobs.map(normalizeJobRow).filter(row => row.runnerName === name);
+    const allJobs = (normalizedJobs ?? jobs.map(normalizeJobRow)).filter(row => row.runnerName === name);
     const selectedJobs = allJobs.filter(row => includeAllAttempts || row.latest);
     const selectedByKey = new Map(selectedJobs.map(row => [jobKey(row), row]));
     const stepRows = steps.map(normalizeStepRow)
-        .filter(row => row.stepName && row.runnerName === name && selectedByKey.has(stepJobKey(row)));
+        .filter(row => row.stepName && row.runnerName === name && selectedByKey.has(jobKey(row)));
 
     const uniqueSteps = new Map();
     for (const row of stepRows) {
-        const key = JSON.stringify([stepJobKey(row), row.stepId]);
+        const key = JSON.stringify([jobKey(row), row.stepId]);
         if (!uniqueSteps.has(key)) uniqueSteps.set(key, row);
     }
 
     const failedByJob = new Map();
     const failedSteps = new Map();
     for (const row of uniqueSteps.values()) {
-        const key = stepJobKey(row);
+        const key = jobKey(row);
         const failed = STEP_FAILURES.has(row.stepConclusion);
         if (failed) {
             if (!failedByJob.has(key)) failedByJob.set(key, []);
@@ -203,12 +196,11 @@ export async function collectRunnerDetails({ dataset, target, cwd, runner, inclu
     const name = String(runner ?? "").trim();
     if (!name) throw new TypeError("Runner name is required");
 
-    const jobs = (dataset.jobs ?? []).filter(row => {
-        const normalized = normalizeJobRow(row);
-        return normalized.runnerName === name && (includeAllAttempts || normalized.latest);
-    });
+    // Normalize each job row once and share the result with summarizeRunnerDetails.
+    const normalizedJobs = (dataset.jobs ?? []).map(normalizeJobRow)
+        .filter(row => row.runnerName === name && (includeAllAttempts || row.latest));
 
-    const selectedKeys = new Set(jobs.map(row => jobKey(normalizeJobRow(row))));
+    const selectedKeys = new Set(normalizedJobs.map(jobKey));
     const hasPatternSyntax = ["*", "?", "[", "]", "\\"].some(character => name.includes(character));
     const stepsCommand = stepRowsCommand({
         target,
@@ -223,7 +215,7 @@ export async function collectRunnerDetails({ dataset, target, cwd, runner, inclu
         try {
             const row = JSON.parse(line);
             const normalized = normalizeStepRow(row);
-            if (normalized.runnerName === name && selectedKeys.has(stepJobKey(normalized))) steps.push(row);
+            if (normalized.runnerName === name && selectedKeys.has(jobKey(normalized))) steps.push(row);
         } catch {
             malformedSteps++;
         }
@@ -231,7 +223,7 @@ export async function collectRunnerDetails({ dataset, target, cwd, runner, inclu
     }, signal);
 
     return summarizeRunnerDetails({
-        jobs,
+        normalizedJobs,
         steps,
         runner: name,
         includeAllAttempts,
