@@ -224,8 +224,17 @@ export class DashboardStore {
 
     async withDataset(query, callback) {
         const normalized = normalizeQuery(query);
-        const signature = collectionId(normalized);
         await this.refresh(query);
+        return this.withRetainedDataset(normalized, callback);
+    }
+
+    /**
+     * Read only the snapshot already retained for this exact query. Unlike
+     * withDataset, this never starts a collection when the snapshot is absent.
+     */
+    async withRetainedDataset(query, callback) {
+        const normalized = normalizeQuery(query);
+        const signature = collectionId(normalized);
         const entry = this.entry(query);
         // A retained dataset stays readable while a replacement collection
         // waits out a rate limit.

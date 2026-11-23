@@ -181,8 +181,7 @@ func BuildStepRows(data *Data, opts StepRowOptions) []StepRow {
 
 	rows := make([]StepRow, 0)
 	for _, entry := range jobs {
-		runStarted := runAttemptStartedAt(b.run(entry.job.RunID, entry.job.RunAttempt), entry.job.RunAttempt)
-		for _, row := range stepRowsOf(entry.job, entry.raw.Steps, runStarted) {
+		for _, row := range stepRowsOf(entry.job, entry.raw.Steps, entry.job.RunStartedAt) {
 			if !opts.matchStep(row.StepName) {
 				continue
 			}
@@ -193,15 +192,6 @@ func BuildStepRows(data *Data, opts StepRowOptions) []StepRow {
 		}
 	}
 	return rows
-}
-
-// runAttemptStartedAt returns when the given attempt of run started, which GitHub only
-// reports for the latest attempt.
-func runAttemptStartedAt(run *github.WorkflowRun, attempt int64) *time.Time {
-	if run == nil || int64(run.GetRunAttempt()) != attempt {
-		return nil
-	}
-	return optionalTime(run.GetRunStartedAt().Time)
 }
 
 // stepRowsOf converts the steps of one job, in step number order, into rows.

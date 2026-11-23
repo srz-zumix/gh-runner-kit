@@ -68,7 +68,7 @@ if (args.join(" ") === "runner-kit metrics --help") {
     process.stderr.write("failed to get attempt 1 of workflow run 42: GET https://api.github.com/repos/owner/repo/actions/runs/42/attempts/1: 404 Not Found []\\n");
     process.exitCode = 1;
 } else if (args[0] === "runner-kit" && args[1] === "job" && args[2] === "timeline" && args[args.indexOf("--attempt") + 1] === "1") {
-    output({ Repo: "owner/repo", RunID: "42", RunAttempt: 1, Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", StartedAt: at(0),
+    output({ Repo: "owner/repo", RunID: "42", RunAttempt: 1, Workflow: "CI", WorkflowPath: ".github/workflows/ci.yml", StartedAt: at(0), RunStartedAt: at(1),
         Jobs: process.env.FAKE_TIMELINE_EMPTY ? [] : [{ JobID: "101", Name: "build", Status: "completed", Conclusion: "timed_out",
             Kind: "self-hosted", Labels: ["self-hosted", "linux"], RunnerName: "box*", RunnerGroup: "Default",
             StartedAt: at(2), CompletedAt: at(22), Duration: 20000000000, Steps: [{ Number: 1, Name: "Compile", Key: "Compile", Occurrence: 1,

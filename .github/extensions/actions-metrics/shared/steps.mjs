@@ -167,6 +167,7 @@ export function normalizeJobRow(raw = {}, index = 0) {
         repo,
         runId,
         runAttempt: Number(raw.RunAttempt) || 1,
+        runStartedAt: parseTime(raw.RunStartedAt),
         jobId: id(raw.JobID),
         workflow,
         workflowPath,
@@ -199,6 +200,7 @@ export function normalizeStepRow(raw = {}, index = 0) {
     const jobCompletedAt = parseTime(raw.JobCompletedAt);
     const jobQueuedAt = parseTime(raw.JobQueuedAt);
     const runStartedAt = parseTime(raw.RunStartedAt);
+    const timelineOriginAt = parseTime(raw.TimelineOriginAt) ?? runStartedAt;
     const durationMs = nsToMs(raw.Duration) ?? (startedAt !== null && completedAt !== null ? Math.max(0, completedAt - startedAt) : 0);
     const offsetMs = nsToMs(raw.Offset) ?? (jobStartedAt !== null && startedAt !== null ? Math.max(0, startedAt - jobStartedAt) : 0);
     const repo = text(raw.Repo);
@@ -215,6 +217,7 @@ export function normalizeStepRow(raw = {}, index = 0) {
         runId,
         runAttempt: Number(raw.RunAttempt) || 1,
         runStartedAt,
+        timelineOriginAt,
         jobId: id(raw.JobID),
         workflow,
         workflowPath,
@@ -714,7 +717,7 @@ function outranksConclusion(candidate, current) {
     return left === RUN_CONCLUSION_RANK.length && String(candidate) < String(current);
 }
 
-export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", failedStep = null, stepConditions, includeAllAttempts = false } = {}) {
+export function aggregateSteps({ jobs = [], steps = [], runs = [], repository = "", mergeMatrix = true, showInfra = true, selectedJob = "", stepPattern = "", limit = 0, runner = {}, jobStatus = "", failedStep = null, stepConditions, includeAllAttempts = false } = {}) {
     const repositoryFilter = String(repository ?? "").trim();
     const runnerFilter = normalizeRunnerFilter(runner);
     const statusFilter = normalizeJobStatus(jobStatus);
@@ -723,6 +726,18 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
     includeAllAttempts ||= recovered;
     const collectedJobRows = jobs.map(normalizeJobRow).filter((row) => row.jobName);
     const collectedStepRows = steps.map(normalizeStepRow).filter((row) => row.stepKey && row.jobName);
+    const runStarts = new Map();
+    for (const row of collectedJobRows) {
+        if (row.runId && row.runStartedAt !== null) runStarts.set(keyOf(row.repo, row.runId, row.runAttempt), row.runStartedAt);
+    }
+    for (const row of collectedStepRows) {
+        if (row.runId && row.runStartedAt !== null) runStarts.set(keyOf(row.repo, row.runId, row.runAttempt), row.runStartedAt);
+    }
+    for (const run of runs) {
+        const startedAt = parseTime(run.run_started_at);
+        const runId = id(run.id);
+        if (run.repository && runId && startedAt !== null) runStarts.set(keyOf(run.repository, runId, Number(run.run_attempt) || 1), startedAt);
+    }
     const allJobRows = repositoryFilter ? collectedJobRows.filter((row) => row.repo === repositoryFilter) : collectedJobRows;
     const allStepRows = repositoryFilter ? collectedStepRows.filter((row) => row.repo === repositoryFilter) : collectedStepRows;
     // Matrix names and runner facets use every row in the selected repository,
@@ -832,11 +847,11 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
         // Every step row repeats its job's timestamps, so they are sampled once per job
         // rather than weighting each job by how many steps it ran.
         const jobIdentity = row.jobId || keyOf(row.runId, row.runAttempt, row.jobName);
-        if (Number.isFinite(row.runStartedAt) && !timeline.jobIds.has(jobIdentity)) {
+        if (Number.isFinite(row.timelineOriginAt) && !timeline.jobIds.has(jobIdentity)) {
             timeline.jobIds.add(jobIdentity);
-            if (Number.isFinite(row.jobQueuedAt)) timeline.queuedOffsets.push(Math.max(0, row.jobQueuedAt - row.runStartedAt));
-            if (Number.isFinite(row.jobStartedAt)) timeline.startOffsets.push(Math.max(0, row.jobStartedAt - row.runStartedAt));
-            if (Number.isFinite(row.jobCompletedAt)) timeline.endOffsets.push(Math.max(0, row.jobCompletedAt - row.runStartedAt));
+            if (Number.isFinite(row.jobQueuedAt)) timeline.queuedOffsets.push(Math.max(0, row.jobQueuedAt - row.timelineOriginAt));
+            if (Number.isFinite(row.jobStartedAt)) timeline.startOffsets.push(Math.max(0, row.jobStartedAt - row.timelineOriginAt));
+            if (Number.isFinite(row.jobCompletedAt)) timeline.endOffsets.push(Math.max(0, row.jobCompletedAt - row.timelineOriginAt));
         }
         // The step filter only narrows the step statistics, after every row has fed the
         // presence denominators and the job timing above.
@@ -1005,7 +1020,9 @@ export function aggregateSteps({ jobs = [], steps = [], repository = "", mergeMa
         stepConditionFacets: stepFacets,
         includeAllAttempts,
         jobStatusFacets: jobStatusFacets(allJobRows),
-        runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob).sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId)) || b.runAttempt - a.runAttempt).slice(0, 100),
+        runs: [...runList.values()].filter((row) => !selectedJob || row.job === selectedJob)
+            .map((row) => ({ ...row, startedAt: runStarts.get(keyOf(row.repo, row.runId, row.runAttempt)) ?? null }))
+            .sort((a, b) => String(b.runId).length - String(a.runId).length || String(b.runId).localeCompare(String(a.runId)) || b.runAttempt - a.runAttempt).slice(0, 100),
         meta: {
             analysedRuns: runIds.size,
             analysedAttempts: new Set([...jobRows, ...stepRows].filter((row) => row.runId).map((row) => keyOf(row.repo, row.runId, row.runAttempt))).size,

@@ -136,6 +136,7 @@ Existing collapsible settings keep their own open/closed behavior.
 | **Self-hosted runners** | The registered fleet, how busy each runner was, and the labels they carry. |
 | **Queue & capacity** | Queue time per runs-on label set, label demand against capacity, and the pool size each label set needs to hold a target wait. |
 | **Runner activity** | Concurrency over time, a per-runner busy heatmap, and one small chart per runner so a single runner's day can be read on its own. |
+| **Runner details** | Cross-workflow job outcomes, daily job executions and failure rate, and failed step-name counts for a runner name chosen in the tab or from Runner activity. |
 | **Step timeline** | Per-step statistics across the newest runs of one workflow file, a typical Gantt timeline, trends, run samples, and a single-run job/step Gantt with waiting bars. |
 | **Job explorer** | Raw job rows projected in the browser, with instant faceted filters and workflow run counts over time. |
 | **Usage & cost** | GitHub-hosted execution estimates by billing SKU, CPU, RAM and architecture, with known subtotals and unpriced job counts per workflow. |
@@ -192,6 +193,40 @@ repository's default branch, opening the selected GitHub host in a new tab.
 This works for both repository and organization targets. Dynamically generated
 workflows, such as Copilot and Dependabot, and rows without a file path remain
 plain text because there is no repository workflow file to link.
+
+## Runner details
+
+Type or pick a runner name in the tab's **Runner** field, or use **Details**
+beside a named runner in **Runner activity**, to open the cross-workflow
+drilldown. The field suggests every named runner in the retained snapshot with
+its job count and failure rate, most jobs first; it does not require loading
+Runner activity. Both read the retained snapshot and make no GitHub API
+requests. The default **latest job listing** uses the snapshot's
+`Latest` marker, including carried-over jobs; **Include all attempts** instead
+counts each retained job attempt.
+
+The outcome summary and daily trend use job conclusions, with failure,
+timed-out and startup-failure jobs divided by decided jobs. Cancelled, skipped
+and unfinished jobs are excluded. Daily buckets use job completion dates in
+UTC; days without a decided completion leave gaps in the failure-rate chart.
+Hover over, focus, or tap a point for the failed and decided job counts. The
+daily table is collapsed by default. **Daily job executions** counts every
+started job by UTC start date, showing days without starts as zero; point
+tooltips break each day into succeeded, failed and other jobs, and its daily
+table is also collapsed by default. The failed-step ranking counts distinct failed step
+executions by their exact reported step name across all workflows, independently
+of job conclusions. In **Recent jobs**, filter by result, failed step name,
+repository, workflow, and job name, then select **Apply**. Text filters match
+case-insensitive substrings; multiple conditions are combined. Filtering uses
+all retained jobs in the selected attempt scope before showing the latest 100
+matches. **Clear filters** restores the full list. The filters do not change the
+summary, chart, or failed-step ranking, and make no GitHub API requests.
+
+The runner is a normalized name aggregate, not a guaranteed physical-machine
+identity; hosted instance names may be grouped, and identical names can occur
+in different repositories. Step names do not establish an action's `uses:`
+identity or explain a failure's cause. Collection truncation and warnings stay
+visible so a partial snapshot is not mistaken for complete history.
 
 ## Hosted runner names
 
@@ -300,6 +335,9 @@ This option requires `metrics collect`,
 
 Each row in **Runs and single-run Gantt** also has a **GitHub** link next to
 **Gantt**, opening that run's attempt on the selected GitHub host in a new tab.
+The list and Gantt show the selected attempt's start time in the device's local
+time zone. A dash means the start is unavailable, rather than a queued job's
+time. The Gantt needs a current `gh runner-kit` build for manually opened runs.
 
 The tab groups matrix jobs by their base name only when at least two variants
 share that base. Infrastructure steps (`Set up job`, `Complete job`, and names starting with `Post` followed by a space) can be hidden. Durations come from GitHub's
@@ -316,6 +354,9 @@ infrastructure color. Hover over a step to see its failure rate, calculated
 as failed executions divided by started, non-skipped executions, matching
 the **Fail** column in **Step statistics**. Repository, job, status, runner and attempt
 filters also affect the shading. Single-run Gantt colors are unchanged.
+When the timeline contains jobs from more than one repository (for example,
+**All repositories** on an organization target), each job heading is prefixed
+with its repository as `OWNER/REPO · job`.
 
 For organization targets, **Repository** filters the loaded workflow sample
 by an exact `OWNER/REPO`. It defaults to **All repositories** and applies
@@ -596,6 +637,7 @@ The panel stops sending requests to a host as soon as one of them is refused for
 | `set_filters` | Change the target, the window, the filters, the collection limits or the projection settings, and re-collect. Every field is optional. |
 | `get_metrics` | Read what is on screen as structured JSON, by section. |
 | `get_collection_progress` | Read collection status, current attempt and last interrupted stage, counters, error code, reset time and scheduled `autoRetryAt`. Takes no input, does not wait for collection and makes no GitHub requests. |
+| `get_runner_details` | Read runner failure details from the retained snapshot without GitHub API requests. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
 | `get_step_metrics` | Collect Step timeline statistics for one workflow file across a capped number of newest runs, optionally including all attempts (`includeAllAttempts`, default false), filtering an exact `repository` (`OWNER/REPO`, empty/default: all), focusing a job, merging matrix variants, hiding infrastructure steps, filtering by job status/conclusion or runner facets (`runnerKinds`, `runsOnSets`, `runnerGroups`, `runnerNames`), and returning jobs, steps, timeline, trend or filtered runners JSON. Legacy scalar runner filters remain supported. |
 | `show_run_timeline` | Open one workflow run ID or URL as a single-run job/step Gantt and return the `gh runner-kit job timeline --format json` payload. |

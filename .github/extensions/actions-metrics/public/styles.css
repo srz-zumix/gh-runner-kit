@@ -1697,6 +1697,101 @@ button.heat__name--pick:hover {
     text-align: left;
     overflow-wrap: anywhere;
 }
+.runner-details-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.runner-details-trigger .ghost {
+    flex: 0 0 auto;
+}
+.runner-details__picker-wrap {
+    position: relative;
+    display: block;
+    width: min(420px, calc(100vw - 100px));
+}
+.runner-details__picker-wrap input[type="search"] {
+    width: 100%;
+}
+.runner-details__options {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 4;
+    width: 100%;
+    max-height: min(400px, 50vh);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.runner-details__options[hidden] {
+    display: none;
+}
+.runner-details__option {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 10px;
+    color: var(--text);
+    cursor: pointer;
+}
+.runner-details__option:hover,
+.runner-details__option[aria-selected="true"] {
+    background: var(--accent-muted);
+}
+.runner-details__option-name {
+    overflow-wrap: anywhere;
+}
+.runner-details__option-summary {
+    flex-shrink: 0;
+    color: var(--muted);
+}
+.runner-details__chart-wrap {
+    position: relative;
+}
+.runner-details__chart-hit {
+    fill: transparent;
+    cursor: pointer;
+}
+.runner-details__chart-hit:focus-visible {
+    outline: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+.runner-details__chart-tooltip {
+    position: absolute;
+    z-index: 1;
+    max-width: min(280px, 100%);
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+    font-size: var(--text-body-small, 12px);
+    line-height: 1.4;
+    pointer-events: none;
+    white-space: pre-line;
+}
+.runner-details__recent-filters {
+    margin-bottom: 12px;
+}
+.runner-details__trend-table {
+    margin-top: 12px;
+}
+.runner-details__trend-table > summary {
+    color: var(--muted);
+    cursor: pointer;
+    font-size: var(--text-body-small, 12px);
+}
+.runner-details__trend-table[open] > summary {
+    margin-bottom: 8px;
+}
 .runners-table__row--selectable:hover,
 .runners-table .row--selected {
     background: var(--background-color-muted, rgba(175, 184, 193, 0.12));

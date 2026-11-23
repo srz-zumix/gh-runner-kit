@@ -19,6 +19,7 @@ function timeline(attempt = 1, jobID = "9007199254740993", conclusion = "timed_o
         Event: "push",
         Branch: "main",
         StartedAt: at(origin),
+        RunStartedAt: at(origin + 1),
         Jobs: [{
             JobID: jobID,
             Name: "build",
@@ -54,7 +55,7 @@ test("attempt timelines preserve IDs, runner metadata, skipped steps and job-rel
     assert.equal(rows.jobs[0].Kind, "hosted");
     assert.equal(rows.jobs[0].Duration, ns(20));
     assert.equal(rows.steps[0].Offset, ns(1));
-    assert.equal(rows.steps[0].RunStartedAt, at(0));
+    assert.equal(rows.steps[0].RunStartedAt, at(1));
     assert.equal(rows.steps[0].JobStartedAt, at(2));
     assert.equal(rows.steps[0].JobConclusion, "timed_out");
     assert.equal(rows.steps.length, 3);
@@ -72,7 +73,7 @@ test("merging attempts deduplicates carried-over jobs without merging reruns or 
     const rows = mergeAttemptRows({ jobs: [...carried.jobs, ...rerun.jobs], steps: [...carried.steps, ...rerun.steps] }, [original, elsewhere]);
     assert.equal(rows.jobs.length, 3);
     assert.equal(rows.steps.length, 9);
-    assert.equal(rows.steps[0].RunStartedAt, at(0));
+    assert.equal(rows.steps[0].RunStartedAt, at(1));
     assert.equal(carried.steps[0].RunStartedAt, null);
 });
 
@@ -88,11 +89,27 @@ test("merging attempts keeps the snapshot's inventory-backed runner metadata on 
     assert.equal(rows.steps.length, 3);
     assert.deepEqual([...rows.jobs, ...rows.steps].map((row) => row.Kind), Array(4).fill("self-hosted"));
     assert.deepEqual(rows.steps.map((row) => row.RunnerName), Array(3).fill("linux-01"));
-    assert.deepEqual(rows.steps.map((row) => row.RunStartedAt), [at(50), at(0), at(0)]);
+    assert.deepEqual(rows.steps.map((row) => row.RunStartedAt), [at(50), at(1), at(1)]);
     assert.equal(carried.steps[1].RunStartedAt, null);
     const selfHosted = aggregateSteps({ ...rows, includeAllAttempts: true, runner: { kind: "self-hosted" } });
     assert.equal(selfHosted.meta.totalJobs, 1);
     assert.equal(selfHosted.stepStats.find((row) => row.stepKey === "Compile").samples, 1);
+});
+
+test("legacy timeline origin is not mistaken for the run start", () => {
+    const raw = timeline();
+    delete raw.RunStartedAt;
+    assert.equal(timelineRows(raw, "owner/repo").steps[0].RunStartedAt, null);
+});
+
+test("historical attempts with no steps keep their start on the job row", () => {
+    const raw = timeline();
+    raw.Jobs[0].Steps = [];
+    const rows = timelineRows(raw, "owner/repo");
+    const carried = { jobs: [{ ...rows.jobs[0], RunStartedAt: null, Kind: "self-hosted" }], steps: [] };
+    const merged = mergeAttemptRows(carried, [rows]);
+    assert.equal(merged.jobs[0].Kind, "self-hosted");
+    assert.equal(aggregateSteps({ ...merged, includeAllAttempts: true }).runs[0].startedAt, Date.parse(at(1)));
 });
 
 test("earlier attempt rows honour collection kind, runner, exclusions and subset label filters", async () => {

@@ -30,6 +30,7 @@ import { DashboardInstance } from "./lib/instance.mjs";
 import { startInstanceServer } from "./lib/server.mjs";
 import { loadPrefs, rememberStepSettings } from "./lib/prefs.mjs";
 import { collectStepMetrics } from "./lib/steprows.mjs";
+import { collectRunnerDetails } from "./lib/runnerdetails.mjs";
 import { normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters } from "./shared/steps.mjs";
 import { collectRunTimeline } from "./lib/timeline.mjs";
 
@@ -543,7 +544,7 @@ const canvas = createCanvas({
     id: "actions-metrics",
     displayName: "Actions metrics",
     description:
-        "Dashboard for analysing the GitHub Actions metrics of one repository or of a whole organization: workflow reliability and retry rate, self-hosted runner utilisation, queue saturation, concurrency over time, label supply/demand and recommended pool sizes reported by gh runner-kit, plus billable usage and cost.",
+        "Dashboard for analysing GitHub Actions workflow reliability, self-hosted runner utilisation, queue saturation, capacity, billable usage and cost, with cross-workflow runner-name drilldowns.",
     // One schema for the canvas input and for `set_filters` alike, so a
     // setting can never be reachable from one and not the other.
     inputSchema: querySchema,
@@ -742,6 +743,42 @@ const canvas = createCanvas({
             },
         },
 
+        {
+            name: "get_runner_details",
+            description:
+                "Read recent jobs, job-conclusion failure rate by UTC completion day, and failed-step name counts across every workflow for one normalized runner name from the retained snapshot. Does not collect GitHub data. The runner is a name aggregate, not a physical-machine identity.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    runner: { type: "string", minLength: 1, maxLength: 500, description: "Exact normalized runner name shown in Runner activity." },
+                    includeAllAttempts: { type: "boolean", description: "Include every retained run attempt instead of the default latest-job listing." },
+                },
+                required: ["runner"],
+                additionalProperties: false,
+            },
+            handler: async (ctx) => {
+                const { instance } = panelFor(ctx.instanceId);
+                const state = await settled(instance);
+                if (!state.metrics?.meta?.dataset?.id) {
+                    throw new CanvasError("runner_details_unavailable", "The dashboard has no retained job snapshot for runner details");
+                }
+                const runner = String(ctx.input?.runner ?? "").trim();
+                if (!runner) throw new CanvasError("runner_required", "A runner name is required");
+                const query = instance.effectiveQuery;
+                try {
+                    return await instance.store.withRetainedDataset(query, dataset => collectRunnerDetails({
+                        dataset,
+                        target: targetOf(query),
+                        cwd: instance.store.cwd,
+                        runner,
+                        includeAllAttempts: ctx.input?.includeAllAttempts === true,
+                        signal: instance.authAbort.signal,
+                    }));
+                } catch (error) {
+                    throw new CanvasError("runner_details_failed", error?.message ?? String(error));
+                }
+            },
+        },
         {
             name: "get_step_metrics",
             description:

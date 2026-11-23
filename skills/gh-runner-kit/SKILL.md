@@ -534,7 +534,8 @@ runner objects, regardless of `--fields`.
 ### job timeline
 
 Shows when every job and step of one workflow run attempt ran, on a time axis
-starting when the attempt started, like Kesin11/actions-timeline.
+starting at the attempt start or an earlier queued job, like Kesin11/actions-timeline.
+In JSON, `RunStartedAt` is the attempt start; `StartedAt` is the axis origin.
 
 ```bash
 gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] \
@@ -973,7 +974,8 @@ it shows every job the workflow-run jobs endpoint returned.
 
 JSON and NDJSON expose `ExecutionStarted`, based on runner allocation, a
 started non-skipped step or positive per-job usage. Cancelled jobs may have
-timestamps without execution.
+timestamps without execution. `RunStartedAt` is the job's attempt start, or
+null when unavailable.
 
 `--format ndjson` writes one JSON object per line, which is what a large listing
 should use. `--jq` and `--template` require an explicit `--format json`.

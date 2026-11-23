@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { aggregateSteps, stepIdOf } from "../shared/steps.mjs";
+import { formatTimestamp } from "../shared/timezone.mjs";
 
 const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const chartsURL = moduleURL((await readFile(new URL("../public/charts.js", import.meta.url), "utf8"))
@@ -172,6 +173,14 @@ test("typical bars shade red by failure rate while zero-failure and infrastructu
     assert.ok(nodes.some((node) => node.className === "card__note" && node.textContent.includes("darker red means a higher failure rate")));
 });
 
+test("typical job headings name the repository only when several repositories are shown", () => {
+    const job = (repo) => ({ repo, job: "build", startOffsetMs: 0, steps: [] });
+    const headings = (jobs) => stepPanels({ typicalTimeline: jobs }).flatMap(descendants)
+        .filter((node) => node.className === "gantt__group").map((node) => node.textContent);
+    assert.deepEqual(headings([job("octo/app"), job("octo/lib")]), ["octo/app · build", "octo/lib · build"]);
+    assert.deepEqual(headings([job("octo/app")]), ["build"]);
+});
+
 test("failure shading stays visible at 1% and increases continuously to solid red", async () => {
     const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
     const rule = css.match(/\.gantt__bar--failure-rate\s*\{([^}]+)\}/)?.[1];
@@ -222,6 +231,31 @@ test("every run-list row keeps its Gantt controls and links to its exact GitHub 
             });
         }
     }
+});
+
+test("run list and Gantt display attempt start without confusing it with the axis origin", () => {
+    const start = "2026-01-02T03:04:05Z";
+    const runs = [
+        { repo: "owner/repo", runId: "42", runAttempt: 2, startedAt: Date.parse(start) },
+        { repo: "owner/repo", runId: "42", runAttempt: 1, startedAt: null },
+        { repo: "owner/other", runId: "42", runAttempt: 2, startedAt: "invalid" },
+    ];
+    const timeline = { Repo: "owner/repo", RunID: "42", RunAttempt: 2, Workflow: "CI", StartedAt: "2026-01-02T03:00:00Z", RunStartedAt: start, Jobs: [] };
+    const nodes = stepPanels({ runs }, { steps: { timeline } }).flatMap(descendants);
+    const table = nodes.find(node => node.className === "runs-table");
+    const headers = table.children[0].children[0].children.map(node => node.textContent);
+    const index = headers.indexOf("Started");
+    assert.ok(index >= 0);
+    assert.deepEqual(table.children[1].children.map(row => row.children[index].textContent), [formatTimestamp(start), "–", "–"]);
+    const gantt = nodes.find(node => node.attributes["aria-label"] === "Single-run Gantt");
+    assert.ok(gantt.textContent.includes(`Started: ${formatTimestamp(start)}`));
+    const legacy = { ...timeline };
+    delete legacy.RunStartedAt;
+    const legacyNodes = stepPanels({ runs }, { steps: { timeline: legacy } }).flatMap(descendants);
+    assert.ok(legacyNodes.find(node => node.attributes["aria-label"] === "Single-run Gantt").textContent.includes(`Started: ${formatTimestamp(start)}`));
+    legacy.RunAttempt = 1;
+    const missingNodes = stepPanels({ runs }, { steps: { timeline: legacy } }).flatMap(descendants);
+    assert.ok(missingNodes.find(node => node.attributes["aria-label"] === "Single-run Gantt").textContent.includes("Started: –"));
 });
 
 function interactivePanel(t, steps = {}, statePatch = {}) {

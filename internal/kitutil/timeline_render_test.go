@@ -20,7 +20,7 @@ func testTimeline() metrics.RunTimeline {
 	}
 	return metrics.RunTimeline{
 		Repo: "octo/app", RunID: 9007199254740993, RunAttempt: 1, Workflow: "CI: main",
-		Status: "completed", Conclusion: "failure", StartedAt: at(0), CompletedAt: at(3700), Duration: 3700 * time.Second,
+		Status: "completed", Conclusion: "failure", RunStartedAt: at(2), StartedAt: at(0), CompletedAt: at(3700), Duration: 3700 * time.Second,
 		Jobs: []metrics.TimelineJob{
 			{
 				JobID: 9007199254740995, Name: "build; #1", Status: "completed", Conclusion: "failure",
@@ -79,7 +79,7 @@ func TestWriteRunTimelineJSONQuotesLargeIDs(t *testing.T) {
 		t.Fatalf("json.MarshalIndent() error = %v", err)
 	}
 	out := string(data)
-	for _, want := range []string{`"RunID": "9007199254740993"`, `"JobID": "9007199254740995"`, `"Steps": []`} {
+	for _, want := range []string{`"RunID": "9007199254740993"`, `"JobID": "9007199254740995"`, `"RunStartedAt": "2024-01-01T00:00:02Z"`, `"StartedAt": "2024-01-01T00:00:00Z"`, `"Steps": []`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not contain %s:\n%s", want, out)
 		}

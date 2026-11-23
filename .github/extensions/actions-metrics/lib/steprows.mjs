@@ -210,7 +210,7 @@ export async function collectStepMetrics({
         }
         const jobs = { rows: selection.jobs, malformed: 0, warnings: dataset.meta.warnings };
         const aggregate = aggregateSteps({
-            jobs: jobs.rows, steps: steps.rows, repository, mergeMatrix, showInfra,
+            jobs: jobs.rows, steps: steps.rows, runs: dataset.runs, repository, mergeMatrix, showInfra,
             selectedJob: job, jobStatus, failedStep, stepConditions, includeAllAttempts, stepPattern: step, limit,
             runner: normalizeRunnerFilter(runnerFilter),
         });

@@ -141,6 +141,21 @@ func TestBuildRunTimelineFallsBackToJobsForOrigin(t *testing.T) {
 	if tl.StartedAt == nil || !tl.StartedAt.Equal(sec(10).Time) {
 		t.Fatalf("StartedAt = %v, want the earliest queued job at %v", tl.StartedAt, sec(10).Time)
 	}
+	if tl.RunStartedAt != nil {
+		t.Fatalf("RunStartedAt = %v, want nil", tl.RunStartedAt)
+	}
+}
+
+func TestBuildRunTimelineKeepsRunStartSeparateFromAxisOrigin(t *testing.T) {
+	run, jobs := timelineFixture()
+	run.RunStartedAt = github.Ptr(sec(12))
+	tl := BuildRunTimeline(repository.Repository{Owner: "owner", Name: "repo"}, run, jobs, TimelineOptions{})
+	if tl.RunStartedAt == nil || !tl.RunStartedAt.Equal(sec(12).Time) {
+		t.Fatalf("RunStartedAt = %v, want %v", tl.RunStartedAt, sec(12).Time)
+	}
+	if tl.StartedAt == nil || !tl.StartedAt.Equal(sec(10).Time) || tl.Jobs[0].StartedOffset != 5*time.Second {
+		t.Fatalf("axis origin or job offset changed: %+v", tl)
+	}
 }
 
 func TestBuildRunTimelineFilters(t *testing.T) {

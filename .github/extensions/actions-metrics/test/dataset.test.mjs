@@ -78,7 +78,7 @@ if (args[0] === "api") {
     const selectedJobs = jobs.filter(job => selected.has(job.RunID));
     if (args[2] === "runs") selectedRuns.forEach(output);
     else if (args[2] === "jobs") selectedJobs.forEach(output);
-    else if (args[2] === "steps") selectedJobs.forEach(job => output({...job,
+    else if (args[2] === "steps") selectedJobs.filter(job => job.RunID !== "6001").forEach(job => output({...job,
         JobConclusion: job.Conclusion, JobStartedAt: job.StartedAt, JobCompletedAt: job.CompletedAt,
         RunStartedAt: job.StartedAt, StepNumber: 1, StepName: "Compile", StepKey: "Compile",
         StepOccurrence: 1, StepStatus: "completed", StepConclusion: "success", Offset: 0}));
@@ -169,6 +169,7 @@ if (args[0] === "api") {
         assert.equal((await calls()).length, before);
         const latest = await collectStepMetrics({...options, includeAllAttempts: false});
         assert.equal(latest.meta.totalJobs, 6001);
+        assert.equal(latest.runs.find(row => row.runId === "6001").startedAt, Date.parse("2026-10-01T01:40:00Z"));
         const sampled = await collectStepMetrics({...options, runBudget: 2, includeAllAttempts: true});
         assert.equal(sampled.meta.analysedRuns, 2);
         assert.equal(sampled.meta.truncated, true);

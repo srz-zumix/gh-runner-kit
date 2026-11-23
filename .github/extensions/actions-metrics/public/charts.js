@@ -272,7 +272,7 @@ export function renderStackedTimeline(timeline, {
 export function renderLineTimeline(timeline, {
     height = 220, series = [], label = "", emptyMessage = "No activity in this window.",
     formatBucket = null, formatValue = value => value.toLocaleString(), formatTooltip = null,
-    showAllTicks = false, showZeroPoints = false,
+    showAllTicks = false, showZeroPoints = false, max: fixedMax = null,
 } = {}) {
     const buckets = timeline?.buckets ?? [];
     if (buckets.length === 0 || series.length === 0
@@ -285,7 +285,7 @@ export function renderLineTimeline(timeline, {
     for (const entry of series) {
         for (const bucket of buckets) largest = Math.max(largest, bucket[entry.key] ?? 0);
     }
-    const max = niceCeiling(largest);
+    const max = Number.isFinite(fixedMax) && fixedMax > 0 ? fixedMax : niceCeiling(largest);
     const step = plot.width / buckets.length;
     const root = svg("svg", {
         class: "chart", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none",

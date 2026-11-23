@@ -8,7 +8,9 @@ description: Open and drive the Actions metrics dashboard, the Copilot CLI canva
 Reference for the `actions-metrics` canvas extension shipped in this repository
 at `.github/extensions/actions-metrics/`. It collects the `gh runner-kit
 metrics` reports over a single window, renders them as a dashboard, and exposes
-every number it shows as structured JSON. It also has a Step timeline tab for per-step workflow timing statistics and single-run job/step Gantt timelines.
+every number it shows as structured JSON. It also has a cross-workflow Runner
+details view and a Step timeline tab for per-step workflow timing statistics
+and single-run job/step Gantt timelines.
 
 ## Dashboard or CLI
 
@@ -123,6 +125,7 @@ text; they do not identify a repository workflow file.
 | `set_filters` | Change the target, the window, the filters or the limits. Collection fields re-collect; display fields, including `filterFrom`/`filterTo`, re-read the retained dataset without GitHub requests. Every field is optional; an omitted field keeps its value. |
 | `get_metrics` | Read the current numbers as JSON. Takes `section` (`overview`, `runners`, `usage`, `fleet`, `all`) and `limit` (rows per ranked table, default 10). |
 | `get_collection_progress` | Read collection status, current attempt, last interrupted stage, numeric counters, error code, reset time and scheduled `autoRetryAt`. Takes no input; does not wait for completion or make GitHub requests. |
+| `get_runner_details` | Read runner failure details from the retained snapshot without GitHub API requests. |
 | `refresh` | Re-collect the current window, reusing completed jobs and historical metadata. `bypassCache: true` ignores caches for this attempt. Fails with `rate_limited` during cooldown and schedules automatic resume with caches. Use when the user asks for fresh data, not to fix an empty result. |
 | `trace_runner` | Rebuild the concurrency timeline from the jobs of the runners matching a query, and draw a per-runner heatmap. |
 | `get_step_metrics` | Collect Step timeline statistics for one workflow file. Inputs: `workflow` (file name/path or ID), `repository` (exact `OWNER/REPO`; empty/omitted means all), `job`, `jobStatus` (job lifecycle status or conclusion; empty/omitted means all), `includeAllAttempts` (boolean, default false), `section` (`jobs`, `steps`, `timeline`, `trend`, `runners`), `limit`, `mergeMatrix`, `showInfra`, `runBudget`, optional array facets `runnerKinds`, `runsOnSets`, `runnerGroups`, `runnerNames`, legacy scalar filters `runnerKind`, `runsOn`, `runnerGroup`, `runner`, `runnerExact` (boolean, default false), and `reuseRows`. |
@@ -252,6 +255,41 @@ workflow totals; do not convert them to zero or present a known subtotal as a
 complete total. Machine rows expose CPU, RAM, architecture, rate, source and
 the reason a price is missing.
 
+## Runner details
+
+Choose a runner in the tab's **Runner** field, or select **Details** beside a
+named runner in **Runner activity**. The field suggests every named runner in
+the retained snapshot (via `GET /api/runner-names`, `?attempts=all` for all
+attempts) with job count and failure rate, without loading Runner activity.
+The view reads the retained snapshot across workflows without GitHub API requests.
+Latest-job mode uses the snapshot's `Latest` marker, including carried-over
+jobs; **Include all attempts** counts each retained job attempt.
+
+Job failure rate uses failed (`failure`, `timed_out`, `startup_failure`) divided
+by decided jobs; cancelled, skipped and unfinished jobs are excluded. The daily
+trend is a chart grouped by job completion date in UTC, with gaps for days
+without a decided completion. Hovering over, focusing, or tapping a point shows
+the failed and decided job counts; the daily table is collapsed by default.
+**Daily job executions** (`executions.days`: `day`, `jobs`, `succeeded`,
+`failed`, `other`) counts every started job by UTC start date; days between
+starts are zero, and `executions.unstartedJobs` counts jobs without a start.
+It uses the selected attempt scope and is not narrowed by Recent jobs filters.
+The failed-step ranking counts distinct failed executions by exact reported
+step name, independently of job conclusions. **Recent jobs** filters result,
+failed step name, repository, workflow, and job name using **Apply** and
+**Clear filters**. Text filters use case-insensitive substring matching and
+combine with AND; results include jobs without conclusions as a separate
+choice. Filtering covers all retained jobs in the selected attempt scope
+before the latest 100 matches are shown. It rereads the snapshot locally, not
+from GitHub, and does not change the summary, trend, or failed-step ranking.
+The failed-step ranking is capped at 50 names.
+
+The selected runner is a normalized name aggregate, not a guaranteed physical
+machine; hosted instance names may be grouped, and identical names can occur
+in different repositories. Step names do not prove an action's `uses:`
+identity or explain why it failed. Surface snapshot truncation and warnings,
+and distinguish an observed failed step from the job's overall conclusion.
+
 Skipped jobs and cancellations without runner allocation, a started
 non-skipped step or positive per-job usage are excluded from cost counts,
 minutes and unknown coverage.
@@ -332,7 +370,9 @@ unavailable until steps are loaded and during a fresh collection.
 All-attempt mode gives the run list one row per attempt; selecting a row opens
 that attempt's Gantt. Each run-list row also has a **GitHub** link next to
 **Gantt** that opens the same attempt on the dashboard's GitHub host in a new
-tab. `meta.latestAttemptBasis` is false,
+tab. The run list and single-run Gantt show the attempt start in the device's
+local time zone, or a dash when unavailable. A current `gh runner-kit` build
+provides the start for manually opened Gantts. `meta.latestAttemptBasis` is false,
 `meta.analysedAttempts` counts attempts with matching rows, and
 `meta.historicalAttemptsRequested` / `meta.historicalAttemptsWithJobs` report
 historical coverage. Surface `meta.warnings`: empty or unreadable earlier
@@ -509,7 +549,9 @@ zero failures. A positive failure rate turns the bar red, using at least a
 30% red blend and increasing continuously to solid red at 100%, including
 infrastructure steps. The tooltip shows
 the percentage. Shading reflects the current repository, job, status, runner and attempt
-filters. Single-run Gantt colors are unchanged.
+filters. Single-run Gantt colors are unchanged. When the timeline spans
+several repositories (e.g. **All repositories**), job headings are prefixed
+as `OWNER/REPO · job` so same-named jobs stay distinguishable.
 
 ## Target and scope
 

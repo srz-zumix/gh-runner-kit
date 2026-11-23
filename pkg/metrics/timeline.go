@@ -23,6 +23,8 @@ type RunTimeline struct {
 	URL          string
 	Status       string
 	Conclusion   string
+	// RunStartedAt is the attempt start, independently of the timeline origin.
+	RunStartedAt *time.Time
 	// StartedAt is the origin of the time axis: the instant the attempt started, or the
 	// instant its first job was queued when that came earlier or the start is unknown.
 	StartedAt *time.Time
@@ -137,7 +139,8 @@ func BuildRunTimeline(repo repository.Repository, run *github.WorkflowRun, jobs 
 		return cmp.Compare(a.row.JobID, b.row.JobID)
 	})
 
-	origin := optionalTime(run.GetRunStartedAt().Time)
+	runStartedAt := optionalTime(run.GetRunStartedAt().Time)
+	origin := runStartedAt
 	var end *time.Time
 	for _, e := range entries {
 		origin = earliest(origin, e.row.QueuedAt)
@@ -157,6 +160,7 @@ func BuildRunTimeline(repo repository.Repository, run *github.WorkflowRun, jobs 
 		URL:          run.GetHTMLURL(),
 		Status:       run.GetStatus(),
 		Conclusion:   run.GetConclusion(),
+		RunStartedAt: runStartedAt,
 		StartedAt:    origin,
 		CompletedAt:  end,
 		Duration:     span(origin, end),

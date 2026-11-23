@@ -7,6 +7,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ghTokenSource, setCanvasGhToken } from "./gh.mjs";
 import { collectStepMetrics } from "./steprows.mjs";
+import { collectRunnerDetails, listRunnerNames, normalizeRecentJobFilters } from "./runnerdetails.mjs";
 import { normalizeJobStatus, normalizeRunnerFilter, normalizeStepFilters } from "../shared/steps.mjs";
 import { collectRunTimeline } from "./timeline.mjs";
 import { filtersOf, limitsOf, targetOf, targetKey } from "./query.mjs";
@@ -267,6 +268,67 @@ async function handle(req, res, url, instance) {
                 return;
             }
             sendJson(res, 502, { available: false, reason: error?.message ?? String(error) });
+        }
+        return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/runner-names") {
+        const query = instance.effectiveQuery;
+        if (!instance.store.snapshot(instance.identity)?.metrics?.meta?.dataset?.id) {
+            throw httpError(409, "Collect dashboard metrics before listing runners");
+        }
+        try {
+            const includeAllAttempts = url.searchParams.get("attempts") === "all";
+            const result = await instance.store.withRetainedDataset(query, dataset => ({
+                datasetId: dataset.meta?.id ?? null,
+                attemptScope: includeAllAttempts ? "all" : "latest",
+                runners: listRunnerNames(dataset.jobs, { includeAllAttempts }),
+            }));
+            sendJson(res, 200, result);
+        } catch (error) {
+            sendJson(res, error?.httpStatus ?? 502, { error: error?.message ?? String(error) });
+        }
+        return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/runner-details") {
+        const body = await readBody(req);
+        const runner = typeof body.runner === "string" ? body.runner.trim() : "";
+        if (!runner || runner.length > 500) throw httpError(400, "A runner name up to 500 characters is required");
+        let recentJobFilters;
+        try {
+            recentJobFilters = normalizeRecentJobFilters(body.recentJobFilters);
+        } catch (error) {
+            throw httpError(400, error.message);
+        }
+        const query = instance.effectiveQuery;
+        const current = instance.store.snapshot(instance.identity);
+        if (!current?.metrics?.meta?.dataset?.id) {
+            throw httpError(409, "Collect dashboard metrics before loading runner details");
+        }
+        const abort = new AbortController();
+        const authSignal = instance.authAbort.signal;
+        const abortForAuth = () => abort.abort();
+        const abortForDisconnect = () => {
+            if (!res.writableEnded) abort.abort();
+        };
+        if (authSignal.aborted) abort.abort();
+        else authSignal.addEventListener("abort", abortForAuth, { once: true });
+        res.once("close", abortForDisconnect);
+        try {
+            const result = await instance.store.withRetainedDataset(query, dataset => collectRunnerDetails({
+                dataset,
+                target: targetOf(query),
+                cwd: instance.store.cwd,
+                runner,
+                includeAllAttempts: body.includeAllAttempts === true,
+                recentJobFilters,
+                signal: abort.signal,
+            }));
+            sendJson(res, 200, result);
+        } catch (error) {
+            if (!res.destroyed) sendJson(res, error?.httpStatus ?? 502, { error: error?.message ?? String(error) });
+        } finally {
+            res.off("close", abortForDisconnect);
+            authSignal.removeEventListener("abort", abortForAuth);
         }
         return;
     }
