@@ -622,8 +622,11 @@ function typicalTimeline(result) {
     if (jobs.length === 0) return el("p", { class: "empty", text: "Load a workflow to draw the typical step timeline." });
     const max = maxOf(jobs.flatMap((job) => job.steps.map((step) => Math.max(job.startOffsetMs + step.offsetMs + step.durationMs, job.startOffsetMs + step.offsetP90Ms + step.durationP90Ms))), 1000);
     const rows = [ganttAxis(max)];
+    // Jobs of several repositories can share a name, so qualify them by repository.
+    const multiRepo = new Set(jobs.map((job) => job.repo).filter(Boolean)).size > 1;
     for (const job of jobs) {
-        rows.push(el("div", { class: "gantt__group", text: job.job }));
+        const label = multiRepo && job.repo ? `${job.repo} · ${job.job}` : job.job;
+        rows.push(el("div", { class: "gantt__group", text: label, title: label }));
         for (const step of job.steps) {
             const start = job.startOffsetMs + step.offsetMs;
             const rangeStart = job.startOffsetMs + step.offsetP25Ms;
@@ -631,7 +634,7 @@ function typicalTimeline(result) {
             const variant = step.failureRate > 0 ? " gantt__bar--failed gantt__bar--failure-rate" : step.infrastructure ? " gantt__bar--infra" : "";
             rows.push(ganttStepRow({
                 name: step.name,
-                tooltip: `${job.job} / ${step.name}\np50 ${formatDuration(step.durationMs)} · p90 ${formatDuration(step.durationP90Ms)} · failure ${percent(step.failureRate)}`,
+                tooltip: `${label} / ${step.name}\np50 ${formatDuration(step.durationMs)} · p90 ${formatDuration(step.durationP90Ms)} · failure ${percent(step.failureRate)}`,
                 duration: step.durationMs,
                 segments: [
                     el("span", { class: "gantt__range", style: span(rangeStart, rangeLength, max) }),
@@ -719,7 +722,7 @@ function runList(result, state) {
     const open = state?.steps?.timeline;
     const origin = `https://${state?.target?.host || "github.com"}`;
     return el("table", { class: "runs-table" }, [
-        el("thead", {}, [el("tr", {}, [el("th", { text: "Run" }), el("th", { class: "num", text: result?.includeAllAttempts ? "Attempt" : "Attempts" }), el("th", { text: "Result" }), el("th", { text: "Runner" }), el("th", { class: "num", text: "Total" }), el("th", { text: "Open" })])]),
+        el("thead", {}, [el("tr", {}, [el("th", { text: "Run" }), el("th", { class: "num", text: result?.includeAllAttempts ? "Attempt" : "Attempts" }), el("th", { text: "Started" }), el("th", { text: "Result" }), el("th", { text: "Runner" }), el("th", { class: "num", text: "Total" }), el("th", { text: "Open" })])]),
         el("tbody", {}, rows.slice(0, 30).map((row) => {
             const show = () => void openRunTimeline(state, row.runId, row.repo ?? "", row.runAttempt);
             const active = open && String(open.RunID) === String(row.runId) && Number(open.RunAttempt) === Number(row.runAttempt);
@@ -727,6 +730,7 @@ function runList(result, state) {
             return el("tr", { class: active ? "row--selected" : "" }, [
                 el("td", {}, [el("button", { type: "button", class: "link-button", title: "Show this run's Gantt", text: row.runId, onclick: show })]),
                 el("td", { class: `num${row.runAttempt > 1 ? " runs-table__retried" : ""}`, title: result?.includeAllAttempts ? `Statistics for attempt ${row.runAttempt}; click Gantt to open this attempt` : row.runAttempt > 1 ? `Re-run ${row.runAttempt - 1} time(s); statistics use attempt ${row.runAttempt}` : null, text: number(row.runAttempt) }),
+                el("td", { text: formatRunStart(row.startedAt) }),
                 el("td", { text: row.conclusion ?? "–" }),
                 (() => {
                     const summary = listSummary(row.runners);
@@ -744,8 +748,15 @@ function runList(result, state) {
     ]);
 }
 
+function formatRunStart(value) {
+    if (value === null || value === undefined || value === "" || !Number.isFinite(new Date(value).getTime())) return "–";
+    return formatTimestamp(value);
+}
+
 function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", repository = "", failedStep = null, stepConditions) {
     if (!timeline) return el("p", { class: "empty", text: "Open a run to show a single-run Gantt." });
+    const listedRun = (stats?.runs ?? []).find((row) => row.repo === timeline.Repo
+        && String(row.runId) === String(timeline.RunID) && Number(row.runAttempt) === Number(timeline.RunAttempt));
     const conditions = normalizeStepFilters({ stepConditions, failedStep }).stepConditions;
     const jobs = filterTimelineJobs(timeline, jobStatus, repository, stats?.runs, failedStep, conditions);
     const sameRepository = !repository || timeline.Repo === repository;
@@ -769,6 +780,7 @@ function runTimeline(timeline, stats, workflow, onClose, jobStatus = "", reposit
             el("span", { class: "gantt__title", text: `${timeline.Workflow} #${timeline.RunID} attempt ${timeline.RunAttempt}` }),
             onClose ? el("button", { type: "button", class: "ghost gantt__close", title: "Close this Gantt", "aria-label": "Close this Gantt", text: "× Close", onclick: onClose }) : null,
         ]),
+        el("p", { class: "card__note", text: `Started: ${formatRunStart(timeline.RunStartedAt ?? listedRun?.startedAt)}` }),
         sameWorkflow ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.WorkflowPath || timeline.Workflow}, not ${workflow}; slow-step highlighting against p90 is off.` }),
         sameRepository ? null : el("p", { class: "notice notice--warn", text: `This run belongs to ${timeline.Repo || "an unknown repository"}, not ${repository}. Clear the repository filter to show its jobs. Copy mermaid exports the full run.` }),
         jobStatus ? el("p", { class: "notice", text: `Job status: ${jobStatus}; showing ${number(jobs.length)} of ${number(timeline.Jobs?.length ?? 0)} jobs. Copy mermaid exports the full run.` }) : null,

@@ -118,6 +118,29 @@ test("aggregateSteps handles duplicate names and Go step counts", () => {
     assert.equal(upload2.executed, 1);
 });
 
+test("run starts follow repository and attempt, regardless of job ordering or filters", () => {
+    const first = { ...job(1, "build", 1, 21), RunID: "9007199254740993", RunAttempt: 1, RunnerName: "old" };
+    const second = { ...job(2, "build", 2, 22), RunID: first.RunID, RunAttempt: 2, RunnerName: "new" };
+    const other = { ...second, Repo: "owner/other", JobID: "3" };
+    const firstStep = { ...step(1, "build", first.RunID, 1, "Compile", 2, 3), RunStartedAt: sec(4) };
+    const otherStep = { ...firstStep, Repo: other.Repo, JobID: "3", RunAttempt: 2, RunStartedAt: sec(6) };
+    const runs = [{ repository: first.Repo, id: first.RunID, run_attempt: 2, run_started_at: sec(5) }];
+    for (const jobs of [[first, second, other], [other, second, first]]) {
+        const result = aggregateSteps({ jobs, steps: [firstStep, otherStep], runs });
+        assert.equal(result.runs.find(row => row.repo === first.Repo).startedAt, Date.parse(sec(5)));
+        assert.equal(result.runs.find(row => row.repo === other.Repo).startedAt, Date.parse(sec(6)));
+        const historical = aggregateSteps({ jobs, steps: [firstStep, otherStep], runs, includeAllAttempts: true });
+        assert.equal(historical.runs.find(row => row.repo === first.Repo && row.runAttempt === 1).startedAt, Date.parse(sec(4)));
+        assert.equal(historical.runs.find(row => row.repo === first.Repo && row.runAttempt === 2).startedAt, Date.parse(sec(5)));
+        const filtered = aggregateSteps({ jobs, steps: [firstStep, otherStep], runs, runner: { name: "new" } });
+        assert.equal(filtered.runs.find(row => row.repo === first.Repo).startedAt, Date.parse(sec(5)));
+    }
+    const missing = aggregateSteps({ jobs: [second], runs: [{ ...runs[0], run_attempt: 1 }], steps: [] });
+    assert.equal(missing.runs[0].startedAt, null);
+    const historicalNoSteps = aggregateSteps({ jobs: [{ ...first, RunStartedAt: sec(4) }], runs, steps: [], includeAllAttempts: true });
+    assert.equal(historicalNoSteps.runs[0].startedAt, Date.parse(sec(4)));
+});
+
 test("typical timeline uses median observed offsets", () => {
     const result = aggregateSteps({ jobs: [job(1, "build", 1, 21), job(2, "build", 1, 31)], steps: [step(1, "build", 101, 2, "Compile", 4, 10), step(2, "build", 102, 2, "Compile", 8, 20)] });
     const build = result.typicalTimeline.find((row) => row.job === "build");

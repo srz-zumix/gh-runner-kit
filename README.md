@@ -434,11 +434,20 @@ Options:
 gh runner-kit job timeline <RUN> [--repo [HOST/]OWNER/REPO] [--attempt N] [--job PATTERN]... [--show-waiting=false] [--no-cache] [--refresh] [--input FILE] [--format json|mermaid|table] [--jq EXPRESSION] [--template TEMPLATE]
 ```
 
-Show when every job and step of one workflow run attempt ran, on a time axis that starts when the attempt started, like [Kesin11/actions-timeline](https://github.com/Kesin11/actions-timeline) does.
+Show when every job and step of one workflow run attempt ran, on a time axis
+starting at the attempt start or an earlier queued job, like
+[Kesin11/actions-timeline](https://github.com/Kesin11/actions-timeline) does.
 
 The `<RUN>` argument is required. It is a run ID or the URL of a run, of one of its attempts or of one of its jobs, such as `https://github.com/OWNER/REPO/actions/runs/RUN_ID/attempts/2`. A run ID takes the repository from `--repo` or the current directory. A job URL keeps only that job and, unless `--attempt` is given, shows the attempt the job belongs to.
 
-The default table lists every job with its runner wait and duration, followed by its steps, with `OFFSET` measured from the start of the attempt. `--format mermaid` writes a Mermaid Gantt chart with one section per job, an `active` bar for the time the job waited for a runner and one bar per step, marked `crit` when it failed, which renders directly in a GitHub Markdown file or a job summary. `--format json` writes the whole timeline with durations in nanoseconds and the run and job IDs quoted.
+The default table lists every job with its runner wait and duration, followed by
+its steps, with `OFFSET` measured from the timeline origin (the attempt start
+or an earlier queued job). `--format mermaid` writes a Mermaid Gantt chart with
+one section per job, an `active` bar for the time the job waited for a runner
+and one bar per step, marked `crit` when it failed, which renders directly in a
+GitHub Markdown file or a job summary. `--format json` writes the whole
+timeline with durations in nanoseconds and the run and job IDs quoted;
+`RunStartedAt` is the attempt start, while `StartedAt` is the timeline origin.
 
 `--attempt` selects an earlier attempt than the latest one, and only the jobs of that attempt are shown. The jobs of a completed attempt are cached on disk, like the `metrics` subcommands do.
 
@@ -793,7 +802,10 @@ The rows come from the same collection and the same local job cache the other `m
 
 Unlike the aggregated reports the listing keeps the jobs that were skipped and the jobs that have not finished yet, so that it shows every job the workflow-run jobs endpoint returned, including the ones that never occupied a runner.
 
-JSON and NDJSON expose `ExecutionStarted`, based on runner allocation, a started non-skipped step or positive per-job usage. A cancelled job can have start/end timestamps without ever occupying a runner.
+JSON and NDJSON expose `RunStartedAt` for the job's run attempt, or null when
+its start is unavailable. `ExecutionStarted` is based on runner allocation, a
+started non-skipped step or positive per-job usage. A cancelled job can have
+start/end timestamps without ever occupying a runner.
 
 `--kind self-hosted` also keeps the jobs whose runner could not be identified, the same way the other reports count them as fleet activity.
 

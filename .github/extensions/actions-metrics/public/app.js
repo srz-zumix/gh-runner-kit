@@ -1,4 +1,5 @@
 import { renderSteps } from "./steps.js";
+import { initRunnerDetails, renderRunnerDetails, resetRunnerDetails, selectRunnerDetails } from "./runnerdetails.js";
 import { workflowFileLink } from "./links.js";
 import { initExplorer, renderExplorer, resetExplorer, syncExplorer } from "./explorer.js";
 import { renderDataBanner } from "./banner.js";
@@ -1979,6 +1980,12 @@ function runnerFilterCard(traced) {
     );
 }
 
+function openRunnerDetails(runner) {
+    selectRunnerDetails(runner);
+    activeTab = "runner-details";
+    render();
+}
+
 /** The rows region of the runner table, repainted alone as a search settles. */
 function runnerFilterResults(traced) {
     if (runnerFilterError) {
@@ -1997,7 +2004,7 @@ function runnerFilterResults(traced) {
             label: "Runner",
             wrap: true,
             sortKey: "runner",
-            render: (row) =>
+            render: (row) => el("div", { class: "runner-details-trigger" }, [
                 el("span", {
                     class: "mono",
                     text: row.runner,
@@ -2005,6 +2012,16 @@ function runnerFilterResults(traced) {
                         ? "Every job whose runner the API did not name, aggregated: this row is not one machine."
                         : null,
                 }),
+                !row.unidentified
+                    ? el("button", {
+                        type: "button",
+                        class: "ghost",
+                        text: "Details",
+                        title: "Open jobs and failed step names for this runner-name aggregate",
+                        onclick: () => openRunnerDetails(row.runner),
+                    })
+                    : null,
+            ]),
         },
         { label: "Jobs", num: true, sortKey: "jobs", render: (row) => number(row.jobs) },
         { label: "Busy time", num: true, sortKey: "busyMs", render: (row) => duration(row.busyMs) },
@@ -2603,6 +2620,11 @@ function renderContentSections() {
         return;
     }
 
+    if (activeTab === "runner-details") {
+        dom.content.replaceChildren(...renderRunnerDetails(state), authenticationSettingsCard());
+        return;
+    }
+
     if (activeTab === "explore") {
         // Checked ahead of the metrics gate: the explorer reads its own row
         // collection, so it has something to show even when no fleet metrics
@@ -2666,6 +2688,7 @@ async function updateCanvasToken(token) {
     // server has dropped its caches, so drop the explorer's copy too and let
     // the refresh below re-collect everything under the new credential.
     resetExplorer();
+    resetRunnerDetails();
     await refreshCurrentQuery();
 }
 
@@ -2878,6 +2901,8 @@ initExplorer({
             body: JSON.stringify(options),
         }).catch(() => {}),
 });
+
+initRunnerDetails({ onUpdate: () => render() });
 
 fetch("./api/state")
     .then((response) => response.json())

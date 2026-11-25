@@ -11,7 +11,7 @@ import (
 func jobRows() []metrics.JobRow {
 	started := time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC)
 	return []metrics.JobRow{
-		{JobID: 1, JobName: "build", StartedAt: &started, Wait: time.Minute},
+		{JobID: 1, JobName: "build", RunStartedAt: &started, StartedAt: &started, Wait: time.Minute},
 		{JobID: 2, JobName: "pending"},
 	}
 }
@@ -26,6 +26,7 @@ func TestWriteMetricsJobsJSON(t *testing.T) {
 	for _, want := range []string{
 		`"JobName": "build"`,
 		`"JobID": 1`,
+		`"RunStartedAt": "2024-01-01T00:01:00Z"`,
 		`"StartedAt": "2024-01-01T00:01:00Z"`,
 		`"Wait": 60000000000`,
 		`"StartedAt": null`,
@@ -52,6 +53,9 @@ func TestWriteMetricsJobsNDJSON(t *testing.T) {
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
 			t.Fatalf("WriteMetricsJobsNDJSON() line = %q, want one JSON object per line", line)
+		}
+		if !strings.Contains(lines[0], `"RunStartedAt":"2024-01-01T00:01:00Z"`) || !strings.Contains(lines[1], `"RunStartedAt":null`) {
+			t.Fatalf("run attempt starts missing from NDJSON: %s", b.String())
 		}
 	}
 }

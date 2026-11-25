@@ -28,7 +28,9 @@ type JobRow struct {
 	Repo       string
 	RunID      int64
 	RunAttempt int64
-	JobID      int64
+	// RunStartedAt is unset when this attempt's start is unavailable.
+	RunStartedAt *time.Time
+	JobID        int64
 	// Latest reports whether the job belongs to the latest attempt of its run.
 	Latest           bool
 	Workflow         string
@@ -214,6 +216,14 @@ func (b *jobRowBuilder) run(runID, attempt int64) *github.WorkflowRun {
 	return b.runByID[runID]
 }
 
+// runAttemptStartedAt is unset when only another attempt's metadata is available.
+func runAttemptStartedAt(run *github.WorkflowRun, attempt int64) *time.Time {
+	if run == nil || int64(run.GetRunAttempt()) != attempt {
+		return nil
+	}
+	return optionalTime(run.GetRunStartedAt().Time)
+}
+
 // build converts raw into a JobRow, reporting false when the filters drop it.
 func (b *jobRowBuilder) build(raw *github.WorkflowJob) (JobRow, bool) {
 	kind := ClassifyJob(raw, b.runnerIDs)
@@ -240,6 +250,7 @@ func (b *jobRowBuilder) build(raw *github.WorkflowJob) (JobRow, bool) {
 		Repo:         b.data.RunRepositories[runID],
 		RunID:        runID,
 		RunAttempt:   raw.GetRunAttempt(),
+		RunStartedAt: runAttemptStartedAt(b.run(runID, raw.GetRunAttempt()), raw.GetRunAttempt()),
 		JobID:        raw.GetID(),
 		Latest:       b.data.LatestJobs[raw.GetID()],
 		Workflow:     raw.GetWorkflowName(),

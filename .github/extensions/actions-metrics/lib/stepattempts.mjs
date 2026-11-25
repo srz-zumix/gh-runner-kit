@@ -13,6 +13,7 @@ export function timelineRows(timeline, repo) {
             Repo: repo,
             RunID: String(timeline.RunID),
             RunAttempt: timeline.RunAttempt,
+            RunStartedAt: timeline.RunStartedAt ?? null,
             JobID: String(job.JobID),
             Workflow: timeline.Workflow,
             WorkflowPath: timeline.WorkflowPath,
@@ -38,7 +39,8 @@ export function timelineRows(timeline, repo) {
                 Repo: row.Repo,
                 RunID: row.RunID,
                 RunAttempt: row.RunAttempt,
-                RunStartedAt: timeline.StartedAt,
+                RunStartedAt: timeline.RunStartedAt ?? null,
+                TimelineOriginAt: timeline.StartedAt,
                 JobID: row.JobID,
                 Workflow: row.Workflow,
                 WorkflowPath: row.WorkflowPath,
@@ -80,22 +82,30 @@ function isMissing(value) {
 
 // The snapshot rows win on duplicate keys because their runner classification is backed
 // by the runner inventory, which the attempt timelines do not have. History only fills
-// the run start that the snapshot's carried-over step rows lack.
+// the run start that the snapshot's carried-over rows lack.
 export function mergeAttemptRows(latest, historical) {
     const jobs = new Map(latest.jobs.map((row) => [jobKey(row), row]));
     const steps = new Map(latest.steps.map((row) => [JSON.stringify([jobKey(row), row.StepNumber]), row]));
     for (const rows of historical) {
         for (const row of rows.jobs) {
             const key = jobKey(row);
-            if (!jobs.has(key)) jobs.set(key, row);
+            const existing = jobs.get(key);
+            if (!existing) jobs.set(key, row);
+            else if (isMissing(existing.RunStartedAt) && !isMissing(row.RunStartedAt)) {
+                jobs.set(key, { ...existing, RunStartedAt: row.RunStartedAt });
+            }
         }
         for (const row of rows.steps) {
             const key = JSON.stringify([jobKey(row), row.StepNumber]);
             const existing = steps.get(key);
             if (!existing) {
                 steps.set(key, row);
-            } else if (isMissing(existing.RunStartedAt) && !isMissing(row.RunStartedAt)) {
-                steps.set(key, { ...existing, RunStartedAt: row.RunStartedAt });
+            } else if (isMissing(existing.RunStartedAt)) {
+                steps.set(key, {
+                    ...existing,
+                    RunStartedAt: row.RunStartedAt ?? null,
+                    TimelineOriginAt: existing.TimelineOriginAt ?? row.TimelineOriginAt,
+                });
             }
         }
     }

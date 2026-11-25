@@ -21,6 +21,9 @@ func TestSnapshotHistoricalTimelineAndStepOrigin(t *testing.T) {
 	if err != nil || len(timeline.Jobs) != 1 || timeline.RunAttempt != 1 {
 		t.Fatalf("unexpected historical timeline: %#v, %v", timeline, err)
 	}
+	if timeline.RunStartedAt == nil || !timeline.RunStartedAt.Equal(start) {
+		t.Fatalf("historical run start = %v, want %v", timeline.RunStartedAt, start)
+	}
 	jobTimeline, err := BuildSnapshotTimeline(snapshot, RunRef{RunID: 42, JobID: 101}, TimelineOptions{})
 	if err != nil || jobTimeline.RunAttempt != 1 || len(jobTimeline.Jobs) != 1 {
 		t.Fatalf("job reference lost historical attempt: %#v, %v", jobTimeline, err)
@@ -28,6 +31,16 @@ func TestSnapshotHistoricalTimelineAndStepOrigin(t *testing.T) {
 	rows := BuildStepRows(data, StepRowOptions{})
 	if len(rows) != 1 || rows[0].RunStartedAt == nil || !rows[0].RunStartedAt.Equal(start) {
 		t.Fatalf("historical step lost its origin: %#v", rows)
+	}
+	job.Steps = nil
+	jobRows := BuildJobRows(data, JobRowOptions{})
+	if len(jobRows) != 1 || jobRows[0].RunStartedAt == nil || !jobRows[0].RunStartedAt.Equal(start) {
+		t.Fatalf("historical job without steps lost its start: %#v", jobRows)
+	}
+	data.Attempts = nil
+	jobRows = BuildJobRows(data, JobRowOptions{})
+	if jobRows[0].RunStartedAt != nil {
+		t.Fatalf("historical job borrowed latest attempt start: %v", jobRows[0].RunStartedAt)
 	}
 	if _, err := BuildSnapshotTimeline(snapshot, RunRef{RunID: 42, Attempt: 3}, TimelineOptions{}); err == nil {
 		t.Fatal("missing attempt was not reported")
