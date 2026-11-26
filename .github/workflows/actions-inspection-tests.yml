@@ -1,0 +1,36 @@
+name: Actions inspection tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/aw/actions-inspection/**"
+      - ".github/workflows/actions-inspection*"
+      - ".github/workflows/shared/actions-inspection/**"
+      - ".github/actionlint.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Test inspection helpers
+        run: node --test .github/aw/actions-inspection/*.test.mjs
+      - name: Install pinned compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install github/gh-aw --pin v1.2.2
+      - name: Validate agentic sources and generated locks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh aw compile actions-inspection-baseline actions-inspection-runner-kit --validate --no-check-update
+          git diff --exit-code -- .github/workflows/actions-inspection-baseline.lock.yml .github/workflows/actions-inspection-runner-kit.lock.yml
