@@ -31,6 +31,11 @@ export function normalizeSnapshot(snapshot, config, slice) {
   if (!(raw.Repos || []).some(repo => `${repo.Repository?.Owner}/${repo.Repository?.Name}` === config.repository)) {
     issues.push({ scope: 'run-listing', message: 'Snapshot does not confirm successful repository run discovery' });
   }
+  // A run with no latest jobs can be warning-free (empty list), so flag it like the REST baseline does.
+  const withLatest = new Set(jobs.filter(job => job.latest).map(job => job.runId));
+  for (const run of runs) {
+    if (!withLatest.has(run.id)) issues.push({ scope: `run:${run.id}:attempt:${run.attempt}`, message: 'Latest jobs returned no rows; retention or pending execution may limit coverage' });
+  }
   const truncated = Boolean(raw.Truncated) || (raw.Runs || []).length > config.dailyLimit;
   const expected = runs.reduce((sum, run) => sum + run.attempt - 1, 0);
   if (attempts.length < expected && !issues.some(issue => issue.scope.includes(':attempt:'))) issues.push({ scope: 'historical-attempts', message: 'Snapshot is missing selected historical attempt metadata' });
