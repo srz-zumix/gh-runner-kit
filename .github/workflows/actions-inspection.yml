@@ -1,0 +1,104 @@
+name: Actions inspection
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      checks:
+        description: Comma-separated reliability,performance,configuration
+        type: string
+        default: reliability,performance,configuration
+      days:
+        description: Rolling days when since is omitted (1-31)
+        type: string
+        default: "7"
+      since:
+        description: Optional inclusive RFC3339 start (whole seconds)
+        type: string
+      until:
+        description: Optional exclusive RFC3339 end (whole seconds)
+        type: string
+      daily_limit:
+        description: Maximum unique runs per intersecting UTC day (1-1000)
+        type: string
+        default: "1000"
+      mode:
+        description: Reports only, or one issue per backend
+        type: choice
+        options: [report, issue]
+        default: report
+
+permissions: {}
+
+jobs:
+  pair:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Run both inspection backends
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSPECTION_CHECKS: ${{ inputs.checks }}
+          INSPECTION_DAYS: ${{ inputs.days }}
+          INSPECTION_SINCE: ${{ inputs.since }}
+          INSPECTION_UNTIL: ${{ inputs.until }}
+          INSPECTION_DAILY_LIMIT: ${{ inputs.daily_limit }}
+          INSPECTION_MODE: ${{ inputs.mode }}
+        run: node .github/aw/actions-inspection/coordinator.mjs pair "$RUNNER_TEMP/inspection-pair"
+      - name: Retain both reports and exact run identities
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: inspection-pair
+          path: ${{ runner.temp }}/inspection-pair/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: pair
+    if: >-
+      always() && !cancelled() && inputs.mode == 'issue' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: actions-inspection-publication
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: inspection-pair
+          path: ${{ runner.temp }}/inspection-pair
+      - name: Publish one issue per available backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/aw/actions-inspection/coordinator.mjs publish "$RUNNER_TEMP/inspection-pair"
+      - name: Retain issue URLs and publication status
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: inspection-publication
+          path: ${{ runner.temp }}/inspection-pair/pair.json
+          if-no-files-found: error
+          retention-days: 30

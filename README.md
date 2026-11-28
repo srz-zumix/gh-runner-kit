@@ -59,6 +59,106 @@ Options:
 | `--ref` | `main` | Git ref to install, overriding the bundled source ref |
 | `--scope` | `user` | Installation scope: `user` or `repo` |
 
+## Agentic Actions inspection
+
+Two permanent [GitHub Agentic Workflows](https://github.github.io/gh-aw/) inspect
+this repository: a baseline that uses `gh api` without runner-kit, and an
+optimized backend that collects runner-kit snapshots once per UTC day and reuses
+them offline. Both use the same deterministic checks and bounded Copilot
+interpretation. Neither replaces the other.
+
+The selectable checks are `reliability` (failures, reruns and observed recoveries),
+`performance` (job waits, durations and slow steps), and `configuration`
+(actionlint, offline zizmor and available Actions permission settings). Select
+one or any comma-separated combination. Evidence does not prove flakiness or a
+root cause; job-created-to-start wait includes dependencies and concurrency gates.
+
+Organization-billed Copilot requests must be enabled for this repository.
+Commit both Markdown sources and their generated `.lock.yml` files to the default
+branch before running them. No personal Copilot token is required. The coordinator
+runs daily at **09:00 JST**; scheduled defaults are in
+[config.json](.github/aw/actions-inspection/config.json).
+
+### Run both inspection backends
+
+```sh
+gh workflow run actions-inspection.yml
+gh workflow run actions-inspection.yml -f checks=reliability,performance -f days=7 -f daily_limit=1000 -f mode=report
+gh workflow run actions-inspection.yml -f checks=configuration -f mode=issue
+```
+
+All inputs are optional:
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `checks` | `reliability,performance,configuration` | One or more distinct check names |
+| `daily_limit` | `1000` | Maximum unique runs per intersecting UTC day, from 1 to 1000 |
+| `days` | `7` | Rolling days before `until`, from 1 to 31; ignored when `since` is supplied |
+| `mode` | `report` | `report` retains artifacts only; `issue` also creates one report issue per available backend |
+| `since` | `until` minus `days` | Inclusive RFC3339 start, with timezone and whole seconds |
+| `until` | Execution time | Exclusive RFC3339 end, with timezone and whole seconds; cannot be in the future |
+
+The period cannot exceed 31 days. A rolling seven-day period can intersect eight
+UTC dates; each partial boundary day has its own cap. Truncation, unavailable
+history/settings and failed collection remain explicit, not successful zeroes.
+
+### Run one inspection backend
+
+```sh
+gh workflow run actions-inspection-baseline.lock.yml -f checks=reliability
+gh workflow run actions-inspection-runner-kit.lock.yml -f checks=reliability
+```
+
+Both standalone backends accept the same optional collection inputs above, except
+`mode`: standalone runs always produce reports and never create issues.
+`expected_sha` optionally requires an exact default-branch revision; `correlation`
+is an optional coordinator identifier. Run from the default branch only.
+
+### Read inspection reports
+
+Open the coordinator's Actions summary for links to both runs and, in issue mode,
+both report issues. Its `inspection-pair` artifact retains the two assembled
+reports and exact run identities. Each child also retains `inspection-report`,
+`inspection-evidence` (full deterministic results and optimized snapshots), and
+the detection-gated `inspection-analysis`. Artifacts expire after 30 days.
+
+There is **no automatic comparison, API-call counting or benchmark**. Compare the
+two reports/issues yourself. Stable finding keys support manually creating
+subtasks; the workflow never creates subtasks. Repeating the same backend,
+revision, resolved period and checks reuses its existing issue instead of posting
+a duplicate. Live observations can differ even with matching periods.
+
+The coordinator stops waiting after 60 minutes and requests cancellation of
+unfinished children. Collection is bounded to 30 minutes per backend; agent
+analysis to 15 minutes and 50 AI Credits, with a separate 5-minute/50-credit
+threat-detection limit. Budget exhaustion is reported, not automatically
+re-dispatched. Agents receive aggregates and at most 20 evidence items per check.
+The reported model/available credits are recorded; native token/accounting details
+remain in each run's gh-aw artifacts. Missing usage is unavailable, not zero.
+The reported model may be `auto`, not a resolved model name; consult native
+execution logs when available. Default models may differ, so timings alone do
+not establish an optimization.
+
+Report mode has no issue/comment write permissions, including failure reporters.
+Issue publishing is a separate, serialized job that requires successful source,
+artifact and detection validation. A failed backend does not erase the other
+report; no additional failure issues are created.
+
+### Develop inspection workflows
+
+```sh
+gh extension install github/gh-aw --pin v1.2.2
+node --test .github/aw/actions-inspection/*.test.mjs
+gh aw compile actions-inspection-baseline actions-inspection-runner-kit --validate --actionlint --no-check-update
+```
+
+Edit the shared check components under
+[shared/actions-inspection](.github/workflows/shared/actions-inspection/) and the
+workflow-only helpers under [actions-inspection](.github/aw/actions-inspection/).
+Recompile both backends together. Narrow actionlint exceptions cover only
+compiler-generated syntax unsupported by actionlint 1.7.12; gh-aw validates those
+features itself. No runner-kit CLI command or dashboard configuration is changed.
+
 ## Usage
 
 ### List self-hosted runners available to a repository

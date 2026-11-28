@@ -36,6 +36,83 @@ Enterprise-level self-hosted and GitHub-hosted runner listing requires runner
 management permission (`manage_runners:enterprise` for a classic personal access
 token).
 
+## Repository agentic inspections
+
+This repository permanently includes two independently runnable gh-aw workflows:
+`actions-inspection-baseline.lock.yml` uses `gh api` without runner-kit, while
+`actions-inspection-runner-kit.lock.yml` collects daily runner-kit snapshots and
+reuses them offline. Do not remove the baseline when improving the optimized
+backend. Neither workflow modifies runner registrations or settings.
+
+The common coordinator always starts both:
+
+```bash
+gh workflow run actions-inspection.yml
+gh workflow run actions-inspection.yml -f checks=reliability,performance -f days=7 -f daily_limit=1000 -f mode=report
+gh workflow run actions-inspection.yml -f checks=configuration -f mode=issue
+```
+
+All coordinator inputs are optional: `checks` defaults to
+`reliability,performance,configuration` (any nonempty distinct subset);
+`days` to `7` (1-31); `daily_limit` to `1000` (1-1000 per intersecting UTC day);
+`until` to execution time; `since` to `until` minus `days`; and `mode` to
+`report` (`issue` creates one report issue per available backend).
+Explicit bounds are whole-second RFC3339 timestamps; the start is inclusive,
+the end exclusive and not in the future, and the period cannot exceed 31 days.
+A rolling seven-day period can touch eight UTC dates, including partial days.
+The daily schedule is 09:00 JST; defaults are in
+`.github/aw/actions-inspection/config.json`.
+
+Run a single backend:
+
+```bash
+gh workflow run actions-inspection-baseline.lock.yml -f checks=reliability
+gh workflow run actions-inspection-runner-kit.lock.yml -f checks=reliability
+```
+
+Standalone backends accept the collection inputs but not `mode`; they always
+retain reports without creating issues. Optional `expected_sha` pins the expected
+default-branch commit and `correlation` identifies coordinator dispatches.
+
+Prerequisite: organization-billed Copilot requests enabled for this repository.
+The source Markdown and generated locks must be on the default branch.
+Agents receive deterministic aggregates and at most 20 evidence items per check,
+with 15 minutes/50 AIC for analysis. Detection has a separate 5-minute/50-AIC
+budget. Collection is bounded to 30 minutes; the coordinator requests child
+cancellation after its 60-minute deadline.
+
+Use the coordinator summary's two run/issue links and `inspection-pair` artifact
+for human comparison. No automatic comparison, API-call counting, benchmark or
+subtask creation exists. Stable finding keys support manual subtasks. Equivalent
+backend/revision/resolved-period/check settings reuse existing report issues.
+Report mode never creates failure or detection issues either.
+
+Child artifacts: `inspection-report` (compact facts/Markdown),
+`inspection-evidence` (full deterministic results, definitions, and optimized
+snapshots), `inspection-analysis` (detection-gated interpretation and observed
+reported model/AIC). Retention is 30 days. Native gh-aw usage artifacts contain
+additional token/accounting data; missing usage is unavailable, not zero.
+The reported model may be `auto`; consult native logs for a resolved name when
+available. Different actual models or live observations invalidate simplistic
+performance conclusions.
+
+Checks separate reliability observations from flaky-test hypotheses; performance
+wait includes dependencies/concurrency rather than pure runner queueing;
+configuration uses actionlint/offline zizmor and explicitly unavailable settings.
+Read current definitions as data, not proof of what historical runs executed.
+
+For authoring, pin gh-aw to `v1.2.2`, then run:
+
+```bash
+node --test .github/aw/actions-inspection/*.test.mjs
+gh aw compile actions-inspection-baseline actions-inspection-runner-kit \
+  --validate --actionlint --no-check-update
+```
+
+Shared check prompts live under
+`.github/workflows/shared/actions-inspection/`; workflow-only helpers under
+`.github/aw/actions-inspection/`. Keep README and this skill synchronized.
+
 ## CLI Structure
 
 ```text

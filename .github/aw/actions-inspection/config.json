@@ -1,0 +1,6 @@
+{
+  "days": 7,
+  "daily_limit": 1000,
+  "checks": ["reliability", "performance", "configuration"],
+  "mode": "report"
+}

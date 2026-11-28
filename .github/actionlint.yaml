@@ -1,0 +1,8 @@
+paths:
+  .github/workflows/actions-inspection-*.lock.yml:
+    # gh-aw v1.2.2 validates these newer Actions features before invoking actionlint.
+    ignore:
+      - '^property "workflow_(ref|sha)" is not defined in object type '
+      - '^unknown permission scope "copilot-requests"\.'
+      - '^unexpected key "cache-mode" for "job" section\.'
+      - '^unexpected key "queue" for "concurrency" section\.'
